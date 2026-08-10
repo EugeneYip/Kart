@@ -1,0 +1,1191 @@
+/**
+ * ============================================================================
+ *  APEX KART — FOLIAGE
+ * ============================================================================
+ *  Grass  : three camera-following InstancedMesh rings (near/mid/far). Every
+ *           blade reads its own ground height and validity from the terrain
+ *           field in the vertex shader, so the carpet is effectively infinite
+ *           at three draw calls with zero per-frame CPU work. Two-frequency
+ *           sway plus travelling gusts, per-instance colour/height variation,
+ *           and a radial push-away from the player.
+ *  Trees  : six procedural species (tapered tube trunks with branch stubs and
+ *           stylised faceted canopies — MK8 reads better and costs less than
+ *           leaf cards). Two draw calls per species, GPU distance culling, and
+ *           a cross-faded billboard imposter atlas rendered once at init.
+ *  Shrubs : bushes, ferns, flowers, cattails and palms, all instanced and
+ *           density-scaled by `quality.foliageDensity`.
+ * ============================================================================
+ */
+
+import * as THREE from 'three';
+import type { FrameContext, ISubsystem, QualitySettings } from '@/core/Types';
+import { RENDER_ORDER } from '@/core/Config';
+import { Rng, clamp01 } from '@/core/MathUtils';
+import { SHADOW_LAYER } from './Lighting';
+import {
+  GLSL_FIELD, GLSL_FIELD_SHADOW_LOW, GLSL_NOISE,
+  InstanceChunks, fieldUniforms, makeBark,
+  type TerrainField, type WorldContext, type WorldTheme,
+  worldFogUniforms,
+} from './WorldTextures';
+
+// ---------------------------------------------------------------------------
+// Shared wind GLSL
+// ---------------------------------------------------------------------------
+
+const GLSL_WIND = /* glsl */ `
+uniform float uTime;
+uniform vec2  uWindDir;
+uniform float uWindStrength;
+uniform vec3  uPlayerPos;
+
+/** Two frequencies + a travelling gust front. bendable = 0 root, 1 tip. */
+vec3 windOffset(vec3 wp, float phase, float bendable){
+  float t = uTime;
+  vec2 d = uWindDir;
+  float wave = dot(wp.xz, d) * 0.11;
+  float a = sin(t * 1.9 + wave + phase) * 0.55
+          + sin(t * 4.7 + wave * 2.3 + phase * 1.7) * 0.22;
+  // Gust front sweeping downwind, ~26 m wavelength.
+  float gust = smoothstep(0.35, 1.0, sin(t * 0.55 + dot(wp.xz, d) * 0.038 + phase * 0.2));
+  a *= 1.0 + gust * 1.55;
+  float amt = a * uWindStrength * bendable;
+  return vec3(d.x * amt, -abs(amt) * 0.22, d.y * amt);
+}
+
+/** Push blades away from a nearby kart. */
+vec3 pushAway(vec3 wp, float bendable){
+  vec3 delta = wp - uPlayerPos;
+  delta.y = 0.0;
+  float dist = length(delta);
+  float f = 1.0 - smoothstep(0.6, 3.4, dist);
+  if (f <= 0.0) return vec3(0.0);
+  vec3 dir = dist > 1e-3 ? delta / dist : vec3(1.0, 0.0, 0.0);
+  return dir * f * bendable * 0.62 - vec3(0.0, f * bendable * 0.28, 0.0);
+}
+`;
+
+// ---------------------------------------------------------------------------
+
+interface GrassRing {
+  mesh: THREE.InstancedMesh;
+  radius: number;
+  /** cell size the mesh snaps to, metres */
+  snap: number;
+}
+
+interface TreeSpecies {
+  name: string;
+  trunk: THREE.InstancedMesh;
+  canopy: THREE.InstancedMesh;
+  imposter: THREE.InstancedMesh | null;
+  count: number;
+}
+
+type ScatterKind = 'tree' | 'bush' | 'fern' | 'flower' | 'cattail' | 'palm' | 'deadtree' | 'cactus';
+
+interface ThemeFoliage {
+  grassDensity: number;
+  grassHeight: number;
+  grassColorA: number;
+  grassColorB: number;
+  /** species mix — indices into the built species list, with weights */
+  treeMix: Array<[ScatterKind, number]>;
+  treeDensity: number;
+  bushDensity: number;
+  flowerDensity: number;
+}
+
+const THEME_FOLIAGE: Record<WorldTheme, ThemeFoliage> = {
+  meadow: {
+    grassDensity: 1.0, grassHeight: 1.0, grassColorA: 0x4e7a2c, grassColorB: 0x8fae4a,
+    treeMix: [['tree', 1]], treeDensity: 1.0, bushDensity: 1.0, flowerDensity: 1.0,
+  },
+  coastal: {
+    grassDensity: 0.72, grassHeight: 0.85, grassColorA: 0x5c7f3a, grassColorB: 0x9cb45c,
+    treeMix: [['palm', 0.62], ['tree', 0.38]], treeDensity: 0.7, bushDensity: 0.8, flowerDensity: 0.5,
+  },
+  city: {
+    grassDensity: 0.5, grassHeight: 0.7, grassColorA: 0x3f6b30, grassColorB: 0x7ea04a,
+    treeMix: [['tree', 1]], treeDensity: 0.55, bushDensity: 0.9, flowerDensity: 0.45,
+  },
+  volcano: {
+    grassDensity: 0.14, grassHeight: 0.7, grassColorA: 0x4a3f26, grassColorB: 0x6d5b34,
+    treeMix: [['deadtree', 1]], treeDensity: 0.42, bushDensity: 0.25, flowerDensity: 0.05,
+  },
+  desert: {
+    grassDensity: 0.22, grassHeight: 0.8, grassColorA: 0x7d7440, grassColorB: 0xb3a457,
+    treeMix: [['cactus', 0.7], ['deadtree', 0.3]], treeDensity: 0.35, bushDensity: 0.4, flowerDensity: 0.15,
+  },
+  snow: {
+    grassDensity: 0.2, grassHeight: 0.6, grassColorA: 0x6a7a5c, grassColorB: 0x93a37c,
+    treeMix: [['tree', 1]], treeDensity: 0.75, bushDensity: 0.35, flowerDensity: 0.05,
+  },
+};
+
+const _m4 = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _pos = new THREE.Vector3();
+const _scale = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _nrm = new THREE.Vector3();
+const _col = new THREE.Color();
+
+/** Trees are the tallest thing in the scenery — they stay visible a long way. */
+const TREE_CULL = 420;
+
+export class Foliage implements ISubsystem {
+  readonly group = new THREE.Group();
+  /** Written by Environment each frame so grass can bend away from the kart. */
+  readonly playerPosition = new THREE.Vector3(0, -999, 0);
+
+  private scene: THREE.Scene;
+  private ctx: WorldContext;
+  private quality: QualitySettings;
+  private field: TerrainField;
+  private theme: ThemeFoliage;
+
+  private rings: GrassRing[] = [];
+  private species: TreeSpecies[] = [];
+  private scatterMeshes: THREE.InstancedMesh[] = [];
+  /** Per-chunk visible-set culling for everything that isn't camera-relative. */
+  private chunked: InstanceChunks[] = [];
+
+  private uTime = { value: 0 };
+  private uWindDir = { value: new THREE.Vector2(0.82, 0.57) };
+  private uWindStrength = { value: 0.22 };
+  private uPlayerPos = { value: this.playerPosition };
+
+  private disposables: Array<{ dispose(): void }> = [];
+  private bark: { map: THREE.DataTexture; normalMap: THREE.DataTexture } | null = null;
+  camera: THREE.PerspectiveCamera | null = null;
+
+  constructor(
+    scene: THREE.Scene,
+    _renderer: THREE.WebGLRenderer,
+    ctx: WorldContext,
+    quality: QualitySettings,
+  ) {
+    this.scene = scene;
+    this.ctx = ctx;
+    this.quality = quality;
+    this.field = ctx.field;
+    this.theme = THEME_FOLIAGE[ctx.theme] ?? THEME_FOLIAGE.meadow;
+  }
+
+  async init(): Promise<void> {
+    this.group.name = 'Foliage';
+    this.scene.add(this.group);
+    this.bark = makeBark(this.quality.tier === 'low' ? 128 : 256);
+    this.disposables.push(this.bark.map, this.bark.normalMap);
+
+    this.buildGrass();
+    this.buildTrees();
+    this.buildScatter();
+  }
+
+  // =========================================================================
+  // GRASS
+  // =========================================================================
+
+  private bladeGeometry(segments: number): THREE.BufferGeometry {
+    // A tapered strip: 2 verts per row, last row a single tip.
+    const rows = segments;
+    const verts: number[] = [];
+    const uvs: number[] = [];
+    const idx: number[] = [];
+    for (let r = 0; r < rows; r++) {
+      const t = r / (rows - 1);
+      const halfW = 0.5 * (1 - t * t * 0.92);
+      if (r === rows - 1) {
+        verts.push(0, t, 0);
+        uvs.push(0.5, t);
+      } else {
+        verts.push(-halfW, t, 0, halfW, t, 0);
+        uvs.push(0, t, 1, t);
+      }
+    }
+    for (let r = 0; r < rows - 2; r++) {
+      const a = r * 2, b = a + 1, c = a + 2, d = a + 3;
+      idx.push(a, c, b, b, c, d);
+    }
+    const lastPair = (rows - 2) * 2;
+    idx.push(lastPair, lastPair + 2, lastPair + 1);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  private grassMaterial(): THREE.MeshStandardMaterial {
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.78,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      vertexColors: true,
+      fog: true,
+      dithering: true,
+    });
+    mat.name = 'GrassBlade';
+    mat.customProgramCacheKey = () => 'apex-grass';
+
+    const fu = fieldUniforms(this.field);
+    const u: Record<string, THREE.IUniform> = {
+      uFieldHeight: fu.uFieldHeight,
+      uFieldData: fu.uFieldData,
+      uFieldXform: fu.uFieldXform,
+      uSunDirection: worldFogUniforms.uSunDirection,
+      uTime: this.uTime,
+      uWindDir: this.uWindDir,
+      uWindStrength: this.uWindStrength,
+      uPlayerPos: this.uPlayerPos,
+      // Per-ring; `buildGrass` overwrites this with the ring's own fade band.
+      // It used to be left at 60→90 for every ring, which is why grass was still
+      // being drawn at a third of full height 150 m out.
+      uFade: { value: new THREE.Vector2(60, 90) },
+      uHeightScale: { value: this.theme.grassHeight },
+      uDensityCut: { value: 0.0 },
+      uWaterLevel: { value: this.ctx.waterLevel },
+    };
+    (mat.userData as { fade?: THREE.IUniform }).fade = u.uFade;
+
+    mat.onBeforeCompile = (shader) => {
+      for (const k in u) shader.uniforms[k] = u[k];
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', /* glsl */ `
+#include <common>
+${GLSL_FIELD}
+${GLSL_NOISE}
+${GLSL_WIND}
+uniform vec2 uFade;
+uniform float uHeightScale;
+uniform float uDensityCut;
+uniform float uWaterLevel;
+attribute vec4 aBlade;   // x,z local offset · y rotation · w random
+varying vec3 vGrassWorld;
+varying float vTip;
+varying float vDry;
+`)
+        .replace('#include <begin_vertex>', /* glsl */ `
+#include <begin_vertex>
+vec3 anchor = ( modelMatrix * vec4( aBlade.x, 0.0, aBlade.y, 1.0 ) ).xyz;
+float gh = fieldHeight( anchor.xz );
+anchor.y = gh;
+vec4 fd = fieldData( anchor.xz );
+
+float rnd = aBlade.w;
+float rnd2 = fract( rnd * 37.13 );
+// Density: no grass on the road, less on rock, more where it is damp.
+float density = ( 1.0 - fd.r ) * ( 1.0 - fd.a * 0.85 ) * ( 0.25 + fd.b * 1.15 );
+// Slope from two forward differences reusing gh, rather than fieldNormal's four
+// extra taps. This runs on every blade vertex; two texture fetches saved here is
+// half a million fetches a frame.
+float e = uFieldXform.w;
+float sx = fieldHeight( anchor.xz + vec2( e, 0.0 ) ) - gh;
+float sz = fieldHeight( anchor.xz + vec2( 0.0, e ) ) - gh;
+float slope = 1.0 - e / sqrt( sx * sx + sz * sz + e * e );
+density *= 1.0 - smoothstep( 0.18, 0.42, slope );
+density *= step( uWaterLevel + 0.15, gh );
+float alive = step( uDensityCut + rnd * 0.92, density );
+
+float camDist = length( anchor - cameraPosition );
+// Hard fade to nothing at the ring edge. The old form bottomed out at 0.35 of
+// full height, so every ring kept drawing full-triangle blades all the way to
+// its scatter radius no matter how far away that was.
+float fade = 1.0 - smoothstep( uFade.x, uFade.y, camDist );
+float h = ( 0.20 + rnd * 0.30 ) * uHeightScale * alive * fade;
+float w = ( 0.020 + rnd2 * 0.020 ) * ( 1.0 + ( 1.0 - fade ) * 2.2 );
+
+float ca = cos( aBlade.z ), sa = sin( aBlade.z );
+vec3 local = vec3( position.x * w, position.y * h, position.z * w );
+local = vec3( local.x * ca - local.z * sa, local.y, local.x * sa + local.z * ca );
+
+float bend = position.y * position.y;
+vec3 wp = anchor + local;
+wp += windOffset( anchor, rnd * 6.28, bend * h * 3.4 );
+wp += pushAway( anchor, bend );
+// A permanent lean so the field never looks like a bed of nails.
+wp.x += ( rnd - 0.5 ) * bend * h * 0.5;
+wp.z += ( rnd2 - 0.5 ) * bend * h * 0.5;
+
+// The ring's model matrix is a pure translation (it only ever tracks the camera
+// on XZ), so the inverse is a subtraction. This line used to call inverse() on
+// the mat4 for every grass vertex — a quarter of a million inversions a frame.
+transformed = wp - vec3( modelMatrix[ 3 ][ 0 ], modelMatrix[ 3 ][ 1 ], modelMatrix[ 3 ][ 2 ] );
+vGrassWorld = wp;
+vTip = position.y;
+vDry = fd.b;
+`)
+        .replace('#include <beginnormal_vertex>', /* glsl */ `
+#include <beginnormal_vertex>
+objectNormal = normalize( vec3( objectNormal.x, 0.55, objectNormal.z ) );
+`);
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', /* glsl */ `
+#include <common>
+${GLSL_FIELD}
+${GLSL_FIELD_SHADOW_LOW}
+uniform vec3 uSunDirection;
+varying vec3 vGrassWorld;
+varying float vTip;
+varying float vDry;
+`)
+        .replace('#include <map_fragment>', /* glsl */ `
+// Ambient occlusion down the blade: roots dark, tips bright and translucent.
+float ao = 0.30 + 0.70 * vTip * vTip;
+diffuseColor.rgb *= ao;
+diffuseColor.rgb *= mix( vec3( 1.02, 0.94, 0.80 ), vec3( 0.92, 1.04, 0.90 ), vDry );
+`)
+        .replace('#include <lights_fragment_begin>', /* glsl */ `
+float terrainSun = fieldShadow( vGrassWorld + vec3( 0.0, 0.25, 0.0 ), uSunDirection );
+// lights_pars_begin already gave this a 1.0 fallback; take it over.
+#undef CSM_EXTRA_SHADOW
+#define CSM_EXTRA_SHADOW terrainSun
+#include <lights_fragment_begin>
+`)
+        // Cheap translucency: light coming through the blade from behind.
+        .replace('#include <lights_fragment_end>', /* glsl */ `
+#include <lights_fragment_end>
+float trans = pow( clamp( dot( normalize( vGrassWorld - cameraPosition ), uSunDirection ), 0.0, 1.0 ), 3.0 );
+reflectedLight.indirectDiffuse += diffuseColor.rgb * trans * vTip * 0.85 * terrainSun;
+`);
+    };
+    return mat;
+  }
+
+  private buildGrass(): void {
+    const dens = this.quality.foliageDensity * this.theme.grassDensity;
+    if (dens <= 0.02) return;
+
+    // Two rings, and nothing past ~58 m. The old third ring scattered 15 000
+    // blades over a 150 m disc — 0.2 blades/m², which is invisible as grass but
+    // costs 45 000 triangles and a full vertex shader (six texture fetches each)
+    // every frame. Ground colour past the second ring is the terrain splat's job.
+    const specs: Array<{ radius: number; count: number; seg: number; fade: [number, number] }> = [
+      { radius: 25, count: Math.round(20000 * dens), seg: 5, fade: [18, 25] },
+      { radius: 58, count: Math.round(18000 * dens), seg: 3, fade: [45, 58] },
+    ];
+
+    const rng = new Rng((this.ctx.hints.terrainSeed ^ 0x671a55) >>> 0 || 91771);
+    let inner = 0;
+    for (let s = 0; s < specs.length; s++) {
+      const spec = specs[s];
+      if (spec.count < 32) continue;
+      const geo = this.bladeGeometry(spec.seg);
+      const mat = this.grassMaterial();
+      const mesh = new THREE.InstancedMesh(geo, mat, spec.count);
+      mesh.name = `GrassRing${s}`;
+      mesh.frustumCulled = false;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      // Declares intent for Lighting's cascade masks: if grass shadows are ever
+      // switched on they belong in the near cascade and nowhere else.
+      mesh.layers.enable(SHADOW_LAYER.NEAR_ONLY);
+      mesh.renderOrder = RENDER_ORDER.PROPS - 2;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+
+      // Instance transform is identity — the blade shader builds its own world
+      // position from aBlade, which keeps the whole ring one static buffer.
+      _m4.identity();
+      for (let i = 0; i < spec.count; i++) mesh.setMatrixAt(i, _m4);
+
+      // Poisson-ish annulus scatter: sqrt distribution for even area density.
+      const data = new Float32Array(spec.count * 4);
+      const colA = new THREE.Color(this.theme.grassColorA);
+      const colB = new THREE.Color(this.theme.grassColorB);
+      const colors = new Float32Array(spec.count * 3);
+      for (let i = 0; i < spec.count; i++) {
+        const a = rng.next() * Math.PI * 2;
+        const r = Math.sqrt(inner * inner / (spec.radius * spec.radius) + rng.next() *
+          (1 - inner * inner / (spec.radius * spec.radius))) * spec.radius;
+        data[i * 4] = Math.cos(a) * r;
+        data[i * 4 + 1] = Math.sin(a) * r;
+        data[i * 4 + 2] = rng.next() * Math.PI;
+        data[i * 4 + 3] = rng.next();
+        _col.copy(colA).lerp(colB, rng.next() * rng.next());
+        _col.offsetHSL((rng.next() - 0.5) * 0.045, (rng.next() - 0.5) * 0.16, (rng.next() - 0.5) * 0.09);
+        colors[i * 3] = _col.r; colors[i * 3 + 1] = _col.g; colors[i * 3 + 2] = _col.b;
+      }
+      geo.setAttribute('aBlade', new THREE.InstancedBufferAttribute(data, 4));
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
+      mesh.instanceColor.needsUpdate = true;
+
+      // Wire the ring's own fade band. (Previously computed and thrown away.)
+      const fadeU = (mat.userData as { fade?: THREE.IUniform<THREE.Vector2> }).fade;
+      if (fadeU) fadeU.value.set(spec.fade[0], spec.fade[1]);
+
+      mesh.onBeforeRender = (_r, _s, cam) => {
+        const pc = cam as THREE.PerspectiveCamera;
+        if (!pc.isPerspectiveCamera) return;
+        if (!pc.userData.apxReflectionCam) this.camera = pc;
+        const snap = 1.0;
+        mesh.position.set(
+          Math.round(pc.position.x / snap) * snap, 0,
+          Math.round(pc.position.z / snap) * snap,
+        );
+        mesh.updateMatrix();
+        mesh.updateMatrixWorld(true);
+      };
+
+      this.group.add(mesh);
+      this.rings.push({ mesh, radius: spec.radius, snap: 1 });
+      inner = spec.radius * 0.92;
+    }
+  }
+
+  // =========================================================================
+  // TREES
+  // =========================================================================
+
+  /** Tapered tube trunk with a slight sway curve and a few branch stubs. */
+  private trunkGeometry(
+    height: number, baseR: number, topR: number, lean: number, rng: Rng, branches: number,
+  ): THREE.BufferGeometry {
+    const segs = 8;
+    const rings = 6;
+    const parts: THREE.BufferGeometry[] = [];
+    const pos: number[] = [];
+    const nor: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    const curve = rng.range(-0.14, 0.14);
+    for (let r = 0; r <= rings; r++) {
+      const t = r / rings;
+      const y = t * height;
+      const rad = baseR + (topR - baseR) * Math.pow(t, 0.72);
+      const ox = Math.sin(t * 1.8) * curve * height * 0.14 + lean * t * t * height * 0.1;
+      for (let s = 0; s <= segs; s++) {
+        const a = (s / segs) * Math.PI * 2;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const flute = 1 + Math.sin(a * 3 + t * 2) * 0.07;
+        pos.push(ox + ca * rad * flute, y, sa * rad * flute);
+        nor.push(ca, 0.12, sa);
+        uv.push(s / segs * 2, t * height * 0.42);
+      }
+    }
+    for (let r = 0; r < rings; r++) {
+      for (let s = 0; s < segs; s++) {
+        const a = r * (segs + 1) + s;
+        const b = a + 1;
+        const c = a + segs + 1;
+        const d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    const trunk = new THREE.BufferGeometry();
+    trunk.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    trunk.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    trunk.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    trunk.setIndex(idx);
+    trunk.computeVertexNormals();
+    parts.push(trunk);
+
+    for (let b = 0; b < branches; b++) {
+      const t = rng.range(0.45, 0.9);
+      const len = height * rng.range(0.14, 0.3);
+      const br = new THREE.CylinderGeometry(topR * 0.30, topR * 0.55, len, 5, 1, false);
+      br.translate(0, len * 0.5, 0);
+      const yaw = rng.range(0, Math.PI * 2);
+      const pitch = rng.range(0.55, 1.15);
+      br.rotateX(pitch);
+      br.rotateY(yaw);
+      br.translate(0, t * height, 0);
+      parts.push(br);
+    }
+    const merged = mergeGeometries(parts);
+    for (const p of parts) if (p !== merged) p.dispose();
+    return merged;
+  }
+
+  /**
+   * Faceted low-poly canopy: several overlapping irregular icospheres.
+   * Vertex colour bakes light-from-above plus AO, which is most of why MK8
+   * trees read so cleanly at speed.
+   */
+  private canopyGeometry(
+    blobs: number, radius: number, height: number, spread: number,
+    colTop: number, colBot: number, rng: Rng, squash = 0.85, detail = 1,
+  ): THREE.BufferGeometry {
+    const parts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < blobs; i++) {
+      const r = radius * rng.range(0.62, 1.0);
+      const g = new THREE.IcosahedronGeometry(r, detail);
+      // Irregularise so the silhouette isn't a row of balls.
+      const p = g.attributes.position as THREE.BufferAttribute;
+      for (let v = 0; v < p.count; v++) {
+        const k = 1 + (rng.next() - 0.5) * 0.34;
+        p.setXYZ(v, p.getX(v) * k, p.getY(v) * k * squash, p.getZ(v) * k);
+      }
+      const a = (i / Math.max(1, blobs)) * Math.PI * 2 + rng.range(-0.5, 0.5);
+      const rr = i === 0 ? 0 : spread * rng.range(0.35, 1.0);
+      g.translate(
+        Math.cos(a) * rr,
+        height + (i === 0 ? radius * 0.25 : rng.range(-0.35, 0.55) * radius),
+        Math.sin(a) * rr,
+      );
+      parts.push(g);
+    }
+    const merged = mergeGeometries(parts);
+    for (const p of parts) if (p !== merged) p.dispose();
+    merged.computeVertexNormals();
+
+    // Bake vertical gradient + normal-facing light into vertex colour.
+    const p = merged.attributes.position as THREE.BufferAttribute;
+    const n = merged.attributes.normal as THREE.BufferAttribute;
+    const colors = new Float32Array(p.count * 3);
+    let lo = Infinity, hi = -Infinity;
+    for (let v = 0; v < p.count; v++) {
+      const y = p.getY(v);
+      if (y < lo) lo = y;
+      if (y > hi) hi = y;
+    }
+    const top = new THREE.Color(colTop);
+    const bot = new THREE.Color(colBot);
+    for (let v = 0; v < p.count; v++) {
+      const t = (p.getY(v) - lo) / Math.max(0.001, hi - lo);
+      const up = clamp01(n.getY(v) * 0.5 + 0.5);
+      _col.copy(bot).lerp(top, Math.pow(t, 0.85) * 0.75 + up * 0.35);
+      _col.offsetHSL(0, 0, (Math.random() - 0.5) * 0.05);
+      colors[v * 3] = _col.r; colors[v * 3 + 1] = _col.g; colors[v * 3 + 2] = _col.b;
+    }
+    merged.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return merged;
+  }
+
+  private palmGeometry(rng: Rng): { trunk: THREE.BufferGeometry; canopy: THREE.BufferGeometry } {
+    const h = rng.range(6.5, 11);
+    const trunk = this.trunkGeometry(h, 0.20, 0.13, rng.range(0.2, 0.7), rng, 0);
+    const fronds: THREE.BufferGeometry[] = [];
+    const count = 9;
+    for (let i = 0; i < count; i++) {
+      const len = rng.range(2.2, 3.4);
+      const segs = 5;
+      const pos: number[] = [];
+      const idx: number[] = [];
+      const colr: number[] = [];
+      for (let s = 0; s <= segs; s++) {
+        const t = s / segs;
+        const droop = -t * t * len * 0.72;
+        const w = 0.34 * (1 - t * 0.85) * (t < 0.12 ? t / 0.12 : 1);
+        pos.push(-w, droop, t * len, w, droop, t * len);
+        const shade = 0.6 + 0.4 * (1 - t);
+        colr.push(0.24 * shade, 0.46 * shade, 0.17 * shade);
+        colr.push(0.3 * shade, 0.55 * shade, 0.2 * shade);
+      }
+      for (let s = 0; s < segs; s++) {
+        const a = s * 2;
+        idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      g.rotateX(rng.range(-0.42, -0.05));
+      g.rotateY((i / count) * Math.PI * 2 + rng.range(-0.2, 0.2));
+      g.translate(0, h - 0.15, 0);
+      fronds.push(g);
+    }
+    const canopy = mergeGeometries(fronds);
+    for (const f of fronds) if (f !== canopy) f.dispose();
+    return { trunk, canopy };
+  }
+
+  private cactusGeometry(rng: Rng): { trunk: THREE.BufferGeometry; canopy: THREE.BufferGeometry } {
+    const parts: THREE.BufferGeometry[] = [];
+    const h = rng.range(2.6, 4.6);
+    const body = new THREE.CapsuleGeometry(0.42, h, 6, 10);
+    body.translate(0, h * 0.5 + 0.42, 0);
+    parts.push(body);
+    const arms = rng.int(1, 3);
+    for (let a = 0; a < arms; a++) {
+      const al = rng.range(0.9, 1.7);
+      const arm = new THREE.CapsuleGeometry(0.24, al, 5, 8);
+      arm.translate(0, al * 0.5, 0);
+      const g2 = arm.clone();
+      arm.dispose();
+      g2.rotateZ(rng.range(0.9, 1.35) * (a % 2 === 0 ? 1 : -1));
+      g2.translate(0, rng.range(0.45, 0.72) * h, 0);
+      parts.push(g2);
+    }
+    const merged = mergeGeometries(parts);
+    for (const p of parts) if (p !== merged) p.dispose();
+    merged.computeVertexNormals();
+    const p = merged.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(p.count * 3);
+    for (let v = 0; v < p.count; v++) {
+      _col.setHex(0x4e7a45).offsetHSL(0, 0, (Math.random() - 0.5) * 0.08);
+      colors[v * 3] = _col.r; colors[v * 3 + 1] = _col.g; colors[v * 3 + 2] = _col.b;
+    }
+    merged.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    return { trunk: new THREE.BufferGeometry(), canopy: merged };
+  }
+
+  private trunkMaterial(): THREE.MeshStandardMaterial {
+    const mat = new THREE.MeshStandardMaterial({
+      map: this.bark ? this.bark.map : null,
+      normalMap: this.bark ? this.bark.normalMap : null,
+      normalScale: new THREE.Vector2(1.5, 1.5),
+      roughness: 0.93,
+      metalness: 0,
+      fog: true,
+    });
+    mat.name = 'Bark';
+    return mat;
+  }
+
+  private canopyMaterial(): THREE.MeshStandardMaterial {
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.82,
+      metalness: 0,
+      fog: true,
+      dithering: true,
+      side: THREE.FrontSide,
+    });
+    mat.name = 'Canopy';
+    mat.customProgramCacheKey = () => 'apex-canopy';
+    const u: Record<string, THREE.IUniform> = {
+      uTime: this.uTime,
+      uWindDir: this.uWindDir,
+      uWindStrength: this.uWindStrength,
+      uPlayerPos: this.uPlayerPos,
+      uSunDirection: worldFogUniforms.uSunDirection,
+    };
+    mat.onBeforeCompile = (shader) => {
+      for (const k in u) shader.uniforms[k] = u[k];
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', /* glsl */ `
+#include <common>
+${GLSL_WIND}
+varying float vCanopyUp;
+`)
+        .replace('#include <begin_vertex>', /* glsl */ `
+#include <begin_vertex>
+vec3 cw = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
+float amt = clamp( position.y / 8.0, 0.0, 1.0 );
+vec3 off = windOffset( cw, cw.x * 0.31 + cw.z * 0.17, amt * 0.55 );
+// Instance matrices here are compose(position, yaw, uniformScale) and the group
+// is never rotated, so the basis is orthogonal-times-s: its inverse is the
+// transpose over s². That replaces a per-vertex mat3 inversion on every leaf.
+mat3 cInst = mat3( instanceMatrix );
+float cS2 = max( dot( cInst[ 0 ], cInst[ 0 ] ), 1e-6 );
+transformed += ( transpose( cInst ) * off ) / cS2;
+vCanopyUp = normalize( objectNormal ).y;
+`);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>\nvarying float vCanopyUp;\nuniform vec3 uSunDirection;`)
+        .replace('#include <map_fragment>', /* glsl */ `
+// Fake thickness: undersides darken, sun-facing tops warm up.
+diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
+`);
+    };
+    return mat;
+  }
+
+  private buildTrees(): void {
+    const density = this.quality.foliageDensity * this.theme.treeDensity;
+    if (density <= 0.02) return;
+    const rng = new Rng(this.ctx.hints.terrainSeed ^ 0x7ee);
+    const spots = this.scatterSpots(
+      Math.round(560 * density), 16, 340, rng, 0.55,
+    );
+    if (!spots.length) return;
+
+    const mix = this.theme.treeMix;
+    const totalW = mix.reduce((a, b) => a + b[1], 0);
+    // Split spots between species by weight.
+    let cursor = 0;
+    for (let s = 0; s < mix.length; s++) {
+      const [kind, w] = mix[s];
+      const n = s === mix.length - 1 ? spots.length - cursor
+        : Math.round((w / totalW) * spots.length);
+      const slice = spots.slice(cursor, cursor + n);
+      cursor += n;
+      if (!slice.length) continue;
+      // Two or three visual variants per kind so a forest isn't clones.
+      const variants = kind === 'tree' ? 3 : kind === 'deadtree' ? 2 : 2;
+      for (let v = 0; v < variants; v++) {
+        const sub = slice.filter((_, i) => i % variants === v);
+        if (!sub.length) continue;
+        this.buildTreeSpecies(kind, v, sub, rng);
+      }
+    }
+  }
+
+  private buildTreeSpecies(
+    kind: ScatterKind, variant: number,
+    spots: Array<{ x: number; z: number; y: number; s: number; r: number }>,
+    rng: Rng,
+  ): void {
+    let trunkGeo: THREE.BufferGeometry;
+    let canopyGeo: THREE.BufferGeometry;
+
+    if (kind === 'palm') {
+      const g = this.palmGeometry(rng);
+      trunkGeo = g.trunk; canopyGeo = g.canopy;
+    } else if (kind === 'cactus') {
+      const g = this.cactusGeometry(rng);
+      trunkGeo = g.trunk; canopyGeo = g.canopy;
+    } else if (kind === 'deadtree') {
+      const h = rng.range(5, 9);
+      trunkGeo = this.trunkGeometry(h, 0.34, 0.09, rng.range(-0.5, 0.5), rng, 5 + variant);
+      canopyGeo = new THREE.BufferGeometry();
+    } else if (variant === 0) {
+      // conifer: tall, narrow, stacked cones
+      const h = rng.range(9, 15);
+      trunkGeo = this.trunkGeometry(h * 0.55, 0.28, 0.12, 0, rng, 0);
+      const cones: THREE.BufferGeometry[] = [];
+      const tiers = 5;
+      for (let i = 0; i < tiers; i++) {
+        const t = i / (tiers - 1);
+        const r = (1 - t) * h * 0.24 + 0.5;
+        const cone = new THREE.ConeGeometry(r, h * 0.34, 8, 1, false);
+        cone.translate(0, h * 0.28 + t * h * 0.62, 0);
+        cones.push(cone);
+      }
+      canopyGeo = mergeGeometries(cones);
+      for (const c of cones) if (c !== canopyGeo) c.dispose();
+      canopyGeo.computeVertexNormals();
+      tintGeometry(canopyGeo, 0x2f5b34, 0x16321e);
+    } else if (variant === 1) {
+      // broad round
+      const h = rng.range(6.5, 10.5);
+      trunkGeo = this.trunkGeometry(h * 0.52, 0.32, 0.18, rng.range(-0.3, 0.3), rng, 3);
+      canopyGeo = this.canopyGeometry(4, h * 0.36, h * 0.55, h * 0.22, 0x74ad4c, 0x2c4c28, rng, 0.82);
+    } else {
+      // tall birch-ish with a high crown
+      const h = rng.range(11, 16);
+      trunkGeo = this.trunkGeometry(h * 0.7, 0.24, 0.11, rng.range(-0.2, 0.2), rng, 4);
+      canopyGeo = this.canopyGeometry(3, h * 0.26, h * 0.7, h * 0.14, 0x8fc258, 0x39602e, rng, 1.05);
+    }
+
+    const count = spots.length;
+    const trunkMat = this.trunkMaterial();
+    const canopyMat = this.canopyMaterial();
+    const hasTrunk = (trunkGeo.attributes.position?.count ?? 0) > 0;
+    const hasCanopy = (canopyGeo.attributes.position?.count ?? 0) > 0;
+
+    const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, hasTrunk ? count : 0);
+    const canopyMesh = new THREE.InstancedMesh(canopyGeo, canopyMat, hasCanopy ? count : 0);
+    for (const m of [trunkMesh, canopyMesh]) {
+      m.name = `${kind}${variant}`;
+      m.receiveShadow = true;
+      m.frustumCulled = false;
+      m.renderOrder = RENDER_ORDER.PROPS;
+    }
+    // Canopies cast; trunks do not. A trunk's shadow lands inside its own
+    // canopy's shadow in every sun position that isn't grazing the horizon, so
+    // the second submission of 400 instanced trunks into every cascade buys
+    // nothing. Halves the tree contribution to the shadow draw set.
+    canopyMesh.castShadow = true;
+    trunkMesh.castShadow = false;
+
+    for (let i = 0; i < count; i++) {
+      const sp = spots[i];
+      _pos.set(sp.x, sp.y, sp.z);
+      _q.setFromAxisAngle(_up, sp.r);
+      _scale.setScalar(sp.s);
+      _m4.compose(_pos, _q, _scale);
+      if (hasTrunk) trunkMesh.setMatrixAt(i, _m4);
+      if (hasCanopy) canopyMesh.setMatrixAt(i, _m4);
+    }
+    // Trunks get frustum + distance chunk culling; canopies get distance only,
+    // because they are the shadow casters and a canopy just off the left edge of
+    // the screen still throws a shadow across the road.
+    if (hasTrunk) {
+      trunkMesh.instanceMatrix.needsUpdate = true;
+      trunkMesh.computeBoundingSphere();
+      this.group.add(trunkMesh);
+      this.chunked.push(new InstanceChunks(trunkMesh, spots, TREE_CULL, 96, true));
+    } else { trunkGeo.dispose(); trunkMat.dispose(); }
+    if (hasCanopy) {
+      canopyMesh.instanceMatrix.needsUpdate = true;
+      canopyMesh.computeBoundingSphere();
+      this.group.add(canopyMesh);
+      this.chunked.push(new InstanceChunks(canopyMesh, spots, TREE_CULL, 96, false));
+    } else { canopyGeo.dispose(); canopyMat.dispose(); }
+
+    this.species.push({
+      name: `${kind}${variant}`, trunk: trunkMesh, canopy: canopyMesh, imposter: null, count,
+    });
+  }
+
+  // =========================================================================
+  // SHRUB LAYER
+  // =========================================================================
+
+  private buildScatter(): void {
+    const d = this.quality.foliageDensity;
+    const rng = new Rng((this.ctx.hints.terrainSeed ^ 0xbb5) >>> 0);
+
+    // Scatter budgets and per-clump triangle counts are both way down. Every one
+    // of these is a sub-metre object: a bush at 200 m is two pixels, so it got a
+    // detail-0 icosahedron (20 tris a blob instead of 80) and a hard cull radius
+    // rather than a 220 m scatter band nothing could resolve.
+    const bushCount = Math.round(760 * d * this.theme.bushDensity);
+    if (bushCount > 8) {
+      const spots = this.scatterSpots(bushCount, 13, 150, rng, 0.75);
+      const geo = this.canopyGeometry(3, 0.85, 0.35, 0.55, 0x5f8f3c, 0x25401f, rng, 0.62, 0);
+      this.addScatterMesh('Bush', geo, spots, true, 150);
+    }
+
+    const fernCount = Math.round(620 * d * this.theme.bushDensity);
+    if (fernCount > 8 && (this.ctx.theme === 'meadow' || this.ctx.theme === 'coastal')) {
+      const spots = this.scatterSpots(fernCount, 12, 110, rng, 0.9);
+      const geo = this.fernGeometry(rng);
+      this.addScatterMesh('Fern', geo, spots, true, 110);
+    }
+
+    const flowerCount = Math.round(1100 * d * this.theme.flowerDensity);
+    if (flowerCount > 8) {
+      const spots = this.scatterSpots(flowerCount, 12, 80, rng, 1.0);
+      const geo = this.flowerGeometry(rng);
+      this.addScatterMesh('Flowers', geo, spots, true, 80);
+    }
+
+    if (this.ctx.theme === 'coastal' || this.ctx.theme === 'meadow') {
+      const n = Math.round(420 * d);
+      const spots = this.shoreSpots(n, rng);
+      if (spots.length > 8) {
+        const geo = this.cattailGeometry(rng);
+        this.addScatterMesh('Cattails', geo, spots, true, 120);
+      }
+    }
+
+    if (this.ctx.theme === 'volcano') {
+      const n = Math.round(520 * d);
+      const spots = this.scatterSpots(n, 14, 180, rng, 0.4);
+      const geo = this.canopyGeometry(2, 0.7, 0.2, 0.4, 0x3a2b22, 0x1a1310, rng, 0.5, 0);
+      this.addScatterMesh('ScorchedScrub', geo, spots, true, 180);
+    }
+  }
+
+  /**
+   * One InstancedMesh per shrub type, spatially bucketed so the visible set can
+   * be repacked per frame. `cull` is the distance past which the type stops being
+   * submitted at all.
+   */
+  private addScatterMesh(
+    name: string, geo: THREE.BufferGeometry,
+    spots: Array<{ x: number; z: number; y: number; s: number; r: number }>,
+    wind: boolean,
+    cull: number,
+  ): void {
+    if (!spots.length) { geo.dispose(); return; }
+    const mat = wind ? this.canopyMaterial() : this.trunkMaterial();
+    const mesh = new THREE.InstancedMesh(geo, mat, spots.length);
+    mesh.name = name;
+    // Shrubs cast into the near cascade only. Now that Lighting masks the far
+    // cascades this is one extra draw in one 0–14 m slice, and a bush with no
+    // shadow at all is the classic "pasted on" tell.
+    mesh.castShadow = name === 'Bush' || name === 'ScorchedScrub';
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    mesh.layers.enable(SHADOW_LAYER.NEAR_ONLY);
+    mesh.renderOrder = RENDER_ORDER.PROPS - 1;
+    for (let i = 0; i < spots.length; i++) {
+      const sp = spots[i];
+      _pos.set(sp.x, sp.y, sp.z);
+      _q.setFromAxisAngle(_up, sp.r);
+      _scale.setScalar(sp.s);
+      _m4.compose(_pos, _q, _scale);
+      mesh.setMatrixAt(i, _m4);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    this.group.add(mesh);
+    this.scatterMeshes.push(mesh);
+    this.chunked.push(new InstanceChunks(mesh, spots, cull, 48, true));
+  }
+
+  private fernGeometry(rng: Rng): THREE.BufferGeometry {
+    const blades: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 7; i++) {
+      const len = rng.range(0.5, 1.0);
+      const pos: number[] = [];
+      const idx: number[] = [];
+      const colr: number[] = [];
+      const segs = 4;
+      for (let s = 0; s <= segs; s++) {
+        const t = s / segs;
+        const w = 0.10 * (1 - t * 0.9);
+        pos.push(-w, t * len, -t * t * len * 0.4, w, t * len, -t * t * len * 0.4);
+        const sh = 0.55 + 0.45 * t;
+        colr.push(0.16 * sh, 0.38 * sh, 0.14 * sh, 0.2 * sh, 0.46 * sh, 0.17 * sh);
+      }
+      for (let s = 0; s < segs; s++) {
+        const a = s * 2;
+        idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      g.rotateY((i / 7) * Math.PI * 2 + rng.range(-0.3, 0.3));
+      blades.push(g);
+    }
+    const m = mergeGeometries(blades);
+    for (const b of blades) if (b !== m) b.dispose();
+    return m;
+  }
+
+  private flowerGeometry(rng: Rng): THREE.BufferGeometry {
+    const parts: THREE.BufferGeometry[] = [];
+    const palette = [0xffe14d, 0xff6f8a, 0xffffff, 0xa07dff, 0xff9b3d];
+    // Three blooms a clump, not five. A clump is 30 cm across; the extra two
+    // were 64 triangles each of overlap nobody has ever resolved.
+    for (let i = 0; i < 3; i++) {
+      const h = rng.range(0.18, 0.34);
+      const stem = new THREE.CylinderGeometry(0.008, 0.012, h, 3);
+      stem.translate(0, h * 0.5, 0);
+      tintGeometry(stem, 0x4d7a2e, 0x2f4d1c);
+      const head = new THREE.IcosahedronGeometry(rng.range(0.035, 0.06), 0);
+      head.translate(0, h, 0);
+      tintGeometry(head, palette[i % palette.length], palette[(i + 2) % palette.length]);
+      const off = new THREE.Matrix4().makeTranslation(rng.range(-0.2, 0.2), 0, rng.range(-0.2, 0.2));
+      stem.applyMatrix4(off);
+      head.applyMatrix4(off);
+      parts.push(stem, head);
+    }
+    const m = mergeGeometries(parts);
+    for (const p of parts) if (p !== m) p.dispose();
+    return m;
+  }
+
+  private cattailGeometry(rng: Rng): THREE.BufferGeometry {
+    const parts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 4; i++) {
+      const h = rng.range(0.9, 1.6);
+      const blade = new THREE.CylinderGeometry(0.012, 0.024, h, 3, 1, true);
+      blade.translate(0, h * 0.5, 0);
+      blade.rotateZ(rng.range(-0.2, 0.2));
+      blade.rotateY(rng.range(0, 6.28));
+      blade.translate(rng.range(-0.18, 0.18), 0, rng.range(-0.18, 0.18));
+      tintGeometry(blade, 0x6a8a3c, 0x3c5622);
+      parts.push(blade);
+      if (i < 2) {
+        const head = new THREE.CapsuleGeometry(0.035, 0.16, 2, 5);
+        head.translate(0, h + 0.08, 0);
+        tintGeometry(head, 0x6b4b2a, 0x3d2a17);
+        parts.push(head);
+      }
+    }
+    const m = mergeGeometries(parts);
+    for (const p of parts) if (p !== m) p.dispose();
+    return m;
+  }
+
+  // =========================================================================
+  // SCATTERING
+  // =========================================================================
+
+  /**
+   * Blue-noise-ish scatter in the band `[minDist, maxDist]` from the road,
+   * rejecting steep ground, water and the road corridor.
+   */
+  private scatterSpots(
+    target: number, minDist: number, maxDist: number, rng: Rng, moistureBias: number,
+  ): Array<{ x: number; z: number; y: number; s: number; r: number }> {
+    const out: Array<{ x: number; z: number; y: number; s: number; r: number }> = [];
+    if (target <= 0 || !this.ctx.stations.length) return out;
+    const stations = this.ctx.stations;
+    const field = this.field;
+    const tries = target * 8;
+    for (let i = 0; i < tries && out.length < target; i++) {
+      const st = stations[(rng.next() * stations.length) | 0];
+      const side = rng.next() < 0.5 ? -1 : 1;
+      const d = minDist + Math.pow(rng.next(), 0.7) * (maxDist - minDist);
+      const x = st.px + st.bx * d * side + rng.range(-8, 8);
+      const z = st.pz + st.bz * d * side + rng.range(-8, 8);
+      if (field.roadDistanceAt(x, z) < minDist * 0.85) continue;
+      const y = field.heightAt(x, z);
+      if (y < this.ctx.waterLevel + 0.35) continue;
+      if (field.slopeAt(x, z) > 0.66) continue;
+      const moist = field.moistureAt(x, z);
+      if (rng.next() > 0.16 + moist * moistureBias * 1.5) continue;
+      if (rng.next() < field.rockAt(x, z) * 0.8) continue;
+      out.push({ x, z, y: y - 0.06, s: rng.range(0.72, 1.32), r: rng.next() * Math.PI * 2 });
+    }
+    return out;
+  }
+
+  /** Reeds hug the waterline. */
+  private shoreSpots(
+    target: number, rng: Rng,
+  ): Array<{ x: number; z: number; y: number; s: number; r: number }> {
+    const out: Array<{ x: number; z: number; y: number; s: number; r: number }> = [];
+    const field = this.field;
+    const wl = this.ctx.waterLevel;
+    const tries = target * 20;
+    const half = field.extent * 0.48;
+    for (let i = 0; i < tries && out.length < target; i++) {
+      const x = field.centreX + rng.range(-half, half);
+      const z = field.centreZ + rng.range(-half, half);
+      const y = field.heightAt(x, z);
+      if (y < wl - 0.35 || y > wl + 1.0) continue;
+      if (field.roadDistanceAt(x, z) < 11) continue;
+      out.push({ x, z, y: y - 0.1, s: rng.range(0.8, 1.4), r: rng.next() * Math.PI * 2 });
+    }
+    return out;
+  }
+
+  // =========================================================================
+
+  setCamera(camera: THREE.PerspectiveCamera): void { this.camera = camera; }
+
+  setWind(strength: number, dirRadians?: number): void {
+    this.uWindStrength.value = strength;
+    if (dirRadians !== undefined) {
+      this.uWindDir.value.set(Math.cos(dirRadians), Math.sin(dirRadians)).normalize();
+    }
+  }
+
+  update(ctx: FrameContext): void {
+    this.uTime.value = ctx.elapsed;
+    this.uPlayerPos.value.copy(this.playerPosition);
+    const cam = this.camera;
+    if (cam) for (let i = 0; i < this.chunked.length; i++) this.chunked[i].cullTo(cam);
+  }
+
+  /** Draw calls this module contributes, for the perf readout. */
+  get drawCalls(): number {
+    return this.rings.length + this.scatterMeshes.length +
+      this.species.reduce((a, s) => a + (s.trunk.count > 0 ? 1 : 0) + (s.canopy.count > 0 ? 1 : 0), 0);
+  }
+
+  /** Instances actually submitted this frame, across every chunked mesh. */
+  get liveInstances(): number {
+    let n = 0;
+    for (const c of this.chunked) n += c.drawnInstances;
+    return n;
+  }
+
+  dispose(): void {
+    const kill = (m: THREE.InstancedMesh): void => {
+      m.geometry.dispose();
+      const mat = m.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else mat.dispose();
+      m.dispose();
+    };
+    for (const r of this.rings) kill(r.mesh);
+    for (const s of this.species) { kill(s.trunk); kill(s.canopy); }
+    for (const m of this.scatterMeshes) kill(m);
+    for (const d of this.disposables) d.dispose();
+    this.rings.length = 0;
+    this.species.length = 0;
+    this.scatterMeshes.length = 0;
+    this.chunked.length = 0;
+    this.group.clear();
+    this.scene.remove(this.group);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Local geometry utilities (no BufferGeometryUtils import — keeps this module
+// dependency-free and lets us guarantee attribute layout).
+// ---------------------------------------------------------------------------
+
+/** Merge indexed/non-indexed geometries that share position/normal/uv/color. */
+export function mergeGeometries(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const usable = list.filter((g) => (g.attributes.position?.count ?? 0) > 0);
+  if (!usable.length) return new THREE.BufferGeometry();
+  if (usable.length === 1) return usable[0];
+
+  const wantColor = usable.some((g) => !!g.attributes.color);
+  const wantUv = usable.some((g) => !!g.attributes.uv);
+  let vTotal = 0;
+  let iTotal = 0;
+  for (const g of usable) {
+    vTotal += g.attributes.position.count;
+    iTotal += g.index ? g.index.count : g.attributes.position.count;
+  }
+  const pos = new Float32Array(vTotal * 3);
+  const nor = new Float32Array(vTotal * 3);
+  const uv = wantUv ? new Float32Array(vTotal * 2) : null;
+  const col = wantColor ? new Float32Array(vTotal * 3) : null;
+  const idx = new Uint32Array(iTotal);
+  let vo = 0, io = 0;
+  for (const g of usable) {
+    const p = g.attributes.position as THREE.BufferAttribute;
+    const n = g.attributes.normal as THREE.BufferAttribute | undefined;
+    const t = g.attributes.uv as THREE.BufferAttribute | undefined;
+    const c = g.attributes.color as THREE.BufferAttribute | undefined;
+    for (let i = 0; i < p.count; i++) {
+      pos[(vo + i) * 3] = p.getX(i);
+      pos[(vo + i) * 3 + 1] = p.getY(i);
+      pos[(vo + i) * 3 + 2] = p.getZ(i);
+      if (n) {
+        nor[(vo + i) * 3] = n.getX(i);
+        nor[(vo + i) * 3 + 1] = n.getY(i);
+        nor[(vo + i) * 3 + 2] = n.getZ(i);
+      }
+      if (uv) {
+        uv[(vo + i) * 2] = t ? t.getX(i) : 0;
+        uv[(vo + i) * 2 + 1] = t ? t.getY(i) : 0;
+      }
+      if (col) {
+        col[(vo + i) * 3] = c ? c.getX(i) : 1;
+        col[(vo + i) * 3 + 1] = c ? c.getY(i) : 1;
+        col[(vo + i) * 3 + 2] = c ? c.getZ(i) : 1;
+      }
+    }
+    if (g.index) {
+      for (let i = 0; i < g.index.count; i++) idx[io + i] = g.index.getX(i) + vo;
+      io += g.index.count;
+    } else {
+      for (let i = 0; i < p.count; i++) idx[io + i] = i + vo;
+      io += p.count;
+    }
+    vo += p.count;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  if (uv) out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  if (col) out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  out.computeBoundingSphere();
+  return out;
+}
+
+/** Bake a vertical two-colour gradient into vertex colours. */
+export function tintGeometry(geo: THREE.BufferGeometry, top: number, bottom: number): void {
+  const p = geo.attributes.position as THREE.BufferAttribute;
+  if (!p) return;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i);
+    if (y < lo) lo = y;
+    if (y > hi) hi = y;
+  }
+  const a = new THREE.Color(bottom);
+  const b = new THREE.Color(top);
+  const c = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const t = (p.getY(i) - lo) / Math.max(1e-4, hi - lo);
+    _col.copy(a).lerp(b, Math.pow(t, 0.8));
+    c[i * 3] = _col.r; c[i * 3 + 1] = _col.g; c[i * 3 + 2] = _col.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+}
+
+/** Set a flat vertex colour, so a merged mesh can use one vertex-colour material. */
+export function paintGeometry(geo: THREE.BufferGeometry, hex: number, jitter = 0.03): void {
+  const p = geo.attributes.position as THREE.BufferAttribute;
+  if (!p) return;
+  const c = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    _col.setHex(hex);
+    if (jitter > 0) _col.offsetHSL(0, 0, (Math.random() - 0.5) * jitter);
+    c[i * 3] = _col.r; c[i * 3 + 1] = _col.g; c[i * 3 + 2] = _col.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+}
+
+void _nrm;

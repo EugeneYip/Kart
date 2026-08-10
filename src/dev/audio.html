@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>APEX KART — audio bench</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; min-height: 100%; background: #080b13; }
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #cfe3ff; font-size: 12px; line-height: 1.5; padding: 14px 16px 40px;
+      }
+      h1 { font-size: 15px; color: #7fd7ff; letter-spacing: 0.08em; margin-bottom: 2px; }
+      .sub { color: #6d80a0; font-size: 11px; margin-bottom: 14px; }
+      .panel {
+        border: 1px solid rgba(120, 170, 255, 0.2); border-radius: 8px;
+        background: rgba(10, 15, 27, 0.8); padding: 10px 12px; margin-bottom: 12px;
+      }
+      .panel > h2 {
+        font-size: 11px; color: #7fd7ff; letter-spacing: 0.14em;
+        text-transform: uppercase; margin-bottom: 8px; font-weight: 600;
+      }
+      .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+      @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+      .group { margin-bottom: 10px; }
+      .group > b { display: block; color: #9fb6d8; font-size: 10px; letter-spacing: 0.1em; margin-bottom: 4px; }
+      .btns { display: flex; flex-wrap: wrap; gap: 4px; }
+      button {
+        font: inherit; font-size: 11px; color: #d7e6ff; cursor: pointer;
+        background: rgba(40, 62, 100, 0.65); border: 1px solid rgba(120, 170, 255, 0.28);
+        border-radius: 5px; padding: 3px 8px;
+      }
+      button:hover { background: rgba(64, 100, 160, 0.8); border-color: #7fd7ff; }
+      button:active { transform: translateY(1px); }
+      button.warn { background: rgba(120, 60, 40, 0.7); border-color: rgba(255, 150, 110, 0.4); }
+      button.go { background: rgba(30, 100, 70, 0.75); border-color: rgba(110, 255, 180, 0.4); }
+      .row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+      .row > label { width: 118px; color: #9fb6d8; font-size: 11px; flex: none; }
+      .row > input[type=range] { flex: 1; min-width: 120px; accent-color: #4aa3ff; }
+      .row > span { width: 66px; text-align: right; color: #7fd7ff; font-size: 11px; flex: none; }
+      select { font: inherit; font-size: 11px; background: #16203a; color: #d7e6ff;
+               border: 1px solid rgba(120,170,255,0.28); border-radius: 5px; padding: 2px 6px; }
+      canvas { display: block; width: 100%; border-radius: 6px; background: #050810;
+               border: 1px solid rgba(120, 170, 255, 0.18); }
+      pre { white-space: pre; overflow-x: auto; font-size: 11px; line-height: 1.45; color: #b9cbe6; }
+      .pass { color: #62e08a; }
+      .fail { color: #ff6b6b; }
+      .warnc { color: #ffcf5c; }
+      .dim { color: #6d80a0; }
+      #status { color: #ffcf5c; font-size: 11px; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>APEX KART — AUDIO BENCH</h1>
+    <div class="sub">
+      Objective verification harness. Click anywhere first to unlock the AudioContext.
+      Probe from the console via <b>window.__AUDIO__</b> / <b>window.__MEASURE__()</b>.
+    </div>
+    <div id="status">booting…</div>
+
+    <div class="panel">
+      <h2>Analyser — spectrum (log f) + waveform</h2>
+      <canvas id="scope" width="1200" height="260"></canvas>
+      <div class="sub" id="scopeinfo" style="margin:6px 0 0"></div>
+    </div>
+
+    <div class="cols">
+      <div>
+        <div class="panel">
+          <h2>Engine</h2>
+          <div id="engineRows"></div>
+          <div class="btns" style="margin-top:6px">
+            <button id="engBoost">boost pulse</button>
+            <button id="engSweep" class="go">rpm sweep 0→1 (6 s)</button>
+            <button id="engField">bind 12 karts</button>
+            <button id="engOne">bind player only</button>
+          </div>
+          <pre id="engDebug" style="margin-top:8px"></pre>
+        </div>
+
+        <div class="panel">
+          <h2>Music / mix / space</h2>
+          <div id="mixRows"></div>
+          <div class="row">
+            <label>environment</label>
+            <select id="envSel"></select>
+            <span></span>
+          </div>
+          <div class="row">
+            <label>theme</label>
+            <select id="themeSel"></select>
+            <span></span>
+          </div>
+          <div class="btns">
+            <button id="musStart" class="go">music start</button>
+            <button id="musStop" class="warn">music stop</button>
+            <button id="musFinal">final lap ON</button>
+            <button id="musFinalOff">final lap OFF</button>
+            <button id="duckBtn">duck 0.6 / 1.2 s</button>
+          </div>
+          <pre id="musDebug" style="margin-top:8px"></pre>
+        </div>
+
+        <div class="panel">
+          <h2>Event bus (real game events)</h2>
+          <div class="btns" id="eventBtns"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>SFX bank</h2>
+          <div id="sfxGroups"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Measurement</h2>
+          <div class="btns">
+            <button id="measure" class="go">measure every buffer</button>
+            <button id="measureEng">measure engine spectra (offline)</button>
+            <button id="measureMaster">measure master chain (offline)</button>
+          </div>
+          <pre id="report" style="margin-top:8px">not run</pre>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/dev/audio.ts"></script>
+  </body>
+</html>

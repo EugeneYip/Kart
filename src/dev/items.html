@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>APEX KART — Items Harness</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #05070f; }
+      body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #cfe3ff; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+
+      .panel {
+        position: fixed; z-index: 10;
+        background: rgba(6, 10, 20, 0.78);
+        border: 1px solid rgba(120, 180, 255, 0.22);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 11px; line-height: 1.5;
+        backdrop-filter: blur(6px);
+        white-space: pre;
+      }
+      #hud { top: 12px; left: 12px; min-width: 300px; }
+      #keys { bottom: 12px; left: 12px; opacity: 0.8; }
+      #tests { top: 12px; right: 12px; min-width: 290px; max-height: 64vh; overflow: auto; }
+      #atlas {
+        position: fixed; bottom: 12px; right: 12px; z-index: 10;
+        border: 1px solid rgba(120, 180, 255, 0.28); border-radius: 10px;
+        background: rgba(6, 10, 20, 0.8); padding: 8px;
+      }
+      #atlas canvas { width: 256px; height: 256px; display: block; image-rendering: auto; }
+      #atlas div { font-size: 10px; opacity: 0.7; margin-bottom: 5px; }
+      b { color: #7fe6ff; font-weight: 600; }
+      .ok { color: #6ef08a; }
+      .bad { color: #ff7b6b; }
+      .warn { color: #ffd166; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="panel" id="hud">booting…</div>
+    <div class="panel" id="tests">tests: press <b>Z</b> to run behaviour assertions</div>
+    <div class="panel" id="keys"></div>
+    <div id="atlas"><div>baked HUD icon atlas (getIconAtlas)</div></div>
+    <script type="module" src="/src/dev/items.ts"></script>
+  </body>
+</html>

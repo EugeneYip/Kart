@@ -1,0 +1,936 @@
+/**
+ * ============================================================================
+ *  APEX KART — WATER (and lava)
+ * ============================================================================
+ *  One camera-following radial disc, one draw call, and a shader that does the
+ *  five things that actually make water read as *wet*:
+ *
+ *   1. Gerstner swell — five summed waves with analytically differentiated
+ *      normals (no normal-map guessing), so crests catch the key light in the
+ *      right places and the horizon still has motion.
+ *   2. Depth from the terrain field — the height texture Terrain already uses is
+ *      sampled per *fragment*, so the shoreline is pixel-exact rather than
+ *      tessellation-exact, and shallow water genuinely goes turquoise while deep
+ *      water absorbs to navy.
+ *   3. A shoreline foam line that advances and retreats with the swell, plus
+ *      two-scroll churn noise and crest foam on steep wave faces.
+ *   4. Planar reflections (mirrored camera into a half-res target, obliquely
+ *      clipped at the water plane) on high/ultra; an analytic sky-dome
+ *      reflection everywhere, which also fills the planar target's dead edges.
+ *   5. Fresnel between that reflection and a refracted seabed with projected
+ *      caustics, and a very tight sun glint that runs hot enough to bloom.
+ *
+ *  `setPreset('lava')` swaps in a second material: domain-warped flow, a dark
+ *  basalt crust broken by glowing veins, and slow convective drift.
+ * ============================================================================
+ */
+
+import * as THREE from 'three';
+import type { FrameContext, ISubsystem, QualitySettings } from '@/core/Types';
+import { LAYERS, RENDER_ORDER } from '@/core/Config';
+import { clamp } from '@/core/MathUtils';
+import {
+  GLSL_FIELD, GLSL_HEIGHT_FOG, GLSL_NOISE,
+  fieldUniforms, makeCaustics, makeFoam, makeWaterNormal,
+  type TerrainField, type WorldContext, type WorldTheme,
+  worldFogUniforms, worldSunUniforms,
+} from './WorldTextures';
+
+export type WaterPresetName = 'ocean' | 'lake' | 'lava' | 'none';
+
+interface WaterLook {
+  shallow: number;
+  deep: number;
+  floor: number;
+  /** metres of depth over which the shore foam band sits */
+  foamWidth: number;
+  /** absorption rate — bigger = colour saturates closer to shore */
+  absorb: number;
+  /** [amplitude, wavelength] of the primary swell */
+  swell: [number, number];
+  choppy: number;
+  roughness: number;
+  glint: number;
+  causticStrength: number;
+}
+
+const LOOKS: Record<'ocean' | 'lake', WaterLook> = {
+  ocean: {
+    shallow: 0x39c8bd, deep: 0x08324f, floor: 0xa89468,
+    foamWidth: 1.5, absorb: 0.30, swell: [0.46, 34], choppy: 1.0,
+    roughness: 0.055, glint: 1.0, causticStrength: 1.0,
+  },
+  lake: {
+    shallow: 0x35a08c, deep: 0x113a44, floor: 0x6d6a4a,
+    foamWidth: 0.85, absorb: 0.46, swell: [0.16, 18], choppy: 0.55,
+    roughness: 0.035, glint: 0.8, causticStrength: 0.75,
+  },
+};
+
+const HALF_EXTENT = 760;
+const RES_FOR_TIER: Record<string, number> = { low: 97, medium: 121, high: 145, ultra: 161 };
+
+const _up = new THREE.Vector3(0, 1, 0);
+const _normal = new THREE.Vector3(0, 1, 0);
+const _view = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _lookAt = new THREE.Vector3();
+const _reflectorPos = new THREE.Vector3();
+const _camPos = new THREE.Vector3();
+const _rot = new THREE.Matrix4();
+const _hidden: THREE.Object3D[] = [];
+
+/**
+ * Scene roots that are never worth a planar-reflection pass. Particle systems
+ * and god rays are additive sprites authored for the main framebuffer; at the
+ * reflection's resolution they contribute noise and hundreds of draw calls.
+ */
+const SKIP_NAMES: ReadonlySet<string> = new Set(['vfx', 'Projectiles', 'SunShafts', 'Weather']);
+
+// ---------------------------------------------------------------------------
+// Shared GLSL
+// ---------------------------------------------------------------------------
+
+/**
+ * Five Gerstner waves. Steepness is budgeted so the sum stays below the
+ * self-intersection limit, and the tangent frame is the exact derivative of the
+ * displacement — the crests light correctly instead of looking painted on.
+ */
+const GLSL_GERSTNER = /* glsl */ `
+uniform float uTime;
+uniform vec2  uSwell;      // amplitude, wavelength
+uniform float uChoppy;
+uniform vec2  uWindDir;
+
+const int WAVE_COUNT = 5;
+/** dir-angle offset, wavelength scale, amplitude scale, steepness.
+    Written as a switch rather than a const array — GLSL ES 1.00 has no array
+    initialisers and three compiles ShaderMaterial as GLSL1 by default. */
+vec4 waveParams(int i){
+  if (i == 0) return vec4( 0.00, 1.00, 1.00, 0.62);
+  if (i == 1) return vec4( 0.62, 0.61, 0.58, 0.48);
+  if (i == 2) return vec4(-0.74, 0.38, 0.34, 0.40);
+  if (i == 3) return vec4( 1.55, 0.22, 0.19, 0.30);
+  return vec4(-2.05, 0.13, 0.11, 0.24);
+}
+
+/** Returns displacement; accumulates the tangent-frame partials. */
+vec3 gerstner(vec2 xz, out vec3 dPdx, out vec3 dPdz, out float fold){
+  vec3 disp = vec3(0.0);
+  dPdx = vec3(1.0, 0.0, 0.0);
+  dPdz = vec3(0.0, 0.0, 1.0);
+  fold = 0.0;
+  float baseAngle = atan(uWindDir.y, uWindDir.x);
+  for (int i = 0; i < WAVE_COUNT; i++) {
+    vec4 w = waveParams(i);
+    float ang = baseAngle + w.x * uChoppy;
+    vec2 d = vec2(cos(ang), sin(ang));
+    float L = max(uSwell.y * w.y, 0.6);
+    float k = 6.28318530718 / L;
+    float c = sqrt(9.81 / k);
+    float a = uSwell.x * w.z;
+    float steep = min(w.w * uChoppy, 0.92);
+    float q = steep / (k * a * float(WAVE_COUNT) + 1e-4);
+    float f = k * (dot(d, xz) - c * uTime);
+    float sf = sin(f), cf = cos(f);
+    float qa = q * a;
+
+    disp += vec3(d.x * qa * cf, a * sf, d.y * qa * cf);
+
+    float wa = k * a;
+    dPdx += vec3(-q * d.x * d.x * wa * sf, d.x * wa * cf, -q * d.x * d.y * wa * sf);
+    dPdz += vec3(-q * d.x * d.y * wa * sf, d.y * wa * cf, -q * d.y * d.y * wa * sf);
+    fold += max(0.0, sf) * w.z;
+  }
+  return disp;
+}
+`;
+
+const GLSL_SKY_APPROX = /* glsl */ `
+uniform vec3 uZenith;
+uniform vec3 uHorizon;
+uniform float uSkyBoost;
+
+/** Cheap sky dome for reflections — matches Sky's palette closely enough. */
+vec3 skyApprox(vec3 rd){
+  float h = rd.y;
+  float t = pow(clamp(h, 0.0, 1.0), 0.52);
+  vec3 col = mix(uHorizon, uZenith * uSkyBoost, t);
+  float sd = max(dot(rd, uSunDirection), 0.0);
+  col += uSunColor * (pow(sd, 6.0) * 0.22 + pow(sd, 260.0) * 2.2);
+  // Grazing rays pick up the haze band rather than punching through it.
+  col = mix(uHorizon * 0.82, col, smoothstep(-0.08, 0.07, h));
+  return col;
+}
+`;
+
+// ---------------------------------------------------------------------------
+
+export class Water implements ISubsystem {
+  readonly group = new THREE.Group();
+  mesh: THREE.Mesh | null = null;
+
+  preset: WaterPresetName = 'lake';
+  camera: THREE.PerspectiveCamera | null = null;
+
+  private scene: THREE.Scene;
+  private renderer: THREE.WebGLRenderer;
+  private ctx: WorldContext;
+  private quality: QualitySettings;
+  private field: TerrainField;
+  private waterLevel: number;
+
+  private geometry: THREE.BufferGeometry | null = null;
+  private waterMat: THREE.ShaderMaterial | null = null;
+  private lavaMat: THREE.ShaderMaterial | null = null;
+
+  private normalTex: THREE.DataTexture | null = null;
+  private foamTex: THREE.DataTexture | null = null;
+  private causticTex: THREE.DataTexture | null = null;
+
+  // --- planar reflection ---
+  private reflRT: THREE.WebGLRenderTarget | null = null;
+  private reflCam = new THREE.PerspectiveCamera();
+  private textureMatrix = new THREE.Matrix4();
+  private clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private reflecting = false;
+  private reflectionsWanted = false;
+  private reflectionsOn = false;
+  private time = 0;
+
+  constructor(
+    scene: THREE.Scene,
+    renderer: THREE.WebGLRenderer,
+    ctx: WorldContext,
+    quality: QualitySettings,
+  ) {
+    this.scene = scene;
+    this.renderer = renderer;
+    this.ctx = ctx;
+    this.quality = quality;
+    this.field = ctx.field;
+    this.waterLevel = ctx.waterLevel;
+    this.reflectionsWanted = quality.tier === 'high' || quality.tier === 'ultra';
+  }
+
+  get level(): number { return this.waterLevel; }
+
+  async init(): Promise<void> {
+    this.group.name = 'Water';
+    this.group.renderOrder = RENDER_ORDER.WATER;
+    this.scene.add(this.group);
+
+    // A water plane far below the deepest terrain can never be seen — skip the
+    // whole subsystem rather than pay for an invisible draw call.
+    if (this.waterLevel < this.field.minHeight - 3) return;
+
+    const texSize = this.quality.tier === 'low' ? 128 : 256;
+    this.normalTex = makeWaterNormal(texSize);
+    this.foamTex = makeFoam(texSize);
+    this.causticTex = makeCaustics(texSize);
+
+    this.geometry = buildDisc(RES_FOR_TIER[this.quality.tier] ?? 129);
+
+    const mesh = new THREE.Mesh(this.geometry, this.ensureWaterMaterial());
+    mesh.name = 'WaterSurface';
+    mesh.frustumCulled = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.renderOrder = RENDER_ORDER.WATER;
+    mesh.position.y = this.waterLevel;
+    // Recentre on whichever camera is drawing us. Deliberately cheap: the
+    // reflection pass is NOT kicked from here (see `update()`) because
+    // onBeforeRender fires once per scene pass — main pass, NormalPass, and once
+    // more inside the reflection itself — which used to multiply one reflection
+    // into four full-scene re-renders per frame.
+    mesh.onBeforeRender = (_renderer, _scene, camera) => {
+      const pc = camera as THREE.PerspectiveCamera;
+      if (!pc.isPerspectiveCamera) return;
+      if (!pc.userData.apxReflectionCam) this.camera = pc;
+      mesh.position.set(pc.position.x, this.waterLevel, pc.position.z);
+      mesh.updateMatrix();
+      mesh.updateMatrixWorld(true);
+    };
+    this.mesh = mesh;
+    this.group.add(mesh);
+
+    if (this.reflectionsWanted) this.setupReflection();
+    this.setPreset(themeToPreset(this.ctx.theme));
+  }
+
+  // =========================================================================
+  // MATERIALS
+  // =========================================================================
+
+  private sharedUniforms(): Record<string, THREE.IUniform> {
+    return {
+      ...worldFogUniforms,
+      ...worldSunUniforms,
+      ...fieldUniforms(this.field),
+      uTime: { value: 0 },
+      uWaterLevel: { value: this.waterLevel },
+      uWindDir: { value: new THREE.Vector2(0.86, 0.51) },
+      uZenith: { value: worldSunUniforms.uAmbientSky.value },
+      uHorizon: { value: worldFogUniforms.uFogColor.value },
+      uSkyBoost: { value: 1.7 },
+    };
+  }
+
+  private ensureWaterMaterial(): THREE.ShaderMaterial {
+    if (this.waterMat) return this.waterMat;
+    const look = LOOKS.lake;
+
+    const uniforms: Record<string, THREE.IUniform> = {
+      ...this.sharedUniforms(),
+      uNormalMap: { value: this.normalTex },
+      uFoamMap: { value: this.foamTex },
+      uCausticMap: { value: this.causticTex },
+      uReflMap: { value: null },
+      uReflMatrix: { value: this.textureMatrix },
+      uReflAmount: { value: 0 },
+      uShallow: { value: new THREE.Color(look.shallow) },
+      uDeep: { value: new THREE.Color(look.deep) },
+      uFloor: { value: new THREE.Color(look.floor) },
+      uSwell: { value: new THREE.Vector2(look.swell[0], look.swell[1]) },
+      uChoppy: { value: look.choppy },
+      uFoamWidth: { value: look.foamWidth },
+      uAbsorb: { value: look.absorb },
+      uRough: { value: look.roughness },
+      uGlint: { value: look.glint },
+      uCaustic: { value: look.causticStrength },
+    };
+
+    const mat = new THREE.ShaderMaterial({
+      name: 'apx-water',
+      uniforms,
+      transparent: true,
+      depthWrite: true,
+      side: THREE.FrontSide,
+      vertexShader: /* glsl */ `
+        ${GLSL_FIELD}
+        ${GLSL_GERSTNER}
+        uniform float uWaterLevel;
+        uniform mat4 uReflMatrix;
+        varying vec3 vWorld;
+        varying vec3 vNormalW;
+        varying float vFold;
+        varying float vWave;
+        varying vec4 vRefl;
+        varying float vFar;
+
+        void main(){
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          float dist = length(wp.xz - cameraPosition.xz);
+          vFar = smoothstep(90.0, 520.0, dist);
+
+          // Sink anything well inland so terrain hides it; the fragment shader
+          // still discards, but this stops shoreline z-fighting outright.
+          float terrain = fieldHeight(wp.xz);
+          float depth = uWaterLevel - terrain;
+
+          vec3 dPdx, dPdz;
+          float fold;
+          // Damp the swell in shallow water — waves shoal like real ones.
+          float shoal = clamp(depth * 0.55, 0.06, 1.0);
+          vec3 disp = gerstner(wp.xz, dPdx, dPdz, fold);
+          disp *= shoal;
+          vWave = disp.y;
+          vFold = fold * shoal;
+
+          wp.xyz += disp;
+          if (depth < -2.5) wp.y = terrain - 6.0;
+
+          vWorld = wp.xyz;
+          vNormalW = normalize(cross(dPdz, dPdx));
+          vRefl = uReflMatrix * vec4(wp.xyz, 1.0);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        ${GLSL_FIELD}
+        ${GLSL_NOISE}
+        ${GLSL_HEIGHT_FOG}
+        uniform vec3 uSunColor;
+        uniform float uSunIntensity;
+        uniform vec3 uAmbientSky;
+        uniform vec3 uAmbientGround;
+        uniform float uAmbientIntensity;
+        ${GLSL_SKY_APPROX}
+
+        uniform float uTime;
+        uniform float uWaterLevel;
+        uniform sampler2D uNormalMap;
+        uniform sampler2D uFoamMap;
+        uniform sampler2D uCausticMap;
+        uniform sampler2D uReflMap;
+        uniform float uReflAmount;
+        uniform vec3 uShallow;
+        uniform vec3 uDeep;
+        uniform vec3 uFloor;
+        uniform float uFoamWidth;
+        uniform float uAbsorb;
+        uniform float uRough;
+        uniform float uGlint;
+        uniform float uCaustic;
+        uniform vec2 uWindDir;
+
+        varying vec3 vWorld;
+        varying vec3 vNormalW;
+        varying float vFold;
+        varying float vWave;
+        varying vec4 vRefl;
+        varying float vFar;
+
+        vec3 sampleRipples(vec2 p, float fade){
+          // Two scrolling scales, blended as derivatives (UDN) so the macro
+          // Gerstner normal stays dominant and nothing looks like wallpaper.
+          vec2 d1 = uWindDir * uTime * 0.055;
+          vec2 d2 = vec2(-uWindDir.y, uWindDir.x) * uTime * 0.031;
+          vec3 n1 = texture2D(uNormalMap, p * 0.055 + d1).xyz * 2.0 - 1.0;
+          vec3 n2 = texture2D(uNormalMap, p * 0.19 - d2).xyz * 2.0 - 1.0;
+          vec3 n = vec3(n1.xy * 1.0 + n2.xy * 0.55, 1.0);
+          n.xy *= (1.0 - fade * 0.82);
+          return normalize(n);
+        }
+
+        void main(){
+          float terrain = fieldHeight(vWorld.xz);
+          float depth = uWaterLevel - terrain;
+          if (depth < -0.03) discard;
+
+          vec3 V = normalize(cameraPosition - vWorld);
+
+          // --- normal ---------------------------------------------------------
+          vec3 N = normalize(vNormalW);
+          vec3 rip = sampleRipples(vWorld.xz, vFar);
+          // Tangent frame is trivially known for a heightfield surface.
+          vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
+          vec3 B = cross(N, T);
+          float ripAmt = mix(0.85, 0.25, vFar) * clamp(depth * 0.9, 0.15, 1.0);
+          N = normalize(N + (T * rip.x + B * rip.y) * ripAmt);
+          if (N.y < 0.02) N = normalize(vec3(N.x, 0.02, N.z));
+
+          // --- refracted seabed ------------------------------------------------
+          vec4 fd = fieldData(vWorld.xz);
+          // Rocky seabed goes cool and grey; the field's AO darkens gullies.
+          vec3 bedTint = mix(uFloor, uFloor * vec3(0.70, 0.73, 0.80), fd.a);
+          bedTint *= mix(0.72, 1.0, fd.g);
+          bedTint *= 0.86 + 0.28 * vnoise2(vWorld.xz * 0.22);
+          vec3 absorbT = exp(-max(depth, 0.0) * vec3(0.42, 0.24, 0.16) * (uAbsorb * 2.6));
+          vec3 bed = bedTint * absorbT;
+
+          // Caustics: two counter-scrolling cells, only where light reaches.
+          vec2 cuv = vWorld.xz * 0.075;
+          float ca = texture2D(uCausticMap, cuv + vec2(uTime * 0.021, uTime * -0.013)).r;
+          float cb = texture2D(uCausticMap, cuv * 1.47 - vec2(uTime * 0.017, uTime * 0.024)).r;
+          float caustic = pow(ca * cb, 1.4) * exp(-max(depth, 0.0) * 0.42)
+                        * uCaustic * max(uSunDirection.y, 0.0) * (1.0 - vFar * 0.7);
+          bed += uSunColor * caustic * 1.5;
+
+          float dn = 1.0 - exp(-max(depth, 0.0) * uAbsorb);
+          vec3 body = mix(uShallow, uDeep, dn);
+          // Sun scattering through the swell — crests glow slightly green-gold.
+          body += uShallow * max(vWave, 0.0) * 0.35 * max(uSunDirection.y, 0.0);
+          vec3 refracted = mix(bed, body, dn);
+
+          // --- reflection ------------------------------------------------------
+          vec3 R = reflect(-V, N);
+          R.y = max(R.y, 0.008);
+          vec3 reflCol = skyApprox(R);
+          if (uReflAmount > 0.001) {
+            vec2 ruv = vRefl.xy / max(vRefl.w, 1e-4);
+            vec2 distort = vec2(N.x, N.z) * mix(0.045, 0.008, vFar);
+            vec2 suv = clamp(ruv + distort, vec2(0.002), vec2(0.998));
+            vec3 planar = texture2D(uReflMap, suv).rgb;
+            // Fade the planar term out where it has no information.
+            float edge = smoothstep(0.0, 0.09, min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y)));
+            float valid = edge * (1.0 - vFar * 0.55) * step(0.0, vRefl.w);
+            reflCol = mix(reflCol, planar, uReflAmount * valid);
+          }
+
+          // --- fresnel ---------------------------------------------------------
+          float ndv = clamp(dot(N, V), 0.0, 1.0);
+          float F = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+          F = mix(F, 1.0, 0.10);   // a touch of extra sheen reads better in AgX
+
+          vec3 col = mix(refracted, reflCol, F);
+
+          // --- sun glint --------------------------------------------------------
+          vec3 H = normalize(uSunDirection + V);
+          float spec = pow(max(dot(N, H), 0.0), mix(240.0, 1400.0, 1.0 - uRough));
+          float glintFade = 1.0 - vFar * 0.35;
+          col += uSunColor * spec * uSunIntensity * 0.9 * uGlint * glintFade;
+          // Broad sheet glitter, the thing that sells a sunset on water.
+          float sheet = pow(max(dot(N, H), 0.0), 26.0);
+          col += uSunColor * sheet * 0.16 * uGlint * max(uSunDirection.y * 3.0, 0.0);
+
+          // --- foam --------------------------------------------------------------
+          // The waterline moves with the swell, so the band breathes.
+          float shoreDepth = depth - vWave * 0.75;
+          float shore = 1.0 - smoothstep(0.0, uFoamWidth, shoreDepth);
+          vec2 fuv = vWorld.xz * 0.09;
+          float f1 = texture2D(uFoamMap, fuv + vec2(uTime * 0.026, uTime * 0.017)).r;
+          float f2 = texture2D(uFoamMap, fuv * 2.3 - vec2(uTime * 0.041, uTime * 0.022)).g;
+          float churn = f1 * 0.62 + f2 * 0.55;
+          float shoreFoam = smoothstep(0.32, 0.92, shore * (0.55 + churn));
+          // A tight bright lip right at the edge.
+          shoreFoam = max(shoreFoam, smoothstep(0.16, 0.0, shoreDepth) * (0.55 + churn * 0.5));
+          float crestFoam = smoothstep(0.55, 1.25, vFold) * churn * (1.0 - vFar * 0.6);
+          float foam = clamp(shoreFoam + crestFoam * 0.85, 0.0, 1.0);
+
+          vec3 foamCol = mix(vec3(0.86, 0.90, 0.93), uSunColor * 0.5 + 0.5, 0.25);
+          foamCol *= (uAmbientIntensity * 0.5 + max(uSunDirection.y, 0.05) * uSunIntensity * 0.32);
+          col = mix(col, foamCol, foam);
+
+          // --- fade in at the waterline ------------------------------------------
+          float alpha = clamp(depth * 2.6, 0.0, 1.0);
+          alpha = mix(alpha, 1.0, foam * 0.85);
+          alpha = mix(alpha, 1.0, F * 0.7);
+
+          col = applyHeightFog(col, vWorld, cameraPosition);
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+    });
+    this.waterMat = mat;
+    return mat;
+  }
+
+  private ensureLavaMaterial(): THREE.ShaderMaterial {
+    if (this.lavaMat) return this.lavaMat;
+    const mat = new THREE.ShaderMaterial({
+      name: 'apx-lava',
+      uniforms: {
+        ...this.sharedUniforms(),
+        uNormalMap: { value: this.normalTex },
+        uCrust: { value: new THREE.Color(0x14090a) },
+        uCrustHot: { value: new THREE.Color(0x3a1410) },
+        uVein: { value: new THREE.Color(0xff7326) },
+        uCore: { value: new THREE.Color(0xffe6a6) },
+        uFlow: { value: 0.035 },
+        uEmissive: { value: 4.2 },
+      },
+      transparent: false,
+      depthWrite: true,
+      side: THREE.FrontSide,
+      vertexShader: /* glsl */ `
+        ${GLSL_FIELD}
+        ${GLSL_NOISE}
+        uniform float uTime;
+        uniform float uWaterLevel;
+        varying vec3 vWorld;
+        varying float vDepth;
+        void main(){
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          float terrain = fieldHeight(wp.xz);
+          vDepth = uWaterLevel - terrain;
+          // Slow convective heave: molten rock moves like treacle.
+          float heave = fbm2(wp.xz * 0.006 + vec2(uTime * 0.012, uTime * 0.008), 3);
+          wp.y += (heave - 0.5) * 0.55 * clamp(vDepth * 0.5, 0.0, 1.0);
+          if (vDepth < -2.5) wp.y = terrain - 6.0;
+          vWorld = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        ${GLSL_FIELD}
+        ${GLSL_NOISE}
+        ${GLSL_HEIGHT_FOG}
+        uniform float uTime;
+        uniform float uWaterLevel;
+        uniform vec3 uCrust;
+        uniform vec3 uCrustHot;
+        uniform vec3 uVein;
+        uniform vec3 uCore;
+        uniform float uFlow;
+        uniform float uEmissive;
+        varying vec3 vWorld;
+        varying float vDepth;
+
+        void main(){
+          float terrain = fieldHeight(vWorld.xz);
+          float depth = uWaterLevel - terrain;
+          if (depth < -0.03) discard;
+
+          // Domain-warped flow field, drifting downhill-ish.
+          vec2 p = vWorld.xz * 0.028;
+          vec2 drift = vec2(uTime * uFlow, uTime * uFlow * 0.62);
+          vec2 warp = vec2(fbm2(p * 0.7 + drift, 4), fbm2(p * 0.7 + 5.2 - drift, 4)) - 0.5;
+          vec2 q = p + warp * 1.6 - drift * 0.5;
+
+          float plates = fbm2(q, 5);
+          // Crust cracks: the ridges between convection plates glow.
+          float ridge = 1.0 - abs(plates * 2.0 - 1.0);
+          float crack = pow(clamp(ridge, 0.0, 1.0), 5.0);
+          float fine = pow(clamp(1.0 - abs(fbm2(q * 3.7 + drift * 2.0, 3) * 2.0 - 1.0), 0.0, 1.0), 7.0);
+          crack = clamp(crack * 1.15 + fine * 0.75, 0.0, 1.0);
+
+          // Fresh lava near the shoreline where it meets rock, and in deep pools.
+          float edgeHeat = smoothstep(1.6, 0.0, depth) * 0.55;
+          float heat = clamp(crack + edgeHeat, 0.0, 1.0);
+          // Pulsing so it never looks like a static texture.
+          heat *= 0.78 + 0.22 * sin(uTime * 0.9 + plates * 9.0);
+
+          vec3 crust = mix(uCrust, uCrustHot, pow(plates, 2.0));
+          vec3 hot = mix(uVein, uCore, pow(heat, 2.6));
+          vec3 col = mix(crust, hot, smoothstep(0.14, 0.72, heat));
+          col += hot * pow(heat, 3.0) * uEmissive;
+
+          // Ash skin drifting on top.
+          float ash = fbm2(q * 6.1 + drift * 3.0, 3);
+          col *= mix(1.0, 0.62, smoothstep(0.58, 0.86, ash) * (1.0 - heat));
+
+          col = applyHeightFog(col, vWorld, cameraPosition);
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+    this.lavaMat = mat;
+    return mat;
+  }
+
+  // =========================================================================
+  // PRESETS
+  // =========================================================================
+
+  setPreset(name: WaterPresetName | WorldTheme): void {
+    const preset: WaterPresetName = (name === 'ocean' || name === 'lake' || name === 'lava' || name === 'none')
+      ? name : themeToPreset(name);
+    this.preset = preset;
+    if (!this.mesh) return;
+
+    if (preset === 'none') {
+      this.mesh.visible = false;
+      this.reflectionsOn = false;
+      return;
+    }
+    this.mesh.visible = true;
+
+    if (preset === 'lava') {
+      this.mesh.material = this.ensureLavaMaterial();
+      this.mesh.layers.enable(LAYERS.BLOOM);
+      this.reflectionsOn = false;
+      return;
+    }
+
+    const mat = this.ensureWaterMaterial();
+    const look = LOOKS[preset];
+    const u = mat.uniforms;
+    (u.uShallow.value as THREE.Color).setHex(look.shallow);
+    (u.uDeep.value as THREE.Color).setHex(look.deep);
+    (u.uFloor.value as THREE.Color).setHex(look.floor);
+    (u.uSwell.value as THREE.Vector2).set(look.swell[0], look.swell[1]);
+    u.uChoppy.value = look.choppy;
+    u.uFoamWidth.value = look.foamWidth;
+    u.uAbsorb.value = look.absorb;
+    u.uRough.value = look.roughness;
+    u.uGlint.value = look.glint;
+    u.uCaustic.value = look.causticStrength;
+    this.mesh.material = mat;
+    this.mesh.layers.enable(LAYERS.BLOOM);
+    this.reflectionsOn = this.reflectionsWanted && !!this.reflRT;
+    u.uReflAmount.value = this.reflectionsOn ? 0.82 : 0;
+  }
+
+  setCamera(camera: THREE.PerspectiveCamera): void {
+    if (camera && camera.isPerspectiveCamera) this.camera = camera;
+  }
+
+  setWind(strength: number, dirRadians: number): void {
+    const set = (m: THREE.ShaderMaterial | null): void => {
+      if (!m) return;
+      (m.uniforms.uWindDir.value as THREE.Vector2)
+        .set(Math.cos(dirRadians), Math.sin(dirRadians)).normalize();
+    };
+    set(this.waterMat);
+    set(this.lavaMat);
+    if (this.waterMat) {
+      const look = LOOKS[this.preset === 'ocean' ? 'ocean' : 'lake'];
+      const swell = this.waterMat.uniforms.uSwell.value as THREE.Vector2;
+      swell.x = look.swell[0] * (0.6 + clamp(strength, 0, 1.2) * 1.3);
+    }
+  }
+
+  /** Lets the render pipeline turn the reflection pass off under load. */
+  setReflections(on: boolean): void {
+    this.reflectionsWanted = on;
+    this.reflectionsOn = on && !!this.reflRT && this.preset !== 'lava' && this.preset !== 'none';
+    if (this.waterMat) this.waterMat.uniforms.uReflAmount.value = this.reflectionsOn ? 0.82 : 0;
+  }
+
+  // =========================================================================
+  // PLANAR REFLECTION
+  // =========================================================================
+
+  private setupReflection(): void {
+    // Half of what this used to be. The reflection is Fresnel-mixed at 0.82 into
+    // a surface that is itself wave-distorted and depth-tinted, so it survives
+    // being soft; 1024² was four times the pixels for no visible gain.
+    const size = this.quality.tier === 'ultra' ? 512 : 384;
+    this.reflRT = new THREE.WebGLRenderTarget(size, size, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+      stencilBuffer: false,
+      generateMipmaps: false,
+    });
+    this.reflRT.texture.colorSpace = THREE.NoColorSpace;
+    if (this.waterMat) {
+      this.waterMat.uniforms.uReflMap.value = this.reflRT.texture;
+      this.waterMat.uniforms.uReflAmount.value = 0.82;
+    }
+    this.reflCam.layers.set(LAYERS.DEFAULT);
+    this.reflCam.layers.enable(LAYERS.BLOOM);
+    this.reflCam.userData.apxReflectionCam = true;
+    this.reflectionsOn = true;
+  }
+
+  /**
+   * Is the plane y = waterLevel anywhere inside the camera frustum, within the
+   * radius the disc actually covers? Conservative (it ignores terrain occlusion)
+   * but it costs a handful of multiplies and it reliably kills the pass whenever
+   * the camera is pitched up at the sky, which is most of a jump.
+   *
+   * Allocation-free: only the eight frustum corners' *Y* extent is needed, and
+   * that separates into `fwd.y·d ± |right.y|·hw ± |up.y|·hh`.
+   */
+  private planeInFrustum(camera: THREE.PerspectiveCamera): boolean {
+    const e = camera.matrixWorld.elements;
+    // Basis columns of the camera's world matrix: right = e[0..2], up = e[4..6],
+    // forward = -e[8..10].
+    const ryAbs = Math.abs(e[1]);
+    const uyAbs = Math.abs(e[5]);
+    const fy = -e[9];
+    const near = camera.near;
+    const far = Math.min(camera.far, HALF_EXTENT * 1.35);
+    const tan = Math.tan((camera.fov * Math.PI) / 360);
+
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 2; i++) {
+      const d = i === 0 ? near : far;
+      const hh = tan * d;
+      const hw = hh * camera.aspect;
+      const spread = ryAbs * hw + uyAbs * hh;
+      const centre = fy * d;
+      if (centre - spread < lo) lo = centre - spread;
+      if (centre + spread > hi) hi = centre + spread;
+    }
+    const rel = this.waterLevel - camera.position.y;
+    return rel >= lo && rel <= hi;
+  }
+
+  private renderReflection(
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+    camera: THREE.PerspectiveCamera,
+  ): void {
+    const rt = this.reflRT;
+    const mesh = this.mesh;
+    if (!rt || !mesh || !mesh.visible) return;
+    // Nothing above the water to mirror if we're looking from below.
+    if (camera.position.y < this.waterLevel + 0.25) return;
+    if (!this.planeInFrustum(camera)) return;
+
+    this.reflecting = true;
+
+    _reflectorPos.set(0, this.waterLevel, 0);
+    _camPos.setFromMatrixPosition(camera.matrixWorld);
+    _normal.set(0, 1, 0);
+
+    _view.subVectors(_reflectorPos, _camPos);
+    _view.reflect(_normal).negate().add(_reflectorPos);
+
+    _rot.extractRotation(camera.matrixWorld);
+    _lookAt.set(0, 0, -1).applyMatrix4(_rot).add(_camPos);
+    _target.subVectors(_reflectorPos, _lookAt);
+    _target.reflect(_normal).negate().add(_reflectorPos);
+
+    const rc = this.reflCam;
+    rc.position.copy(_view);
+    rc.up.set(0, 1, 0).applyMatrix4(_rot).reflect(_normal);
+    rc.lookAt(_target);
+    rc.near = camera.near;
+    rc.far = camera.far;
+    rc.fov = camera.fov;
+    rc.aspect = 1;
+    rc.updateProjectionMatrix();
+    rc.updateMatrixWorld(true);
+
+    // Projected UVs for the water shader.
+    this.textureMatrix.set(
+      0.5, 0.0, 0.0, 0.5,
+      0.0, 0.5, 0.0, 0.5,
+      0.0, 0.0, 0.5, 0.5,
+      0.0, 0.0, 0.0, 1.0,
+    );
+    this.textureMatrix.multiply(rc.projectionMatrix);
+    this.textureMatrix.multiply(rc.matrixWorldInverse);
+
+    // --- hide what must not appear in a reflection ---------------------------
+    // Anything flagged `userData.noReflect` opts out (grass, crowd, props,
+    // weather — set by Environment), as does anything whose root name is in
+    // SKIP_NAMES (particle systems and god rays, which are additive sprites that
+    // cannot survive a 512px mirrored buffer anyway). What is left is terrain,
+    // mountains, sky, track and karts: the silhouette, which is all a
+    // Fresnel-weighted reflection ever shows.
+    // Scanned two levels deep (scene roots and their groups) rather than with a
+    // full traverse, because this runs every frame.
+    _hidden.length = 0;
+    mesh.visible = false;
+    for (const child of scene.children) {
+      if (!child.visible) continue;
+      if (child.userData.noReflect === true || SKIP_NAMES.has(child.name)) {
+        child.visible = false;
+        _hidden.push(child);
+        continue;
+      }
+      for (const sub of child.children) {
+        if (sub.visible && (sub.userData.noReflect === true || SKIP_NAMES.has(sub.name))) {
+          sub.visible = false;
+          _hidden.push(sub);
+        }
+      }
+    }
+
+    const prevRT = renderer.getRenderTarget();
+    const prevClip = renderer.clippingPlanes;
+    const prevShadow = renderer.shadowMap.autoUpdate;
+    const prevXr = renderer.xr.enabled;
+
+    // Clip everything under the surface so the seabed can't mirror upward.
+    this.clipPlane.set(_up, -(this.waterLevel - 0.15));
+    renderer.clippingPlanes = [this.clipPlane];
+    renderer.shadowMap.autoUpdate = false;
+    renderer.xr.enabled = false;
+
+    try {
+      renderer.setRenderTarget(rt);
+      renderer.clear(true, true, false);
+      renderer.render(scene, rc);
+    } catch (err) {
+      console.error('[Water] reflection pass failed — disabling:', err);
+      this.setReflections(false);
+    } finally {
+      renderer.setRenderTarget(prevRT);
+      renderer.clippingPlanes = prevClip;
+      renderer.shadowMap.autoUpdate = prevShadow;
+      renderer.xr.enabled = prevXr;
+      mesh.visible = true;
+      for (const o of _hidden) o.visible = true;
+      _hidden.length = 0;
+      this.reflecting = false;
+    }
+  }
+
+  // =========================================================================
+
+  update(ctx: FrameContext): void {
+    this.time += ctx.dt;
+    if (this.waterMat) this.waterMat.uniforms.uTime.value = this.time;
+    if (this.lavaMat) this.lavaMat.uniforms.uTime.value = this.time;
+
+    // ONE reflection pass per frame, driven from the simulation step rather than
+    // from `onBeforeRender`. The pipeline renders the scene more than once a
+    // frame (RenderPass, then NormalPass with an override material) and a
+    // reflection kicked off from a draw callback fires in each of them — the
+    // second one drawing the whole world as flat normals into a buffer nobody
+    // reads. Doing it here also lets `planeInFrustum` skip the pass entirely.
+    if (!this.reflectionsOn || !this.mesh || !this.camera) return;
+    const cam = this.camera;
+    // Keep the disc under the camera before mirroring, so the pass agrees with
+    // where the surface will actually be drawn this frame.
+    this.mesh.position.set(cam.position.x, this.waterLevel, cam.position.z);
+    this.mesh.updateMatrix();
+    this.mesh.updateMatrixWorld(true);
+    this.renderReflection(this.renderer, this.scene, cam);
+  }
+
+  get drawCalls(): number {
+    if (!this.mesh || !this.mesh.visible) return 0;
+    return 1;
+  }
+
+  dispose(): void {
+    this.geometry?.dispose();
+    this.waterMat?.dispose();
+    this.lavaMat?.dispose();
+    this.normalTex?.dispose();
+    this.foamTex?.dispose();
+    this.causticTex?.dispose();
+    this.reflRT?.dispose();
+    this.geometry = null;
+    this.waterMat = null;
+    this.lavaMat = null;
+    this.normalTex = null;
+    this.foamTex = null;
+    this.causticTex = null;
+    this.reflRT = null;
+    this.mesh = null;
+    this.scene.remove(this.group);
+    this.group.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+function themeToPreset(theme: WorldTheme | string): WaterPresetName {
+  switch (theme) {
+    case 'coastal': return 'ocean';
+    case 'volcano': return 'lava';
+    case 'desert': return 'none';
+    default: return 'lake';
+  }
+}
+
+/**
+ * Radially warped square: dense near the camera where wave shape matters,
+ * coarse at the horizon where it doesn't. Same trick Terrain uses, so the two
+ * surfaces tessellate at comparable rates and the shoreline stays clean.
+ */
+function buildDisc(res: number): THREE.BufferGeometry {
+  const cells = res - 1;
+  const verts = res * res;
+  const pos = new Float32Array(verts * 3);
+  const uv = new Float32Array(verts * 2);
+
+  const warp = (t: number): number => {
+    const a = Math.abs(t);
+    const w = 0.05 * a + 0.95 * a * a * a;
+    return Math.sign(t) * w * HALF_EXTENT;
+  };
+
+  let p = 0, q = 0;
+  for (let j = 0; j < res; j++) {
+    const z = warp((j / cells) * 2 - 1);
+    for (let i = 0; i < res; i++) {
+      pos[p] = warp((i / cells) * 2 - 1);
+      pos[p + 1] = 0;
+      pos[p + 2] = z;
+      p += 3;
+      uv[q] = i / cells; uv[q + 1] = j / cells; q += 2;
+    }
+  }
+
+  const idx = new Uint32Array(cells * cells * 6);
+  let k = 0;
+  for (let j = 0; j < cells; j++) {
+    for (let i = 0; i < cells; i++) {
+      const a = j * res + i;
+      const b = a + 1;
+      const c = a + res;
+      const d = c + 1;
+      idx[k++] = a; idx[k++] = c; idx[k++] = b;
+      idx[k++] = b; idx[k++] = c; idx[k++] = d;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), HALF_EXTENT * 1.5);
+  return geo;
+}

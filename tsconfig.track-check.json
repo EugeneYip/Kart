@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/track/**/*.ts",
+    "src/core/**/*.ts",
+    "src/render/TextureFactory.ts",
+    "src/render/MaterialFactory.ts",
+    "src/dev/track.ts"
+  ]
+}

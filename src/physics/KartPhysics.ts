@@ -1,0 +1,1083 @@
+/**
+ * ============================================================================
+ *  APEX KART — ARCADE DRIVING MODEL
+ * ============================================================================
+ *  This file owns `KartBody` (the physics-side companion to `KartState`) and
+ *  the per-kart integration step.
+ *
+ *  It is deliberately NOT a vehicle simulation. It is a model that *reads* as
+ *  physical while staying 100 % predictable for the player:
+ *
+ *   • Longitudinal — a drive curve that tapers toward a SOFT speed cap, so a
+ *     boost can legally exceed the cap and bleed back down instead of clipping.
+ *
+ *   • Lateral — the chassis yaws freely; the velocity direction chases the
+ *     chassis with a *magnitude-preserving rotation* limited by a tyre-load
+ *     curve. Preserving magnitude is the single most important trick in the
+ *     file: it is why a drift keeps its speed and why chaining drifts is fast.
+ *     At extreme slip (spun out, shunted sideways) the model crossfades to
+ *     plain lateral damping so momentum can't be laundered into forward speed.
+ *
+ *   • Vertical — left entirely to Suspension.ts. This file only integrates.
+ *
+ *  Frame convention: -Z forward, +Y up (see AGENTS.md §2). All chassis maths
+ *  happens in the orthonormal triad (forward, right, up) rebuilt every step,
+ *  so banked road, ramps and anti-gravity walls all "just work".
+ *
+ *  Yaw sign convention: POSITIVE yaw rate = turning LEFT (right-hand rule about
+ *  `up`). Steering right therefore produces a negative yaw rate. `driftDirection`
+ *  keeps the KartState convention (+1 = right).
+ * ============================================================================
+ */
+
+import * as THREE from 'three';
+import type { GroundHit, ITrackService, KartState, KartTuning } from '@/core/Types';
+import { DriftStage, SurfaceType } from '@/core/Types';
+import { SURFACES, WORLD } from '@/core/Config';
+import { bus } from '@/core/EventBus';
+import { clamp, clamp01, damp, lerp, smoothstep } from '@/core/MathUtils';
+
+// ---------------------------------------------------------------------------
+//  Constants — the feel lives here.
+// ---------------------------------------------------------------------------
+
+export const PHYS = {
+  /** Peak of the tyre curve, radians (~8°). */
+  peakSlip: 0.14,
+  /** How much grip is left at huge slip angles, 0..1. */
+  slipFalloff: 0.34,
+  /** Lateral acceleration budget at grip 1.0, m/s². Tuned so that full lock at
+   *  top speed sits exactly on the grip limit — slower is steering-limited,
+   *  faster (boosting) understeers and forces you to drift. */
+  latAccel: 55,
+  /** Speed scrubbed per radian of velocity redirection (gripping / drifting). */
+  gripScrub: 0.042,
+  driftScrub: 0.03,
+  /** Slip window over which magnitude-preserving redirect fades into damping. */
+  redirectFadeLo: 0.75,
+  redirectFadeHi: 1.45,
+  /** Coast drag, 1/s. Almost switched off at full throttle. */
+  coastDrag: 0.55,
+  /** Surface drag scaling into 1/s. */
+  surfaceDragScale: 9.0,
+  /** Throttle's suppression of coast drag. */
+  throttleDragRelief: 0.95,
+  /** How fast overspeed above the soft cap bleeds off, 1/s. */
+  overspeedDecay: 1.9,
+  /** Boost: extra soft-cap metres/second at strength 1. */
+  boostSpeedBonus: 11.0,
+  /** Boost: extra forward acceleration at strength 1, m/s². */
+  boostAccel: 30.0,
+  /** Boost tail, seconds. */
+  boostFade: 0.35,
+  /** Boost grants off-road immunity for this long. */
+  boostOffroadImmunity: 0.4,
+  /** Yaw response half-life, seconds. Lower = twitchier. */
+  yawHalfLife: 0.055,
+  /** Yaw authority retained while airborne. */
+  airYawFactor: 0.34,
+  /** Aerodynamic downforce at top speed, in g. Keeps ramps landing flat. */
+  downforce: 0.55,
+  /** Extra hill drama on top of the geometrically-correct slope force. */
+  slopeBias: 0.2,
+  /** Anti-gravity magnetic stick, m/s². */
+  agStick: 22,
+  /** Glider: gravity scale + forward bleed (1/s) + pitch authority. */
+  glideGravity: 0.2,
+  glideBleed: 0.22,
+  glidePitch: 7.0,
+  /** Hop impulse, m/s, and the gravity scale applied while hopping. */
+  hopSpeed: 2.6,
+  hopGravity: 0.615, // 2*2.6/(26*0.615) ≈ 0.325 s of hang time
+  /** Minimum CoM height above the contact point — the anti-tunnel hard floor. */
+  minRideHeight: 0.3,
+  /** Ground probe lift for the anti-tunnel clamp, metres. */
+  clampLift: 3.0,
+  /** Speed below which steering authority is gated off. */
+  steerGateSpeed: 1.5,
+  /** Boost pad re-trigger cooldown. */
+  padCooldown: 0.6,
+} as const;
+
+export type BoostSource = 'drift' | 'item' | 'pad' | 'start' | 'trick';
+export type StunKind = 'spin' | 'squash' | 'flip' | 'shock' | 'none';
+
+export enum DriftPhase {
+  None = 0,
+  Hop = 1,
+  Drifting = 2,
+}
+
+// ---------------------------------------------------------------------------
+
+export interface WheelData {
+  /** World-space suspension attachment point. */
+  attach: THREE.Vector3;
+  /** World-space contact point (valid when grounded). */
+  contact: THREE.Vector3;
+  normal: THREE.Vector3;
+  /** Current spring length, metres. */
+  springLen: number;
+  prevSpringLen: number;
+  /** Normalised compression, 0 = fully extended, 1 = bottomed out. */
+  compression: number;
+  /** Spring force magnitude along `normal`, newtons. */
+  force: number;
+  grounded: boolean;
+  surface: SurfaceType;
+  /** Accumulated rotation, radians. */
+  spin: number;
+  spinRate: number;
+  /** 0..1 — how much this tyre is sliding, drives smoke/marks. */
+  slip: number;
+}
+
+function makeWheel(): WheelData {
+  return {
+    attach: new THREE.Vector3(),
+    contact: new THREE.Vector3(),
+    normal: new THREE.Vector3(0, 1, 0),
+    springLen: 0.35,
+    prevSpringLen: 0.35,
+    compression: 0.3,
+    force: 0,
+    grounded: false,
+    surface: SurfaceType.Road,
+    spin: 0,
+    spinRate: 0,
+    slip: 0,
+  };
+}
+
+/** Everything physics needs that does not belong in the public KartState. */
+export interface KartBody {
+  readonly id: number;
+  state: KartState;
+  tuning: KartTuning;
+
+  // ---- control input ----
+  ctrlSteer: number;
+  ctrlAccel: number;
+  ctrlBrake: number;
+  ctrlDrift: boolean;
+  ctrlDriftPressed: boolean;
+
+  // ---- kinematics ----
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  prevPosition: THREE.Vector3;
+  /** Orthonormal chassis triad, rebuilt every step. */
+  forward: THREE.Vector3;
+  right: THREE.Vector3;
+  up: THREE.Vector3;
+  /** Ground-aligned orientation (no body lean). */
+  groundQuat: THREE.Quaternion;
+  /** Full visual orientation (lean + pitch + drift roll + stun spin). */
+  bodyQuat: THREE.Quaternion;
+  /** rad/s about `up`; positive = left. */
+  yawRate: number;
+  /** Suspension-driven body attitude relative to the contact plane. */
+  pitch: number;
+  roll: number;
+  pitchVel: number;
+  rollVel: number;
+  /** Extra yaw applied purely for visuals (spin-out). */
+  spinYaw: number;
+
+  // ---- suspension output ----
+  wheels: WheelData[];
+  /** Sum of suspension forces, world space, newtons. */
+  suspForce: THREE.Vector3;
+  suspTorquePitch: number;
+  suspTorqueRoll: number;
+  contactNormal: THREE.Vector3;
+  /** Contact normal load / static load. Drives grip. */
+  loadFactor: number;
+  grounded: boolean;
+  groundedWheels: number;
+  /** `grounded` as of the END of the previous step — drives edge detection. */
+  wasGrounded: boolean;
+  airTime: number;
+  groundTime: number;
+  lastGroundPoint: THREE.Vector3;
+  lastGroundNormal: THREE.Vector3;
+  hadGround: boolean;
+  /** Closing speed of the most recent landing, m/s. */
+  landImpact: number;
+
+  // ---- surface ----
+  surface: SurfaceType;
+  prevSurface: SurfaceType;
+  rumblePhase: number;
+  padCooldown: number;
+
+  // ---- drift ----
+  driftPhase: DriftPhase;
+  driftDir: number;
+  driftTime: number;
+  /** Accumulated charge in "charge-seconds", compared against driftTiers. */
+  driftCharge: number;
+  driftStage: DriftStage;
+  driftAngle: number;
+  driftAngleTarget: number;
+  driftLean: number;
+  /** Seconds spent steering fully out of the current drift. */
+  counterTime: number;
+  hopTime: number;
+  hopHeld: boolean;
+  /** Seconds left in which a drift press still counts as "at the lip". */
+  airDriftGrace: number;
+
+  // ---- tricks ----
+  trickArmed: boolean;
+  trickActive: boolean;
+  trickTime: number;
+  trickName: string;
+  trickCooldown: number;
+
+  // ---- boost ----
+  boostTime: number;
+  boostStrength: number;
+  boostImmunity: number;
+
+  // ---- stun / respawn ----
+  stunKind: StunKind;
+  stunTime: number;
+  stunTotal: number;
+  invulnTime: number;
+  respawnTime: number;
+  respawnTotal: number;
+  respawnFrom: THREE.Vector3;
+  respawnTo: THREE.Vector3;
+  respawnQuat: THREE.Quaternion;
+  fallTime: number;
+
+  // ---- mode ----
+  antiGravity: boolean;
+  gliding: boolean;
+  glideTime: number;
+  bumpCooldown: number;
+  wallCooldown: number;
+
+  // ---- readouts (debug / VFX) ----
+  slipAngle: number;
+  gripFactor: number;
+  latAccelUsed: number;
+  lateralSpeed: number;
+  forwardSpeed: number;
+  /** Net longitudinal acceleration this step, m/s² along `forward`.
+   *  Suspension reads this to produce pitch (squat / dive) — see Suspension.ts. */
+  longAccel: number;
+  /** Net lateral acceleration this step, m/s² along `right`. Drives body roll. */
+  lateralAccel: number;
+  /** Vertical visual squash (1 = normal). `squash` stun flattens the kart. */
+  visualScale: number;
+  /** Uniform visual scale (1 = normal). `shock` shrinks the kart. */
+  visualShrink: number;
+}
+
+// ---------------------------------------------------------------------------
+//  Module-level scratch. Nothing in this file allocates after construction.
+// ---------------------------------------------------------------------------
+
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _q3 = new THREE.Quaternion();
+const _m1 = new THREE.Matrix4();
+const _hitScratch: GroundHit = {
+  hit: false,
+  point: new THREE.Vector3(),
+  normal: new THREE.Vector3(0, 1, 0),
+  distance: 0,
+  surface: SurfaceType.Road,
+};
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const WORLD_DOWN = new THREE.Vector3(0, -1, 0);
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+
+const TRICK_NAMES = ['spin', 'backflip', 'frontflip', 'sideflip', 'corkscrew'] as const;
+
+// ---------------------------------------------------------------------------
+
+export function createBody(state: KartState, tuning: KartTuning): KartBody {
+  const b: KartBody = {
+    id: state.id,
+    state,
+    tuning,
+
+    ctrlSteer: 0,
+    ctrlAccel: 0,
+    ctrlBrake: 0,
+    ctrlDrift: false,
+    ctrlDriftPressed: false,
+
+    position: new THREE.Vector3().copy(state.position),
+    velocity: new THREE.Vector3().copy(state.velocity),
+    prevPosition: new THREE.Vector3().copy(state.position),
+    forward: new THREE.Vector3(0, 0, -1),
+    right: new THREE.Vector3(1, 0, 0),
+    up: new THREE.Vector3(0, 1, 0),
+    groundQuat: new THREE.Quaternion().copy(state.quaternion),
+    bodyQuat: new THREE.Quaternion().copy(state.quaternion),
+    yawRate: 0,
+    pitch: 0,
+    roll: 0,
+    pitchVel: 0,
+    rollVel: 0,
+    spinYaw: 0,
+
+    wheels: [makeWheel(), makeWheel(), makeWheel(), makeWheel()],
+    suspForce: new THREE.Vector3(),
+    suspTorquePitch: 0,
+    suspTorqueRoll: 0,
+    contactNormal: new THREE.Vector3(0, 1, 0),
+    loadFactor: 1,
+    grounded: false,
+    groundedWheels: 0,
+    wasGrounded: false,
+    airTime: 0,
+    groundTime: 0,
+    lastGroundPoint: new THREE.Vector3().copy(state.position),
+    lastGroundNormal: new THREE.Vector3(0, 1, 0),
+    hadGround: false,
+    landImpact: 0,
+
+    surface: SurfaceType.Road,
+    prevSurface: SurfaceType.Road,
+    rumblePhase: state.id * 1.7,
+    padCooldown: 0,
+
+    driftPhase: DriftPhase.None,
+    driftDir: 0,
+    driftTime: 0,
+    driftCharge: 0,
+    driftStage: DriftStage.None,
+    driftAngle: 0,
+    driftAngleTarget: 0,
+    driftLean: 0,
+    counterTime: 0,
+    hopTime: 0,
+    hopHeld: false,
+    airDriftGrace: 0,
+
+    trickArmed: false,
+    trickActive: false,
+    trickTime: 0,
+    trickName: 'spin',
+    trickCooldown: 0,
+
+    boostTime: 0,
+    boostStrength: 0,
+    boostImmunity: 0,
+
+    stunKind: 'none',
+    stunTime: 0,
+    stunTotal: 0,
+    invulnTime: 0,
+    respawnTime: 0,
+    respawnTotal: 0,
+    respawnFrom: new THREE.Vector3(),
+    respawnTo: new THREE.Vector3(),
+    respawnQuat: new THREE.Quaternion(),
+    fallTime: 0,
+
+    antiGravity: false,
+    gliding: false,
+    glideTime: 0,
+    bumpCooldown: 0,
+    wallCooldown: 0,
+
+    slipAngle: 0,
+    gripFactor: 1,
+    latAccelUsed: 0,
+    lateralSpeed: 0,
+    forwardSpeed: 0,
+    longAccel: 0,
+    lateralAccel: 0,
+    visualScale: 1,
+    visualShrink: 1,
+  };
+
+  // Derive the triad from the spawn orientation.
+  b.forward.set(0, 0, -1).applyQuaternion(state.quaternion).normalize();
+  b.up.set(0, 1, 0).applyQuaternion(state.quaternion).normalize();
+  orthonormalise(b);
+  b.contactNormal.copy(b.up);
+  b.lastGroundNormal.copy(b.up);
+  return b;
+}
+
+/** Re-derive `right` and re-orthogonalise `forward` against `up`. */
+export function orthonormalise(b: KartBody): void {
+  if (b.up.lengthSq() < 1e-8) b.up.copy(WORLD_UP);
+  b.up.normalize();
+  // Project forward onto the plane of `up`.
+  b.forward.addScaledVector(b.up, -b.forward.dot(b.up));
+  if (b.forward.lengthSq() < 1e-8) {
+    // Degenerate (nose exactly along `up`) — pick any stable tangent.
+    const seed = Math.abs(b.up.y) < 0.9 ? WORLD_UP : AXIS_X;
+    b.forward.copy(seed).cross(b.up);
+    if (b.forward.lengthSq() < 1e-8) b.forward.set(1, 0, 0);
+  }
+  b.forward.normalize();
+  b.right.copy(b.forward).cross(b.up).normalize();
+}
+
+// ---------------------------------------------------------------------------
+//  External impulses
+// ---------------------------------------------------------------------------
+
+export function applyBoostTo(
+  b: KartBody,
+  seconds: number,
+  strength: number,
+  source: BoostSource,
+): void {
+  if (seconds <= 0) return;
+  // Durations stack (capped), strength takes the max — a mushroom during a
+  // mini-turbo extends it rather than making you twice as fast.
+  b.boostTime = Math.min(6.0, b.boostTime + seconds);
+  b.boostStrength = Math.max(b.boostStrength, strength);
+  b.boostImmunity = Math.max(b.boostImmunity, PHYS.boostOffroadImmunity);
+  bus.emit('kart:boost', { kartId: b.id, duration: seconds, source });
+}
+
+export function applyStunTo(b: KartBody, seconds: number, kind: StunKind): void {
+  if (b.invulnTime > 0 || b.state.starTime > 0) return;
+  if (b.respawnTime > 0) return;
+  b.stunKind = kind;
+  b.stunTime = Math.max(b.stunTime, seconds);
+  b.stunTotal = b.stunTime;
+  cancelDrift(b, false);
+  b.boostTime = 0;
+  b.boostStrength = 0;
+
+  if (kind === 'spin') {
+    // "All speed lost" — the brake does the rest of the work over the spin, but
+    // the initial dump has to be instant or a shell feels like a tap.
+    b.velocity.multiplyScalar(0.22);
+    b.forwardSpeed *= 0.22;
+    bus.emit('kart:spinout', { kartId: b.id, position: b.position });
+  } else if (kind === 'squash') {
+    bus.emit('kart:squash', { kartId: b.id });
+  } else if (kind === 'flip') {
+    b.velocity.multiplyScalar(0.35);
+    b.forwardSpeed *= 0.35;
+    b.velocity.addScaledVector(b.up, 9.5);
+    bus.emit('kart:spinout', { kartId: b.id, position: b.position });
+  } else if (kind === 'shock') {
+    b.velocity.multiplyScalar(0.55);
+    b.forwardSpeed *= 0.55;
+  }
+}
+
+/** `impulse` is in newton-seconds. */
+export function applyImpulseTo(b: KartBody, impulse: THREE.Vector3): void {
+  b.velocity.addScaledVector(impulse, 1 / b.tuning.mass);
+}
+
+export function beginRespawn(b: KartBody, track: ITrackService): void {
+  if (b.respawnTime > 0) return;
+  const sample = track.project(b.position);
+  const rs = track.getRespawn(sample.t);
+  b.respawnFrom.copy(b.position);
+  b.respawnTo.copy(rs.position);
+  b.respawnQuat.copy(rs.quaternion);
+  b.respawnTotal = 0.95;
+  b.respawnTime = b.respawnTotal;
+  b.fallTime = 0;
+  b.stunKind = 'none';
+  b.stunTime = 0;
+  b.boostTime = 0;
+  b.boostStrength = 0;
+  cancelDrift(b, false);
+  bus.emit('kart:respawn', { kartId: b.id });
+}
+
+export function cancelDrift(b: KartBody, grantBoost: boolean): void {
+  if (b.driftPhase === DriftPhase.Drifting && grantBoost && b.driftStage >= DriftStage.Blue) {
+    const tier = b.driftStage - DriftStage.Blue; // 0,1,2
+    const secs = b.tuning.driftBoosts[tier];
+    bus.emit('kart:driftRelease', { kartId: b.id, tier: tier + 1, boostTime: secs });
+    applyBoostTo(b, secs, 0.85 + tier * 0.12, 'drift');
+  } else if (b.driftPhase === DriftPhase.Drifting) {
+    bus.emit('kart:driftRelease', { kartId: b.id, tier: 0, boostTime: 0 });
+  }
+  b.driftPhase = DriftPhase.None;
+  b.driftDir = 0;
+  b.driftTime = 0;
+  b.driftCharge = 0;
+  b.driftStage = DriftStage.None;
+  b.driftAngleTarget = 0;
+  b.counterTime = 0;
+  b.hopTime = 0;
+  b.hopHeld = false;
+}
+
+// ---------------------------------------------------------------------------
+//  Tyre model
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalised lateral force vs slip angle. Rises to 1.0 at the peak (~8°) then
+ * falls away to `1 - slipFalloff`. The falloff is what makes oversteer
+ * controllable rather than binary: once you're past the peak, pushing harder
+ * gives you less, so the slide is progressive.
+ */
+export function tyreCurve(slipAbs: number): number {
+  const s = slipAbs / PHYS.peakSlip;
+  if (s <= 1) return Math.sin(s * Math.PI * 0.5);
+  return 1 - PHYS.slipFalloff * (1 - Math.exp(-(s - 1) * 0.85));
+}
+
+// ---------------------------------------------------------------------------
+//  The step
+// ---------------------------------------------------------------------------
+
+export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
+  const t = b.tuning;
+  const st = b.state;
+
+  b.prevPosition.copy(b.position);
+
+  // --- timers ------------------------------------------------------------
+  if (b.invulnTime > 0) b.invulnTime = Math.max(0, b.invulnTime - dt);
+  if (b.boostImmunity > 0) b.boostImmunity = Math.max(0, b.boostImmunity - dt);
+  if (b.padCooldown > 0) b.padCooldown = Math.max(0, b.padCooldown - dt);
+  if (b.bumpCooldown > 0) b.bumpCooldown = Math.max(0, b.bumpCooldown - dt);
+  if (b.trickCooldown > 0) b.trickCooldown = Math.max(0, b.trickCooldown - dt);
+  if (st.starTime > 0) st.starTime = Math.max(0, st.starTime - dt);
+  if (b.boostTime > 0) {
+    b.boostTime = Math.max(0, b.boostTime - dt);
+    if (b.boostTime === 0) b.boostStrength = 0;
+  }
+  if (b.stunTime > 0) {
+    b.stunTime = Math.max(0, b.stunTime - dt);
+    if (b.stunTime === 0) b.stunKind = 'none';
+  }
+
+  // --- respawn owns the kart completely ----------------------------------
+  if (b.respawnTime > 0) {
+    stepRespawn(b, dt);
+    return;
+  }
+
+  // --- surface -----------------------------------------------------------
+  resolveSurface(b, track);
+  const props = SURFACES[b.surface] ?? SURFACES[SurfaceType.Road];
+  const immune = b.boostImmunity > 0 || st.starTime > 0;
+  const speedMul = immune ? Math.max(1, props.speedMul) : props.speedMul;
+  const surfDrag = immune ? Math.min(0.012, props.drag) : props.drag;
+  const surfGrip = immune ? Math.max(1, props.grip) : props.grip;
+
+  // --- boost envelope ----------------------------------------------------
+  const boostEnv = b.boostTime > 0 ? smoothstep(b.boostTime / PHYS.boostFade) : 0;
+  const boosting = boostEnv > 0.002;
+
+  // --- stun gating -------------------------------------------------------
+  //  `spin` / `flip` take the kart away from the player entirely.
+  //  `squash` / `shock` leave you driving — just humiliatingly slowly, which is
+  //  far more MK8 than freezing the controls.
+  const stunned = b.stunTime > 0;
+  const hardStun = stunned && (b.stunKind === 'spin' || b.stunKind === 'flip');
+  let steerIn = b.ctrlSteer;
+  let accelIn = b.ctrlAccel;
+  let brakeIn = b.ctrlBrake;
+  let stunSpeedMul = 1;
+  if (hardStun) {
+    steerIn = 0;
+    accelIn = 0;
+    brakeIn = 1;
+  } else if (stunned) {
+    steerIn *= 0.8;
+    stunSpeedMul = b.stunKind === 'squash' ? 0.3 : 0.45;
+  }
+
+  // Visual deformation: squash flattens, shock shrinks. Both recover with a
+  // small overshoot once the timer ends (the pop-back is half the joke).
+  const squashK = stunned && b.stunKind === 'squash' ? clamp01(b.stunTime / 0.18) : 0;
+  const shrinkK = stunned && b.stunKind === 'shock' ? clamp01(b.stunTime / 0.18) : 0;
+  b.visualScale = damp(b.visualScale, lerp(1, 0.3, squashK), 0.055, dt);
+  b.visualShrink = damp(b.visualShrink, lerp(1, 0.58, shrinkK), 0.07, dt);
+
+  // --- apply world forces (suspension + gravity) -------------------------
+  _v1.copy(b.suspForce).multiplyScalar(1 / t.mass);
+
+  let gravMag = WORLD.gravity;
+  if (b.gliding) gravMag *= PHYS.glideGravity;
+  else if (b.driftPhase === DriftPhase.Hop && !b.grounded) gravMag *= PHYS.hopGravity;
+
+  if (b.antiGravity) {
+    // Gravity follows the road normal, and a magnetic term glues us to it.
+    _v2.copy(b.contactNormal).multiplyScalar(-WORLD.antiGravityStrength);
+    if (!b.grounded && b.hadGround) _v2.addScaledVector(b.lastGroundNormal, -PHYS.agStick);
+    _v1.add(_v2);
+  } else {
+    _v1.addScaledVector(WORLD_DOWN, gravMag);
+  }
+
+  // Aerodynamic downforce — stops fast karts skating off crests.
+  if (b.grounded) {
+    const sr = clamp01(Math.abs(b.forwardSpeed) / Math.max(1, t.maxSpeed));
+    _v1.addScaledVector(b.contactNormal, -PHYS.downforce * WORLD.gravity * sr * sr);
+
+    // Banked road: the tyres CARRY the lateral component of gravity. Without
+    // this a parked kart slithers sideways down a 25° bank, which is both wrong
+    // and horrible; with it, a wall-ride holds and only ice lets go (the term is
+    // scaled by surface grip, so `grip 0.22` ice keeps 78 % of the slide).
+    if (!b.antiGravity) {
+      const gLat = WORLD_DOWN.dot(b.right) * gravMag;
+      _v1.addScaledVector(b.right, -gLat * clamp01(surfGrip * b.loadFactor));
+    }
+  }
+
+  b.velocity.addScaledVector(_v1, dt);
+
+  // --- yaw ---------------------------------------------------------------
+  const speedH = Math.hypot(b.velocity.dot(b.forward), b.velocity.dot(b.right));
+  const absSpeed = Math.abs(b.forwardSpeed);
+  const speedRatio = clamp01(absSpeed / Math.max(1, t.maxSpeed));
+
+  // MK8's signature: tight at walking pace, lazy at 200cc speeds.
+  const authority = t.turnRate * (0.55 + 0.45 / (1 + absSpeed * 0.04));
+  const speedGate = clamp01(speedH / PHYS.steerGateSpeed);
+  const reversing = b.forwardSpeed < -0.4;
+
+  let targetYaw: number;
+  if (b.driftPhase === DriftPhase.Drifting) {
+    // Steering modulates how tight the drift line is; it can never flip sides.
+    const inward = clamp(steerIn * b.driftDir, -1, 1);
+    const tighten = lerp(0.52, 1.0 + t.driftTurnBonus, (inward + 1) * 0.5);
+    targetYaw = -b.driftDir * authority * tighten * speedGate;
+  } else if (!b.grounded) {
+    targetYaw = -steerIn * t.turnRate * PHYS.airYawFactor;
+  } else {
+    targetYaw = -steerIn * authority * speedGate * (reversing ? -0.8 : 1);
+  }
+
+  if (hardStun) {
+    // Two full rotations over the stun. Deterministic, reads as a clean spin-out.
+    targetYaw = (Math.PI * 4) / Math.max(0.2, b.stunTotal);
+  }
+
+  b.yawRate = damp(b.yawRate, targetYaw, PHYS.yawHalfLife, dt);
+
+  // Rotate the chassis about its own up axis.
+  _q1.setFromAxisAngle(b.up, b.yawRate * dt);
+  b.forward.applyQuaternion(_q1);
+  orthonormalise(b);
+
+  // --- decompose velocity into the chassis triad -------------------------
+  let vFwd = b.velocity.dot(b.forward);
+  let vRight = b.velocity.dot(b.right);
+  let vUp = b.velocity.dot(b.up);
+
+  // --- lateral: tyre model ----------------------------------------------
+  const planar = Math.hypot(vFwd, vRight);
+  const beta = Math.atan2(vRight, Math.max(Math.abs(vFwd), 0.001));
+  b.slipAngle = beta;
+
+  if (b.grounded && planar > 0.05) {
+    const drifting = b.driftPhase === DriftPhase.Drifting;
+    const betaTarget = drifting ? -b.driftDir * b.driftAngle : 0;
+    const betaErr = beta - betaTarget;
+
+    const tyre = tyreCurve(Math.abs(betaErr));
+    const baseRate = drifting ? t.driftGrip : t.grip;
+    const gripRate =
+      baseRate * surfGrip * tyre * b.loadFactor * (boosting ? 1.08 : 1) * (b.antiGravity ? 1.12 : 1);
+    b.gripFactor = tyre * surfGrip * b.loadFactor;
+
+    // Magnitude-preserving redirect, blended out at extreme slip so that a
+    // sideways shunt can't be laundered into forward speed.
+    const redirect =
+      1 -
+      smoothstep(
+        (Math.abs(beta) - PHYS.redirectFadeLo) / (PHYS.redirectFadeHi - PHYS.redirectFadeLo),
+      );
+
+    let dBeta = -betaErr * (1 - Math.exp(-gripRate * dt));
+
+    // Cornering-force budget: |Δv_lat| ≤ a_max·dt. This is where high-speed
+    // understeer comes from, and why boosting into a corner pushes wide.
+    const latBudget =
+      PHYS.latAccel * surfGrip * tyre * b.loadFactor * (drifting ? 1.1 : 1) * (boosting ? 1.06 : 1);
+    const maxDBeta = (latBudget * dt) / Math.max(2.0, planar);
+    if (dBeta > maxDBeta) dBeta = maxDBeta;
+    else if (dBeta < -maxDBeta) dBeta = -maxDBeta;
+    b.latAccelUsed = (Math.abs(dBeta) * planar) / dt;
+
+    if (redirect > 0.001) {
+      const nb = beta + dBeta * redirect;
+      const scrub = 1 - clamp01((drifting ? PHYS.driftScrub : PHYS.gripScrub) * Math.abs(dBeta));
+      const mag = planar * scrub;
+      const fSign = vFwd < 0 ? -1 : 1;
+      vFwd = mag * Math.cos(nb) * fSign;
+      vRight = mag * Math.sin(nb);
+    }
+    if (redirect < 0.999) {
+      // Plain lateral damping for the remainder.
+      const kill = 1 - Math.exp(-gripRate * dt * (1 - redirect));
+      vRight -= vRight * kill;
+    }
+  } else if (!b.grounded) {
+    // Airborne: only a whisper of aero side-force.
+    b.gripFactor = 0;
+    vRight -= vRight * (1 - Math.exp(-0.35 * dt));
+  } else {
+    vRight -= vRight * (1 - Math.exp(-t.grip * surfGrip * dt));
+  }
+
+  // --- longitudinal ------------------------------------------------------
+  const softCap =
+    (t.maxSpeed * speedMul + boostEnv * b.boostStrength * PHYS.boostSpeedBonus) * stunSpeedMul;
+
+  let aLong = 0;
+  if (!hardStun) {
+    if (accelIn > 0.001) {
+      const r = clamp01(Math.max(0, vFwd) / Math.max(1, softCap));
+      aLong += accelIn * t.acceleration * Math.max(0, 1 - Math.pow(r, 1.6));
+    }
+    if (brakeIn > 0.001) {
+      if (vFwd > 0.35) {
+        aLong -= brakeIn * t.brakeForce;
+      } else if (accelIn < 0.15) {
+        // Reverse out of a wall.
+        const rr = clamp01(-vFwd / t.maxReverseSpeed);
+        aLong -= brakeIn * t.acceleration * 0.55 * Math.max(0, 1 - rr * rr);
+      }
+    }
+  }
+
+  // Boost thrust — instant attack, smooth tail.
+  if (boosting) aLong += PHYS.boostAccel * b.boostStrength * boostEnv;
+
+  // Drag. Almost switched off under throttle so the drive curve alone sets
+  // terminal speed; dominant when coasting or off-road.
+  const throttleRelief = 1 - PHYS.throttleDragRelief * accelIn * (boosting ? 1 : 1);
+  let dragRate: number;
+  if (b.grounded) {
+    dragRate = (PHYS.coastDrag + surfDrag * PHYS.surfaceDragScale) * throttleRelief;
+    if (b.driftPhase === DriftPhase.Drifting) dragRate += 0.05;
+  } else {
+    dragRate = WORLD.airDrag * 0.22;
+    if (b.gliding) dragRate = PHYS.glideBleed;
+  }
+  aLong -= vFwd * dragRate;
+
+  // Gravity along the slope. NOTE: the honest slope force is ALREADY applied —
+  // `_v1` carries gravity plus the suspension normal force, whose sum on an
+  // incline is exactly the down-slope component. This is a small extra bias on
+  // top of it so hills read as more dramatic than they geometrically are.
+  if (b.grounded && !b.antiGravity) {
+    aLong += WORLD_DOWN.dot(b.forward) * WORLD.gravity * PHYS.slopeBias;
+  }
+
+  vFwd += aLong * dt;
+
+  // Soft cap: exceed it freely, bleed back exponentially. Never clamp.
+  if (vFwd > softCap) vFwd -= (vFwd - softCap) * (1 - Math.exp(-PHYS.overspeedDecay * dt));
+  const revCap = -t.maxReverseSpeed;
+  if (vFwd < revCap) vFwd -= (vFwd - revCap) * (1 - Math.exp(-6 * dt));
+
+  // --- glider ------------------------------------------------------------
+  if (b.gliding) {
+    b.glideTime += dt;
+    // brake = nose up (float), accel = nose down (dive for speed).
+    const pitchCmd = clamp(brakeIn - accelIn, -1, 1);
+    vUp += pitchCmd * PHYS.glidePitch * dt;
+    vUp = Math.max(vUp, -9);
+    // Trade altitude for speed when diving.
+    if (pitchCmd < 0) vFwd += -pitchCmd * 6.0 * dt;
+    b.pitch = damp(b.pitch, pitchCmd * 0.32, 0.18, dt);
+  } else {
+    b.glideTime = 0;
+  }
+
+  // --- weight-transfer inputs for the suspension -------------------------
+  // These two numbers are the *entire* reason the chassis pitches and rolls:
+  // Suspension.ts turns them into a torque about the contact patch. Longitudinal
+  // is the net drive/brake accel; lateral is the centripetal accel a = ω × v,
+  // whose component along `right` is -yawRate·vFwd.
+  b.longAccel = clamp(aLong, -80, 80);
+  b.lateralAccel = clamp(-b.yawRate * vFwd, -90, 90);
+
+  // --- recompose ---------------------------------------------------------
+  b.forwardSpeed = vFwd;
+  b.lateralSpeed = vRight;
+  b.velocity.copy(b.forward).multiplyScalar(vFwd);
+  b.velocity.addScaledVector(b.right, vRight);
+  b.velocity.addScaledVector(b.up, vUp);
+
+  // --- integrate ---------------------------------------------------------
+  b.position.addScaledVector(b.velocity, dt);
+
+  // --- anti-tunnel hard floor -------------------------------------------
+  groundClamp(b, track);
+
+  // --- orientation -------------------------------------------------------
+  buildQuaternions(b, dt);
+
+  // --- boost pads --------------------------------------------------------
+  if (b.grounded && b.surface === SurfaceType.Boost && b.padCooldown <= 0) {
+    b.padCooldown = PHYS.padCooldown;
+    applyBoostTo(b, 0.9, 1.0, 'pad');
+  }
+
+  guardNaN(b);
+}
+
+/**
+ * Re-derive the chassis-frame speeds after an external solver (walls, kart↔kart,
+ * item impulses) has edited `velocity` directly. Cheap, and it keeps the HUD /
+ * audio / VFX readouts honest in the same step the hit happened.
+ */
+export function syncVelocityReadouts(b: KartBody): void {
+  b.forwardSpeed = b.velocity.dot(b.forward);
+  b.lateralSpeed = b.velocity.dot(b.right);
+}
+
+// ---------------------------------------------------------------------------
+
+function resolveSurface(b: KartBody, track: ITrackService): void {
+  let s: SurfaceType;
+  if (b.grounded) {
+    // Majority vote across the grounded wheels — no flicker on surface seams.
+    let best = SurfaceType.Road;
+    let bestLoad = -1;
+    for (let i = 0; i < 4; i++) {
+      const w = b.wheels[i];
+      if (w.grounded && w.force > bestLoad) {
+        bestLoad = w.force;
+        best = w.surface;
+      }
+    }
+    s = best;
+  } else {
+    // Airborne: a point query mostly answers "which volume am I in". Void in
+    // mid-air is expected and must not be mistaken for a surface change.
+    const probe = track.surfaceAt(b.position);
+    s = probe === SurfaceType.Void ? b.prevSurface : probe;
+  }
+
+  b.antiGravity = s === SurfaceType.AntiGravity;
+
+  // Gliding: entering a glider volume while airborne, or launching from one.
+  if (s === SurfaceType.Glider) {
+    if (!b.grounded) b.gliding = true;
+  }
+  if (b.grounded && b.gliding && b.groundTime > 0.05) b.gliding = false;
+
+  if (s !== b.prevSurface) {
+    bus.emit('kart:surfaceChange', { kartId: b.id, from: b.prevSurface, to: s });
+    b.prevSurface = s;
+  }
+  b.surface = s;
+}
+
+/**
+ * The one guarantee that must never fail: at 40 m/s a fixed step moves 0.33 m,
+ * and this probe reaches 3 m above the chassis, so the kart cannot end a step
+ * beneath the road no matter how it got there.
+ */
+function groundClamp(b: KartBody, track: ITrackService): void {
+  _v1.copy(b.position).addScaledVector(b.up, PHYS.clampLift);
+  const hit = track.raycastGround(_v1, b.up, PHYS.clampLift + 8);
+  if (!hit.hit) return;
+  copyHit(hit);
+  // Height of the CoM above the surface, measured along `up`.
+  _v2.copy(b.position).sub(_hitScratch.point);
+  const h = _v2.dot(_hitScratch.normal);
+  if (h < PHYS.minRideHeight) {
+    b.position.addScaledVector(_hitScratch.normal, PHYS.minRideHeight - h);
+    const vn = b.velocity.dot(_hitScratch.normal);
+    if (vn < 0) b.velocity.addScaledVector(_hitScratch.normal, -vn);
+  }
+}
+
+function copyHit(h: GroundHit): void {
+  _hitScratch.hit = h.hit;
+  _hitScratch.point.copy(h.point);
+  _hitScratch.normal.copy(h.normal);
+  _hitScratch.distance = h.distance;
+  _hitScratch.surface = h.surface;
+}
+
+// ---------------------------------------------------------------------------
+
+function buildQuaternions(b: KartBody, dt: number): void {
+  // Ground-aligned basis. Kart faces -Z, so local +Z is "backward".
+  _v1.copy(b.forward).multiplyScalar(-1);
+  _m1.makeBasis(b.right, b.up, _v1);
+  b.groundQuat.setFromRotationMatrix(_m1);
+
+  // Visual lean: the physical suspension attitude plus a drift roll INTO the
+  // corner (real karts lean out, MK8 karts lean in — we do both, and the
+  // drift term wins because it reads better).
+  const targetLean =
+    b.driftPhase === DriftPhase.Drifting ? b.driftDir * (0.16 + b.driftAngle * 0.42) : 0;
+  b.driftLean = damp(b.driftLean, targetLean, 0.1, dt);
+
+  const rollTotal = b.roll + b.driftLean;
+  const pitchTotal = b.pitch;
+
+  b.bodyQuat.copy(b.groundQuat);
+  if (Math.abs(pitchTotal) > 1e-5) {
+    _q1.setFromAxisAngle(AXIS_X, pitchTotal);
+    b.bodyQuat.multiply(_q1);
+  }
+  if (Math.abs(rollTotal) > 1e-5) {
+    // Roll is about the chassis forward axis = local -Z.
+    _q2.setFromAxisAngle(AXIS_Z, -rollTotal);
+    b.bodyQuat.multiply(_q2);
+  }
+  // Trick tumble + squash spin are pure visual yaw/pitch on top.
+  if (b.trickActive) {
+    _q3.setFromAxisAngle(AXIS_X, b.trickTime * Math.PI * 2);
+    b.bodyQuat.multiply(_q3);
+  }
+  if (Math.abs(b.spinYaw) > 1e-5) {
+    _q3.setFromAxisAngle(AXIS_Y, b.spinYaw);
+    b.bodyQuat.multiply(_q3);
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+function stepRespawn(b: KartBody, dt: number): void {
+  b.respawnTime = Math.max(0, b.respawnTime - dt);
+  const k = 1 - b.respawnTime / b.respawnTotal; // 0 -> 1
+
+  // Lift out, arc across, settle in.
+  const arc = Math.sin(k * Math.PI) * 3.2;
+  b.position.lerpVectors(b.respawnFrom, b.respawnTo, smoothstep(k));
+  b.position.y += arc;
+
+  b.velocity.set(0, 0, 0);
+  b.yawRate = 0;
+  b.pitch = damp(b.pitch, 0, 0.1, dt);
+  b.roll = damp(b.roll, 0, 0.1, dt);
+  b.pitchVel = 0;
+  b.rollVel = 0;
+  b.groundQuat.slerp(b.respawnQuat, 1 - Math.exp(-9 * dt));
+  b.bodyQuat.copy(b.groundQuat);
+  b.forward.set(0, 0, -1).applyQuaternion(b.groundQuat);
+  b.up.set(0, 1, 0).applyQuaternion(b.groundQuat);
+  orthonormalise(b);
+
+  for (let i = 0; i < 4; i++) {
+    b.wheels[i].compression = 0.12;
+    b.wheels[i].grounded = false;
+  }
+
+  if (b.respawnTime <= 0) {
+    b.position.copy(b.respawnTo);
+    // Drop back in at 40 % pace, facing the right way.
+    b.velocity.copy(b.forward).multiplyScalar(b.tuning.maxSpeed * 0.4);
+    b.forwardSpeed = b.tuning.maxSpeed * 0.4;
+    b.invulnTime = 1.6;
+    b.hadGround = false;
+    b.airTime = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+function guardNaN(b: KartBody): void {
+  if (
+    Number.isFinite(b.position.x) &&
+    Number.isFinite(b.position.y) &&
+    Number.isFinite(b.position.z) &&
+    Number.isFinite(b.velocity.x) &&
+    Number.isFinite(b.velocity.y) &&
+    Number.isFinite(b.velocity.z) &&
+    Number.isFinite(b.yawRate)
+  ) {
+    return;
+  }
+  console.warn(`[Physics] non-finite state on kart ${b.id} — resetting`);
+  b.position.copy(b.lastGroundPoint);
+  b.position.y += 1.0;
+  b.velocity.set(0, 0, 0);
+  b.yawRate = 0;
+  b.pitch = 0;
+  b.roll = 0;
+  b.pitchVel = 0;
+  b.rollVel = 0;
+  b.forwardSpeed = 0;
+  b.lateralSpeed = 0;
+  b.up.copy(WORLD_UP);
+  b.forward.set(0, 0, -1);
+  orthonormalise(b);
+}
+
+// ---------------------------------------------------------------------------
+
+export function writeState(b: KartBody, dt: number): void {
+  const st = b.state;
+  const t = b.tuning;
+
+  st.position.copy(b.position);
+  st.quaternion.copy(b.bodyQuat);
+  st.groundQuaternion.copy(b.groundQuat);
+  st.velocity.copy(b.velocity);
+  st.speed = b.forwardSpeed;
+  st.speedRatio = clamp(b.forwardSpeed / Math.max(1, t.maxSpeed), -1, 2);
+  st.angularVelocity = b.yawRate;
+
+  const drifting = b.driftPhase === DriftPhase.Drifting;
+  st.steerAngle = drifting
+    ? clamp(b.driftDir * 0.34 + b.ctrlSteer * 0.26, -0.62, 0.62)
+    : b.ctrlSteer * 0.5;
+
+  for (let i = 0; i < 4; i++) {
+    st.suspension[i] = b.wheels[i].compression;
+    st.wheelSpin[i] = b.wheels[i].spin;
+    st.wheelGrounded[i] = b.wheels[i].grounded;
+  }
+
+  st.grounded = b.grounded;
+  st.airTime = b.airTime;
+  st.surface = b.surface;
+
+  st.drifting = drifting;
+  st.driftStage = b.driftStage;
+  st.driftDirection = drifting ? b.driftDir : 0;
+  st.driftCharge = driftChargeNormalised(b);
+
+  st.boostTime = b.boostTime;
+  st.boostStrength = b.boostStrength;
+
+  st.hopping = b.driftPhase === DriftPhase.Hop || (drifting && b.hopTime > 0);
+  st.stunned = b.stunTime > 0;
+  st.stunTime = b.stunTime;
+  st.invulnerable = b.invulnTime > 0 || b.respawnTime > 0;
+
+  st.gliding = b.gliding;
+  st.antiGravity = b.antiGravity;
+
+  // Engine note: speed plus a slip/spin component so it screams under a drift.
+  const load = clamp01(Math.abs(st.speedRatio));
+  const slipRev = clamp01(Math.abs(b.lateralSpeed) * 0.06);
+  const boostRev = b.boostTime > 0 ? 0.18 : 0;
+  const target = clamp01(0.1 + load * 0.82 + slipRev * 0.2 + boostRev);
+  st.rpm = damp(st.rpm, target, 0.05, dt);
+}
+
+/** 0..1 progress toward the NEXT drift tier. */
+export function driftChargeNormalised(b: KartBody): number {
+  if (b.driftPhase !== DriftPhase.Drifting) return 0;
+  const tiers = b.tuning.driftTiers;
+  const c = b.driftCharge;
+  if (c < tiers[0]) return clamp01(c / tiers[0]);
+  if (c < tiers[1]) return clamp01((c - tiers[0]) / (tiers[1] - tiers[0]));
+  if (c < tiers[2]) return clamp01((c - tiers[1]) / (tiers[2] - tiers[1]));
+  return 1;
+}
+
+export { TRICK_NAMES, WORLD_UP, WORLD_DOWN, AXIS_X, AXIS_Y, AXIS_Z };

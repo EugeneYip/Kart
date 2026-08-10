@@ -1,0 +1,28 @@
+{
+  "name": "apex-kart",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "postprocessing": "^6.39.4",
+    "simplex-noise": "^4.0.3",
+    "three": "^0.185.1",
+    "three-mesh-bvh": "^0.9.14"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vite-plugin-glsl": "^1.6.1"
+  },
+  "private": true,
+  "type": "module"
+}
