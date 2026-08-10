@@ -357,11 +357,19 @@ class Builder {
       this.I.push(base, base + 1, base + 2, base, base + 2, base + 3);
       return;
     }
+    // The u range is swapped relative to the naive mapping, and this is not a
+    // typo. `pt()` lays the plate out along local +x with a +z face normal, so
+    // a viewer looking at the front face (from +z, down -z) sees +x running to
+    // their LEFT. Mapping uMin->-hw would therefore render all text mirrored.
+    // Verified empirically: trackside boards read "TORQUE"/"EMBER" correctly
+    // with this mapping and read reversed with the axes the other way round.
+    // The back face gets the un-swapped range so double-sided signs read
+    // correctly from behind too.
     this.quad(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2],
-      hex, shade, [uv[0], uv[3], uv[2], uv[1]]);
+      hex, shade, [uv[2], uv[3], uv[0], uv[1]]);
     if (!opts.single) {
       this.quad(p1[0], p1[1], p1[2], p0[0], p0[1], p0[2], p3[0], p3[1], p3[2], p2[0], p2[1], p2[2],
-        hex, shade * 0.8, [uv[2], uv[3], uv[0], uv[1]]);
+        hex, shade * 0.8, [uv[0], uv[3], uv[2], uv[1]]);
     }
   }
 

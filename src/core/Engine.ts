@@ -46,8 +46,12 @@ export class Engine {
   /** Rolling average frame time in ms, for the debug HUD. */
   fpsAverage = 60;
 
+  private resizeObserver: ResizeObserver | null = null;
+  private readonly container: HTMLElement;
+
   constructor(container: HTMLElement, tier: QualityTier = 'ultra') {
     this.quality = { ...QUALITY_PRESETS[tier] };
+    this.container = container;
 
     this.canvas = document.createElement('canvas');
     this.canvas.tabIndex = 0;
@@ -96,6 +100,17 @@ export class Engine {
     this.targetScale = this.quality.renderScale;
 
     window.addEventListener('resize', this.handleResize);
+
+    // A `window` resize event is not guaranteed. An embedded preview pane, a
+    // devtools split, or any container-driven layout change can resize the
+    // canvas without the window itself changing — which left the composer
+    // rendering into a fraction of the canvas (a black L-shaped border).
+    // Observe the element we actually draw into instead.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.handleResize());
+      this.resizeObserver.observe(container);
+    }
+
     this.handleResize();
 
     // Context-loss resilience — a black canvas is the worst possible failure.
@@ -128,9 +143,15 @@ export class Engine {
   }
 
   getSize(): { width: number; height: number } {
+    // Measure the container we draw into, not the window. They agree for the
+    // default full-screen layout, but the container is correct when the canvas
+    // is embedded, letterboxed, or resized by something other than the window.
+    const r = this.container?.getBoundingClientRect();
+    const w = r && r.width > 0 ? r.width : window.innerWidth;
+    const h = r && r.height > 0 ? r.height : window.innerHeight;
     return {
-      width: Math.max(1, Math.floor(window.innerWidth)),
-      height: Math.max(1, Math.floor(window.innerHeight)),
+      width: Math.max(1, Math.floor(w)),
+      height: Math.max(1, Math.floor(h)),
     };
   }
 
@@ -250,6 +271,8 @@ export class Engine {
   dispose(): void {
     this.stop();
     window.removeEventListener('resize', this.handleResize);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     for (const s of this.subsystems) s.dispose?.();
     this.subsystems.length = 0;
     this.renderer.dispose();
