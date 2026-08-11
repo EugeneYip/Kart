@@ -24,6 +24,7 @@
 
 import * as THREE from 'three';
 import type { FrameContext, ISubsystem, QualitySettings } from '@/core/Types';
+import { LAYERS } from '@/core/Config';
 import { clamp, clamp01, damp } from '@/core/MathUtils';
 import { SKY_PRESETS, type Sky, type SkyPresetName } from './Sky';
 import { worldFogUniforms, worldRegistry, worldSunUniforms } from './WorldTextures';
@@ -282,6 +283,21 @@ const NIGHT_EMITTERS: readonly EmitterClass[] = [
 
 /** Beyond this the 1/d² contribution of even a mast is below a bit of output. */
 const EMITTER_CULL = 150;
+
+/**
+ * Hard cap on harvested emitters, so a pathological prop set cannot make the
+ * per-frame nearest search unbounded.
+ *
+ * This used to be 240 with the comment "far more than any circuit authors".
+ * Measured (`.probe-tmp/nightlight.ts`): Neon Metropolis offers **345** matching
+ * instances, so the cap was silently discarding 105 of them — including *every*
+ * one of the 52 `authored:streetlamp` fittings, purely because they happened to
+ * be traversed last. With the emissive-only filter below the real figure drops to
+ * ~170, but the cap is now set from measurement plus headroom rather than from a
+ * guess, and `collectEmitters` fills it strongest-class-first so that if it ever
+ * does bite it drops shopfront windows and not a 1100 cd flood mast.
+ */
+const EMITTER_MAX = 400;
 
 interface Emitter {
   x: number;
@@ -627,6 +643,16 @@ export class Lighting implements ISubsystem {
   private collectEmitters(o: THREE.Object3D): void {
     const mesh = o as THREE.InstancedMesh;
     if (!mesh.isInstancedMesh || mesh.count <= 0) return;
+    // EMISSIVE MESHES ONLY. Every class pattern matches a fitting's housing as
+    // well as its lit element — `Prop:streetlight` (the mast) and
+    // `Prop:streetlightLamp` (the head) both match /streetlamp|streetlight/, as
+    // do `neonFrame`/`neonSign` and `trafficLight`/`trafficLightLamps`. So each
+    // fitting was harvested twice, from two different heights, and since
+    // `updateLamps` claims one *emitter* per pool slot rather than one *fitting*,
+    // two of the six slots could land on the same lamp: half the pool wasted and
+    // that lamp lit at double the authored candela. Props tags exactly the
+    // emissive pass with `bloom: true`, so the bloom layer is the discriminator.
+    if (!mesh.layers.isEnabled(LAYERS.BLOOM)) return;
     let cls = -1;
     for (let i = 0; i < NIGHT_EMITTERS.length; i++) {
       if (NIGHT_EMITTERS[i].match.test(mesh.name)) { cls = i; break; }
@@ -635,12 +661,25 @@ export class Lighting implements ISubsystem {
     const geo = mesh.geometry;
     if (!geo.boundingSphere) geo.computeBoundingSphere();
     const centre = geo.boundingSphere ? geo.boundingSphere.center : _local.set(0, 0, 0);
-    // Bounded so a pathological prop set cannot make the per-frame nearest
-    // search unbounded. 240 emitters is far more than any circuit authors.
-    for (let i = 0; i < mesh.count && this.emitters.length < 240; i++) {
+    for (let i = 0; i < mesh.count; i++) {
       mesh.getMatrixAt(i, _m4);
       _local.copy(centre).applyMatrix4(_m4).applyMatrix4(mesh.matrixWorld);
-      this.emitters.push({ x: _local.x, y: _local.y, z: _local.z, cls });
+      if (this.emitters.length < EMITTER_MAX) {
+        this.emitters.push({ x: _local.x, y: _local.y, z: _local.z, cls });
+        continue;
+      }
+      // Full. Displace the weakest entry rather than dropping this one on the
+      // floor: whichever mesh happens to be traversed last must not decide which
+      // lamps get to light the road. NIGHT_EMITTERS is ordered by strength, so
+      // "weakest" is the highest class index. Mutated in place — no allocation,
+      // and only reachable above EMITTER_MAX, which no shipping circuit hits.
+      let weakest = 0;
+      for (let k = 1; k < this.emitters.length; k++) {
+        if (this.emitters[k].cls > this.emitters[weakest].cls) weakest = k;
+      }
+      if (this.emitters[weakest].cls <= cls) return;
+      const e = this.emitters[weakest];
+      e.x = _local.x; e.y = _local.y; e.z = _local.z; e.cls = cls;
     }
   }
 

@@ -171,6 +171,9 @@ interface RoadOverride {
   envMapIntensity: number;
 }
 
+/** Module scratch — the constructor must not allocate a Vector2 per rebuild. */
+const _size = new THREE.Vector2();
+
 export class Weather implements ISubsystem {
   readonly group = new THREE.Group();
   preset: WeatherName = 'clear';
@@ -198,6 +201,13 @@ export class Weather implements ISubsystem {
   private uCamMatrix = { value: new THREE.Matrix4() };
   private uWindDir = { value: new THREE.Vector2(0.86, 0.51) };
   private uWind = { value: 0.24 };
+  /**
+   * Frame aspect, so the screen-droplet cells can be square. Seeded from the
+   * renderer rather than left at 1: the overlay is built during `setPreset`,
+   * which can run before a camera is attached, and a wrong aspect for even one
+   * frame shows up as horizontally-stretched beads.
+   */
+  private uAspect = { value: 16 / 9 };
 
   /** 0..1 — how wet the world currently looks. Ramps, never snaps. */
   wetness = 0;
@@ -217,6 +227,8 @@ export class Weather implements ISubsystem {
     this.quality = quality;
     this.field = ctx.field;
     this.budget = BUDGET_FOR_TIER[quality.tier] ?? 0.8;
+    const size = renderer.getSize(_size);
+    if (size.x > 0 && size.y > 0) this.uAspect.value = size.x / size.y;
   }
 
   async init(): Promise<void> {
@@ -535,6 +547,39 @@ export class Weather implements ISubsystem {
   /**
    * Screen droplets: a quad pinned just in front of the camera. Beads sit still,
    * grow, then trickle down — the giveaway that a windscreen is being rained on.
+   *
+   * ---------------------------------------------------------------------------
+   *  READABILITY PASS (D4). The playtester said the wet-screen sim "makes it
+   *  inconvenient to see"; the visual critic, independently, called it "50+ large
+   *  soft grey circles across the whole frame ... a dirty lens, not weather".
+   *  Measured on the shipped shader at 800x450 (`.probe-tmp/droplets.ts`):
+   *
+   *      1176 beads on screen, 47 % of the frame above alpha 0.02 and 34 % above
+   *      0.10, mean bead colour 0.187 linear against a night road at 0.013 —
+   *      i.e. the overlay was 14x BRIGHTER than the road it covered, and lifted
+   *      the asphalt 1.75x. Beads measured 42x33 px, wider than tall.
+   *
+   *  Four separate defects, all fixed here:
+   *
+   *   1. `pow(d, 3.0)` was called `rim`, but `d` peaks at a bead's CENTRE — so
+   *      the mix toward white filled every bead with ~50 % grey instead of
+   *      putting a highlight on its edge. A water bead is dark in the middle (it
+   *      refracts the scene behind it) with a bright ring where the curvature
+   *      catches a grazing highlight. Now an actual annulus in `d`.
+   *   2. The three octaves were SUMMED, so `d` saturated wherever two beads
+   *      overlapped (11.7 % of the frame had 2+ octaves, 5.5 % was fully
+   *      saturated). With the colour driven by pow(d,3) those overlaps became
+   *      hard-edged bright crescents nested inside the soft blobs — the "grey
+   *      spiral artifacts". `max()` cannot produce them.
+   *   3. `uv * scale` with the same scale on both axes makes every cell 16:9,
+   *      so beads came out 1.28:1 WIDER than tall. Water on glass is the other
+   *      way round. Corrected by the aspect, then squashed for gravity.
+   *   4. Density and opacity were uniform across the frame. The racing line
+   *      lives in the middle of it, and HANDOFF's governing principle from the
+   *      leaves pass is that ambient weather must never compete with the racing
+   *      line for attention. The overlay is now masked out of the central ~45 %
+   *      of the frame entirely and only builds toward the corners.
+   * ---------------------------------------------------------------------------
    */
   private addDroplets(): void {
     const geometry = new THREE.PlaneGeometry(2, 2);
@@ -546,6 +591,7 @@ export class Weather implements ISubsystem {
       uniforms: {
         uTime: this.uTime,
         uAmount: { value: 0 },
+        uAspect: this.uAspect,
         uFogColor: worldFogUniforms.uFogColor,
       },
       vertexShader: /* glsl */ `
@@ -560,36 +606,60 @@ export class Weather implements ISubsystem {
         ${GLSL_NOISE}
         uniform float uTime;
         uniform float uAmount;
+        uniform float uAspect;
         uniform vec3 uFogColor;
         varying vec2 vUv;
 
-        float bead(vec2 uv, float scale, float speed, float seed){
-          vec2 p = uv * scale;
-          // Trickle: each column slides at its own rate.
+        // Fraction of cells that grow a bead is (1 - GATE).
+        const float BEAD_GATE = 0.85;
+        const float BEAD_ALPHA = 0.18;
+        const float BEAD_GLINT = 0.55;
+
+        /** .x = coverage, .y = specular glint (already masked by coverage). */
+        vec2 bead(vec2 uv, float scale, float speed, float seed){
+          // Square cells. Scaling u and v by the same number on a 16:9 frame
+          // stretches every bead horizontally by the aspect; correcting x first
+          // and then squashing y by 0.86 leaves a bead slightly TALLER than
+          // wide, which is what gravity does to water on glass.
+          vec2 p = vec2(uv.x * uAspect, uv.y) * scale;
+          // Trickle: each column slides at its own rate. v grows upward, so a
+          // rising slide walks the pattern DOWN the screen.
           float col = floor(p.x);
           float slide = uTime * speed * (0.4 + hash12(vec2(col, seed)));
           p.y += slide;
           vec2 cell = floor(p);
           vec2 f = fract(p) - 0.5;
           float h = hash12(cell + seed);
-          if (h < 0.62) return 0.0;
-          float r = length(f * vec2(1.0, 0.72)) / (0.16 + h * 0.26);
-          return (1.0 - smoothstep(0.55, 1.0, r)) * (0.4 + h * 0.6);
+          if (h < BEAD_GATE) return vec2(0.0);
+          // Normalised position inside the bead: |n| = 1 at its edge.
+          vec2 n = f * vec2(1.0, 0.86) / (0.10 + h * 0.13);
+          float d = (1.0 - smoothstep(0.40, 1.0, length(n))) * (0.45 + h * 0.55);
+          // One small highlight up and to a side, not a filled disc: a bead of
+          // water is DARK in the middle (it refracts the scene behind it) and
+          // catches the sky in a glint near its top. Which side alternates on the
+          // cell hash so they do not all look stamped from the same die.
+          float side = h > 0.925 ? -1.0 : 1.0;
+          float g = 1.0 - smoothstep(0.0, 0.55, length(n - vec2(0.30 * side, 0.34)));
+          return vec2(d, g * d);
         }
 
         void main(){
           if (uAmount <= 0.002) discard;
-          float d = bead(vUv, 14.0, 0.09, 3.1)
-                  + bead(vUv, 26.0, 0.16, 11.7) * 0.7
-                  + bead(vUv, 42.0, 0.05, 27.3) * 0.45;
-          d = clamp(d, 0.0, 1.0);
-          // Beads refract the sky, so tint them with the fog colour and
-          // brighten their rims.
-          float rim = pow(d, 3.0);
-          vec3 col = mix(uFogColor * 1.15, vec3(1.0), rim * 0.5);
-          // Thicker near the screen edges where airflow can't clear them.
-          float edge = 0.55 + 0.45 * length(vUv - 0.5) * 1.6;
-          gl_FragColor = vec4(col, d * uAmount * 0.42 * edge);
+          // Keep the middle of the frame clear — that is where the road the
+          // player is steering along lives.
+          vec2 q = (vUv - 0.5) * vec2(uAspect, 1.0);
+          float rad = length(q) / length(vec2(uAspect, 1.0) * 0.5);
+          float edge = smoothstep(0.45, 1.0, rad);
+          if (edge <= 0.004) discard;
+          // Pick the stronger octave whole, never a sum: summing saturates the
+          // coverage where two beads overlap, and a saturated overlap under a
+          // brightness curve is what produced the hard-edged crescents.
+          vec2 b0 = bead(vUv, 10.0, 0.07, 3.1);
+          vec2 b1 = bead(vUv, 18.0, 0.125, 11.7) * 0.85;
+          vec2 b = b0.x >= b1.x ? b0 : b1;
+          float d = clamp(b.x, 0.0, 1.0);
+          vec3 col = mix(uFogColor * 0.95, vec3(1.0), clamp(b.y, 0.0, 1.0) * BEAD_GLINT);
+          gl_FragColor = vec4(col, d * uAmount * BEAD_ALPHA * edge);
         }
       `,
     });
@@ -743,6 +813,10 @@ export class Weather implements ISubsystem {
     if (cam) {
       this.uCamPos.value.copy(cam.position);
       this.uCamMatrix.value.copy(cam.matrixWorld);
+      // Track window resizes and split-screen aspect changes for free.
+      if (cam.aspect > 0.01 && cam.aspect !== this.uAspect.value) {
+        this.uAspect.value = cam.aspect;
+      }
     }
 
     this.wetness = damp(this.wetness, this.wetTarget, 1.4, ctx.dt);

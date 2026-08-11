@@ -855,7 +855,9 @@ function shade(hex: string, mul: number): string {
  * that is a baked texel grid (metres per texel), far too coarse to decide
  * whether a grandstand corner is over the asphalt.
  */
-function roadClearance(st: PathStation[], x: number, z: number): { lat: number; halfWidth: number } {
+function roadClearance(
+  st: PathStation[], x: number, z: number,
+): { lat: number; halfWidth: number; cx: number; cz: number } {
   let bi = 0;
   let bd = Infinity;
   for (let i = 0; i < st.length; i++) {
@@ -865,6 +867,9 @@ function roadClearance(st: PathStation[], x: number, z: number): { lat: number; 
   }
   let best = Math.sqrt(bd);
   let hw = st[bi].halfWidth;
+  // The nearest centreline point itself, so a caller that needs to push a prop
+  // *away* from the road has the outward direction without repeating the search.
+  let cx = st[bi].px, cz = st[bi].pz;
   const n = st.length;
   for (const j of [(bi - 1 + n) % n, bi]) {
     const a = st[j], b = st[(j + 1) % n];
@@ -877,9 +882,10 @@ function roadClearance(st: PathStation[], x: number, z: number): { lat: number; 
     if (d < best) {
       best = d;
       hw = a.halfWidth + (b.halfWidth - a.halfWidth) * t;
+      cx = px; cz = pz;
     }
   }
-  return { lat: best, halfWidth: hw };
+  return { lat: best, halfWidth: hw, cx, cz };
 }
 
 /**
@@ -1192,6 +1198,25 @@ const VOLUME_PROBE_FRACTIONS = [0.06, 0.3, 0.65, 1.0];
 const AUTHORED_PUSH_LIMIT = 16;
 
 /**
+ * Lateral clearance an authored building must keep beyond the asphalt edge.
+ *
+ * Deliberately far smaller than `STAND_ROAD_CLEARANCE` (4.6 m): a grandstand
+ * terrace is meant to sit well back, whereas `alleyBlock` is explicitly authored
+ * as an alley wall and the recipe comment calls it "the closest building to the
+ * kart anywhere on the circuit". So this asks only that the wall be off the
+ * tarmac, not that it retreat into a field — the minimum that fixes the defect
+ * while preserving the intended tight-alley look.
+ */
+const AUTHORED_ROAD_CLEARANCE = 0.6;
+/**
+ * Intrusion below this is left alone. Tyre walls, brake boards and warning posts
+ * are *authored* to sit on the kerb and measure 0.2-1.9 m over — that is
+ * deliberate dressing, and a guard that shuffles it around is doing damage, not
+ * repair. The defect this exists for measures 5.3 m.
+ */
+const AUTHORED_ROAD_SLACK = 2.0;
+
+/**
  * Authored types that belong *in* the corridor and must never be pushed or
  * dropped: a tunnel portal frames the bore, a gantry straddles the road, a
  * bridge pylon holds the deck up. Keep in sync with `normaliseType()`.
@@ -1317,6 +1342,11 @@ export class Props implements ISubsystem {
   /** Instances the road-volume guard removed this build — reported once. */
   private volumeDrops = 0;
   private volumePushes = 0;
+  /** Anchors the road-SURFACE guard moved off the asphalt — reported once. */
+  private roadSurfacePushes = 0;
+  private roadSurfaceWorst = 0;
+  private roadSurfaceRefused = 0;
+  private roadSurfaceTypes: string[] = [];
   /** Authored placements grouped by normalised type, minus any already claimed. */
   private authored = new Map<string, Anchor[]>();
 
@@ -1362,6 +1392,20 @@ export class Props implements ISubsystem {
         `[Props] road-volume guard: ${this.volumePushes} authored props pushed clear, `
         + `${this.volumeDrops} instances dropped from `
         + `${roadVolumes.list.length} tunnel/bridge/anti-gravity sections`,
+      );
+    }
+    if (this.roadSurfacePushes || this.roadSurfaceRefused) {
+      // Loud on purpose: every line here is an authored `lat` that does not fit
+      // its own recipe, and the real fix belongs in TrackDefs. See
+      // `clearRoadSurface` for the measurement this came from. `refused` means the
+      // prop is hemmed in — pushing it clear of one carriageway would put it on
+      // another — so those can only be fixed by re-authoring.
+      console.warn(
+        `[Props] road-surface guard: ${this.roadSurfacePushes} authored props were standing on`
+        + ` the drivable road and have been pushed clear`
+        + ` (worst move ${this.roadSurfaceWorst.toFixed(2)} m): ${this.roadSurfaceTypes.join(', ')}`
+        + `; ${this.roadSurfaceRefused} could NOT be pushed clear and are still on the road`
+        + ' — the authored `lat` for these types is smaller than the recipe is wide.',
       );
     }
   }
@@ -1629,6 +1673,132 @@ export class Props implements ISubsystem {
       if (moved > 0 && a.blocked !== true) { pushed++; a.blocked = false; }
     }
     return [pushed, dropped];
+  }
+
+  /**
+   * ---------------------------------------------------------------------------
+   *  D4 — KEEP AUTHORED BUILDINGS OFF THE ASPHALT
+   * ---------------------------------------------------------------------------
+   *  `clearAuthored` above only knows about the road's own *volumes* — tunnel
+   *  bores, bridge decks, anti-gravity tubes. On open tarmac there is no volume
+   *  to be inside of, so nothing stopped a building standing on the racing line.
+   *
+   *  Measured (`.probe-tmp/sightline.ts`, which walks every solid prop's eight
+   *  world box corners against the drawn road edge):
+   *
+   *      circuit           instances reaching inside the road   worst reach
+   *      sunsetCoastline                 0                        —
+   *      neonMetropolis                 30 x alleyBlock          5.3 m
+   *      volcanoRush                     5 (rock, warningPost)    0.3 m
+   *
+   *  Neon Metropolis authors `alleyBlock` at `lat: 10.5`, `mirror: true`, and the
+   *  recipe randomises its own half width to `rng.range(4.5, 6.5)` plus a 0.4 m
+   *  roof cap. So the near wall lands at 10.5 - 6.9 = 3.6 m from the centreline
+   *  against a road half width of 7.5-8.5 m: the alley walls stand up to 5.3 m
+   *  inside the drivable road. `lat` was authored as if it were clearance, but it
+   *  is a *centre* offset, and no width of building fits at 10.5.
+   *
+   *  THE PROPER FIX IS IN `TrackDefs.ts` — `lat: 10.5` wants to be roughly 17 for
+   *  that recipe, and that is the track owner's call, not this file's. This guard
+   *  is the safety net: it reports the intrusion precisely and pushes the anchor
+   *  out by the minimum needed, so the failure is loud and mitigated instead of
+   *  silent. Corridor props (gantries, portals, arches, deck pylons) never reach
+   *  here — `buildAuthored` only calls this inside its `if (!corridor)` branch.
+   *
+   *  Like `standClearsRoad`, this is an XZ test: it cannot tell a building beside
+   *  a low road from one beneath a flyover. That is safe for the props that reach
+   *  it, because everything authored to be above or below the road is a corridor
+   *  prop and therefore exempt.
+   *
+   *  Returns the number of anchors moved.
+   * ---------------------------------------------------------------------------
+   */
+  private clearRoadSurface(anchors: Anchor[], geo: THREE.BufferGeometry): number {
+    const st = this.ctx.stations;
+    if (!st.length) return 0;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return 0;
+    let pushed = 0;
+    for (const a of anchors) {
+      if (a.blocked === true) continue;
+      // GROUND-SEATED ANCHORS ONLY. `a.up` is defined exactly when
+      // `collectAuthored` re-seated this anchor onto the heightfield, i.e. when it
+      // is trackside dressing standing on the ground outside the corridor. Every
+      // other case is authored relative to something this guard must not touch —
+      // volcano's `lavaFountain` is at `lat: 0`, `up: -26`, deliberately under a
+      // bridge deck, and an early revision of this guard shoved it 9.5 m sideways
+      // and re-seated it on the basin floor. Reusing the existing condition
+      // rather than inventing a second one is the point.
+      let up = a.up;
+      if (up === undefined) {
+        // Not re-seated, so `y` is authored relative to something this code does
+        // not know about, and re-seating after a push could be very wrong. Unless
+        // the prop is ALREADY standing on the heightfield to within a few
+        // centimetres — then the ground *is* what it stands on, re-seating is
+        // provably right, and the only reason it was skipped upstream is that its
+        // authored `lat` fell inside `surf.corridor`. Which is precisely the case
+        // this guard exists for: half of Neon Metropolis's alley blocks are
+        // authored at `lat: 10.5` against a corridor that is wider than that.
+        const ground = this.field.heightAt(a.x, a.z);
+        if (Math.abs(a.y - ground) > 0.25) continue;
+        up = 0;
+      }
+      const over = this.roadOverhang(a, bb);
+      if (over <= 0) continue;
+      const c = roadClearance(st, a.x, a.z);
+      let ox = a.x - c.cx, oz = a.z - c.cz;
+      const len = Math.hypot(ox, oz);
+      if (len < 1e-4) continue;   // exactly on the centreline: no outward to pick
+      ox /= len; oz /= len;
+      // ONE shot, not a loop. Iterating looked safer and was not: where two
+      // branches of the spline run close in XZ (the volcano switchbacks, the neon
+      // flyover), pushing away from the nearer branch moves the prop toward the
+      // other, `roadClearance` flips to it, and the anchor ping-pongs outward to
+      // the 16 m limit. A single measured step cannot do that, and the check
+      // below refuses the move outright if it made things worse.
+      const step = Math.min(over + 0.2, AUTHORED_PUSH_LIMIT);
+      const ox0 = a.x, oz0 = a.z, oy0 = a.y;
+      a.x += ox * step;
+      a.z += oz * step;
+      // Re-seat on the ground it has moved onto, exactly as `clearAuthored` does,
+      // or a pushed building floats above (or sinks into) the new grade.
+      a.y = this.field.heightAt(a.x, a.z) + up;
+      if (this.roadOverhang(a, bb) >= over) {
+        a.x = ox0; a.z = oz0; a.y = oy0;
+        this.roadSurfaceRefused++;
+        continue;
+      }
+      pushed++;
+      this.roadSurfaceWorst = Math.max(this.roadSurfaceWorst, step);
+    }
+    return pushed;
+  }
+
+  /**
+   * How far the worst corner of an anchor's OBB reaches past the road edge plus
+   * `AUTHORED_ROAD_CLEARANCE`, in metres. Zero when it clears.
+   *
+   * Slack of `AUTHORED_ROAD_SLACK` is allowed before this reports anything:
+   * tyre walls, brake boards and warning posts are authored to sit *on* the kerb
+   * and measured at 0.2-0.3 m over, which is intentional dressing, not a defect.
+   */
+  private roadOverhang(a: Anchor, bb: THREE.Box3): number {
+    const st = this.ctx.stations;
+    const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
+    const s = a.scale;
+    let worst = 0;
+    for (let c = 0; c < 8; c++) {
+      const lx = (c & 1 ? bb.max.x : bb.min.x) * s;
+      const lz = (c & 4 ? bb.max.z : bb.min.z) * s;
+      // Yaw about +Y: local +X -> (cos, 0, -sin), local +Z -> (sin, 0, cos).
+      const wx = a.x + lx * ca + lz * sa;
+      const wz = a.z - lx * sa + lz * ca;
+      const rc = roadClearance(st, wx, wz);
+      const over = rc.halfWidth + AUTHORED_ROAD_CLEARANCE - rc.lat;
+      if (over > worst) worst = over;
+    }
+    return worst > AUTHORED_ROAD_SLACK ? worst : 0;
   }
 
   /** Worst road-volume penetration over the eight corners of an anchor's OBB. */
@@ -2736,6 +2906,14 @@ export class Props implements ISubsystem {
         const [pushed, dropped] = this.clearAuthored(anchors, spec.geo);
         this.volumePushes += pushed;
         void dropped;
+        // ...and off the drawn road surface. See `clearRoadSurface`: the volume
+        // guard above cannot see open tarmac, so this is where a building
+        // authored on the racing line gets caught.
+        const off = this.clearRoadSurface(anchors, spec.geo);
+        if (off > 0) {
+          this.roadSurfacePushes += off;
+          this.roadSurfaceTypes.push(`${key} x${off}`);
+        }
       }
       const body = spec.mat ?? this.matte;
       this.emit(`authored:${key}`, spec.geo, body, anchors, {

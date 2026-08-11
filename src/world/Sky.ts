@@ -178,6 +178,40 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     // fraction of the frame.
     godRays: 1.0, godRayColor: 0xffb066, shadowIntensity: 0.90,
   }),
+  /**
+   * ---- D4: raised. This is the only preset a shipping circuit uses at night
+   *  (Neon Metropolis, which is also the only rain course), and until `f350e37`
+   *  it never actually rendered — every circuit was drawn under flat noon `day`.
+   *  So the playtester's "the scene on rainy courses is overall too dark" was
+   *  written about a build that was accidentally 3.7x BRIGHTER than this preset.
+   *
+   *  Measured on a 0.055-albedo road facing up, with `Lighting`'s real applied
+   *  values and three's own shading maths (`.probe-tmp/mood.ts`):
+   *
+   *      preset   road linear   road sRGB8 after AgX @ exposure 1.5
+   *      day        0.0478          78     <- what the owner actually played
+   *      night      0.0131          33     <- what shipped after f350e37
+   *
+   *  A road at 33/255 for 53 % of the lap (`.probe-tmp/nightlight.ts` walks the
+   *  circuit; the other 47 % has a lamp in range) is close enough to black that
+   *  the asphalt stops carrying any surface information. Raised toward — not to
+   *  — the level the owner played, keeping it unambiguously night:
+   *
+   *      keyIntensity  1.05 -> 1.75   the moon. The lever that adds brightness
+   *                                   AND shape; ambient/env only add flatness,
+   *                                   which this file warns about above.
+   *      skyAmbient    lightened      raising `ambientIntensity` against a
+   *                                   near-black 0x1d2a4a bought almost nothing:
+   *                                   the hemisphere was 2 % of the road's light.
+   *      envIntensity  0.90 -> 1.08   the IBL half of the fill; already the
+   *                                   largest single term at night, so moved least.
+   *      fogDensity    0.00120 -> 0.00100  the corner ahead reads a shade further.
+   *
+   *  THE FINAL CALL HERE NEEDS A SCREENSHOT. This estimate does not model the
+   *  emissive neon signage, bloom, the point-light pool, or the wet-road
+   *  specular (`Weather.applyWetRoad` cuts road roughness to 0.28x and raises
+   *  envMapIntensity 1.6x, so a wet night road reflects far more than a dry one).
+   * ---- */
   night: P({
     sunElevation: -16, sunAzimuth: -74, moonElevation: 42, moonAzimuth: -30,
     turbidity: 1.8, rayleigh: 0.7, mie: 0.0035, mieG: 0.78, sunIntensity: 1.0,
@@ -186,13 +220,13 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     cloudLit: 0x6b7c98, cloudDark: 0x0a0e1a, cloudAmbient: 0.25, cloudLum: 1.1,
     haze: 0x121b30, hazeStrength: 0.72, hazeLum: 0.55,
     night: 1, cityGlow: 1.0, embers: 0, lightning: 0,
-    keyColor: 0x9ab0e8, keyIntensity: 1.05,
-    skyAmbient: 0x1d2a4a, groundAmbient: 0x0d1018, ambientIntensity: 0.62,
-    bounceColor: 0x1a2138, bounceIntensity: 0.35,
+    keyColor: 0x9ab0e8, keyIntensity: 1.75,
+    skyAmbient: 0x2c3d66, groundAmbient: 0x151b28, ambientIntensity: 0.74,
+    bounceColor: 0x232c48, bounceIntensity: 0.35,
     rimColor: 0x7fd0ff, rimIntensity: 0.65,
-    fogColor: 0x141d33, fogSunColor: 0x2c3a5e, fogDensity: 0.00120, fogHeight: 2, fogFalloff: 0.021,
-    envIntensity: 0.90,
-    godRays: 0.0, godRayColor: 0x9fb6ff, shadowIntensity: 0.85,
+    fogColor: 0x141d33, fogSunColor: 0x2c3a5e, fogDensity: 0.00100, fogHeight: 2, fogFalloff: 0.021,
+    envIntensity: 1.08,
+    godRays: 0.0, godRayColor: 0x9fb6ff, shadowIntensity: 0.78,
   }),
   storm: P({
     sunElevation: 27, sunAzimuth: 150, moonElevation: -30, moonAzimuth: 20,
