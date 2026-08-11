@@ -1109,6 +1109,14 @@ interface AuthoredSpec {
   metal?: THREE.BufferGeometry;
   /** Companion pass on the sponsor atlas, with cells baked into the uvs. */
   sign?: THREE.BufferGeometry;
+  /**
+   * Let the atlas pick a different cell PER INSTANCE instead of baking one cell
+   * into the uvs. Use it when a type appears more than once in view and would
+   * otherwise show the same advertisement on every copy (billboards, holo ads).
+   * Author the geometry with a plain `[0,0,1,1]` uv range when you set this —
+   * the instance attribute supplies the cell offset.
+   */
+  signCells?: number;
   /** Companion pass on the lit-window material — city blocks and towers. */
   windows?: THREE.BufferGeometry;
   cull?: number;
@@ -2058,6 +2066,12 @@ export class Props implements ISubsystem {
         count: this.count(52), min: 90, max: 620, minRoadDist: 58, maxSlope: 0.42,
       });
       for (const a of anchors) a.scale = 0.7 + rng.next() * 1.5;
+      // Fold the track's authored towers into this same InstancedMesh instead of
+      // building a second copy of identical geometry — one draw call serves both.
+      // This is what `takeAuthored` was written for; nothing had ever called it.
+      // Appended AFTER the scale jitter above so an authored `scale: 1.6`
+      // survives rather than being overwritten by it.
+      anchors.push(...this.takeAuthored('skyscraper'));
 
       const b = this.builder();
       b.uvScale = 0.22;
@@ -2120,6 +2134,8 @@ export class Props implements ISubsystem {
     // ---- neon signs ----------------------------------------------------------
     {
       const anchors = roadside(ctx, rng, { spacing: 46, min: 9, max: 22, sides: 2, limit: this.count(30) });
+      // The track authors a run of these down the start straight at lat 17.
+      anchors.push(...this.takeAuthored('neonsign'));
       const b = this.builder();
       b.prism(0, 0, 0, 0.13, 8.5, 6, 0x22262b, { capBottom: true });
       b.box(0, 8.6, 0, 1.5, 1.6, 0.16, 0x171a1e);
@@ -2158,6 +2174,7 @@ export class Props implements ISubsystem {
     // ---- traffic lights ------------------------------------------------------
     {
       const anchors = roadside(ctx, rng, { spacing: 120, min: 3.2, max: 5, sides: 2, limit: this.count(12) });
+      anchors.push(...this.takeAuthored('trafficlight'));
       const b = this.builder();
       b.prism(0, 0, 0, 0.11, 4.2, 8, 0x2c3137, { capBottom: true });
       b.box(0, 4.6, 0, 0.24, 0.62, 0.2, 0x1d2126);
@@ -2262,6 +2279,9 @@ export class Props implements ISubsystem {
         maxSlope: 0.85, faceRoad: false, skipNearStands: this.stands,
       });
       for (const a of anchors) a.scale = 0.6 + rng.next() * 1.8;
+      // Volcano authors `obsidianSpire` twice (crater rim and the spiral) at
+      // scale 1.4–1.6; this shard cluster is exactly that silhouette already.
+      anchors.push(...this.takeAuthored('obsidianspire'));
       const b = this.builder();
       // Shard cluster: sharp, glassy, angled crystals.
       for (let i = 0; i < 6; i++) {
@@ -2580,7 +2600,9 @@ export class Props implements ISubsystem {
       }
       if (spec.sign) {
         this.emit(`authored:${key}:sign`, spec.sign, this.atlas, anchors,
-          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
+          spec.signCells
+            ? { cull: spec.cull ?? CULL_MID, atlasCells: spec.signCells, shadow: false, corridor }
+            : { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
       }
       if (spec.windows) {
         this.emit(`authored:${key}:windows`, spec.windows, this.windows, anchors,
@@ -2890,6 +2912,475 @@ export class Props implements ISubsystem {
         }
         return { geo: b.build('townHouse'), glow: glow.build('townHouseGlow'),
           softGlow: true, cull: CULL_FAR };
+      }
+
+      // ---- city dressing ---------------------------------------------------
+      // `skyscraper`, `neonSign` and `trafficLight` are deliberately absent:
+      // `buildCity` already emits that geometry and now claims the authored
+      // anchors with `takeAuthored`, so they cost no extra draw call.
+
+      case 'towerblock': {
+        // Mid-rise, deliberately shorter than the 46 m `skyscraper` so the
+        // authored lat-46 run reads as a wall of city behind the taller
+        // background towers rather than competing with them.
+        const b = this.builder();
+        b.uvScale = 0.3;
+        const H = rng.range(17, 25), w = rng.range(6.5, 9), d = rng.range(6, 8.5);
+        b.box(0, H * 0.5, 0, w, H * 0.5, d, rng.next() < 0.5 ? 0x565d66 : 0x4a5057,
+          { shade: { top: 1.12 } });
+        b.box(0, 1.1, 0, w + 0.4, 1.1, d + 0.4, 0x363b41, { shade: { top: 1.0 } });
+        b.box(0, H + 0.3, 0, w + 0.3, 0.3, d + 0.3, 0x3d4249, { shade: { top: 1.16 } });
+        // Roof clutter breaks the flat-top silhouette that says "box".
+        b.box(w * 0.4, H + 1.3, d * 0.3, 1.1, 1.0, 1.1, 0x4a5057);
+        b.prism(-w * 0.45, H + 0.6, -d * 0.35, 0.5, 1.7, 8, 0x2f343a, { taper: 0.85 });
+        // Horizontal floor bands: the cheapest way to give a block scale.
+        const floors = Math.floor(H / 3.1);
+        for (let f = 1; f < floors; f++) {
+          b.box(0, f * 3.1, 0, w + 0.12, 0.1, d + 0.12, 0x646b74);
+        }
+        const win = this.builder();
+        let cell = 0;
+        for (let f = 0; f < floors; f++) {
+          const y = 2.2 + f * 3.1;
+          if (y > H - 1.2) break;
+          for (let s = 0; s < 4; s++) {
+            const yaw = s * Math.PI * 0.5;
+            const ca = Math.cos(yaw), sa = Math.sin(yaw);
+            const half = s % 2 === 0 ? w : d;
+            const out = (s % 2 === 0 ? d : w) + 0.06;
+            for (let i = -1; i <= 1; i++) {
+              win.cell = cell++;
+              const off = i * half * 0.55;
+              win.plate(ca * off + sa * out, y, sa * off - ca * out,
+                half * 0.44, 1.5, yaw + Math.PI, 0xffd9a0, { single: true });
+            }
+          }
+        }
+        win.cell = 0;
+        return { geo: b.build('towerBlock'), windows: win.build('towerBlockWindows'), cull: CULL_FAR };
+      }
+
+      case 'arcologytower': {
+        // The one landmark on the circuit (authored once, scale 2.4). Tapered
+        // stepped drum with a lit crown so it reads from anywhere on the lap.
+        const b = this.builder();
+        b.uvScale = 0.26;
+        let y = 0, r = 11.5;
+        for (let i = 0; i < 5; i++) {
+          const seg = 8.5 - i * 0.6;
+          b.prism(0, y, 0, r, seg, 8, i % 2 ? 0x3f4650 : 0x474e58,
+            { taper: 0.9, capBottom: i === 0, shade: { top: 1.14 } });
+          // Overhanging service deck at each setback — the read that says
+          // "inhabited structure" instead of "tapered cone".
+          b.prism(0, y + seg, 0, r * 0.94, 0.55, 8, 0x2e343c, { taper: 1.12 });
+          y += seg + 0.55;
+          r *= 0.84;
+        }
+        b.prism(0, y, 0, r * 0.5, 6.5, 8, 0x2a3038, { taper: 0.4 });
+        b.prism(0, y + 6.5, 0, 0.3, 9, 6, 0x9aa1a9, { taper: 0.4 });
+        const glow = this.builder();
+        // Ring of crown lights + a beacon at the mast tip.
+        let gy = 0, gr = 11.5;
+        for (let i = 0; i < 5; i++) {
+          const seg = 8.5 - i * 0.6;
+          glow.torus(0, gy + seg + 0.3, 0, gr * 0.99, 0.16, 16, 5, 0x2ef0ff, 1);
+          gy += seg + 0.55;
+          gr *= 0.84;
+        }
+        glow.sphere(0, y + 15.8, 0, 0.55, 8, 6, 0xff3b6a);
+        return {
+          geo: b.build('arcologyTower'), glow: glow.build('arcologyGlow'),
+          cull: CULL_FAR,
+        };
+      }
+
+      case 'alleyblock': {
+        // Authored at lat 10.5 both sides: these form the alley walls and are
+        // the closest buildings to the kart anywhere on the circuit, so they
+        // carry the most surface detail per square metre of any city prop.
+        const b = this.builder();
+        b.uvScale = 0.5;
+        const H = rng.range(8.5, 13), w = rng.range(4.5, 6.5), d = rng.range(3.6, 5);
+        const brick = rng.next() < 0.5 ? 0x7a4f42 : 0x6b5a4e;
+        b.box(0, H * 0.5, 0, w, H * 0.5, d, brick, { shade: { top: 1.1 } });
+        // Ground-floor shopfront in a darker band, with a canopy over it.
+        b.box(0, 1.5, 0, w + 0.08, 1.5, d + 0.08, 0x33383e);
+        b.box(0, 3.15, d + 0.35, w * 0.9, 0.1, 0.42, 0x2b6f5c, { shade: { top: 1.2 } });
+        b.box(0, H + 0.28, 0, w + 0.4, 0.28, d + 0.4, 0x50463c, { shade: { top: 1.15 } });
+        // Fire escape: two landings and the diagonal runs between them.
+        const metal = this.builder();
+        for (let l = 0; l < 2; l++) {
+          const ly = 3.9 + l * 3.4;
+          metal.box(w * 0.55, ly, d + 0.55, w * 0.42, 0.07, 0.55, 0x4a5158);
+          metal.box(w * 0.55, ly + 0.5, d + 1.05, w * 0.42, 0.5, 0.04, 0x4a5158);
+          metal.tube(w * 0.15, ly, d + 1.0, w * 0.95, ly + 3.4, d + 1.0, 0.05, 4, 0x4a5158);
+        }
+        metal.prism(-w * 0.6, H + 0.5, -d * 0.4, 0.34, 1.5, 6, 0x3d434a, { taper: 0.9 });
+        const glow = this.builder();
+        for (let i = -1; i <= 1; i += 2) {
+          glow.plate(i * w * 0.45, 1.7, d + 0.14, 1.1, 1.5, 0, 0xffca6a, { single: true });
+        }
+        return {
+          geo: b.build('alleyBlock'), metal: metal.build('alleyBlockSteel'),
+          glow: glow.build('alleyBlockGlow'), softGlow: true, cull: CULL_MID,
+        };
+      }
+
+      case 'hoload': {
+        // Spans the road 11–13 m up (and once trackside at lat -20, up 4). The
+        // anchor is already at display height, so this is built around the
+        // origin with no supports — it is a hologram, it does not need legs.
+        // Keyed `hoload` because normaliseType lower-cases "holoAd" and strips
+        // non-letters; CORRIDOR_PROPS here and Track's SPANS_THE_ROAD already
+        // spell it that way, so watch the letter order when editing this case.
+        const b = this.builder();
+        // Thin emitter rails top and bottom; the panel itself is the glow pass.
+        for (const sy of [-1, 1]) b.box(0, sy * 2.5, 0, 7.5, 0.16, 0.22, 0x1c2026);
+        for (const sx of [-1, 1]) b.box(sx * 7.5, 0, 0, 0.16, 2.5, 0.22, 0x1c2026);
+        const sign = this.builder();
+        // Plain 0..1 uvs + signCells: each holo ad in view shows a different
+        // sponsor rather than eight copies of the same one.
+        sign.plate(0, 0, 0, 14.6, 4.7, 0, 0xffffff, { uvRect: [0, 1, 1, 0] });
+        const glow = this.builder();
+        glow.plate(0, 0, -0.05, 14.6, 4.7, 0, 0x2ef0ff, { single: true });
+        for (const sy of [-1, 1]) glow.box(0, sy * 2.5, 0, 7.4, 0.05, 0.1, 0x8bf6ff);
+        return {
+          geo: b.build('holoAd'), sign: sign.build('holoAdSign'), signCells: 8,
+          glow: glow.build('holoAdGlow'), softGlow: true, cull: CULL_FAR, shadow: false,
+        };
+      }
+
+      case 'billboard': {
+        const b = this.builder();
+        for (const sx of [-1, 1]) {
+          b.prism(sx * 3.4, 0, 0, 0.24, 6.2, 8, 0x3d434a, { capBottom: true, taper: 0.8 });
+          b.tube(sx * 3.4, 4.2, 0, sx * 3.4, 6.0, -1.3, 0.13, 5, 0x3d434a);
+        }
+        b.box(0, 8.3, 0.22, 4.6, 2.7, 0.16, 0x2b3036, { shade: { top: 1.1 } });
+        const sign = this.builder();
+        sign.plate(0, 8.3, 0.05, 8.8, 4.9, 0, 0xffffff, { single: true, uvRect: [0, 1, 1, 0] });
+        const glow = this.builder();
+        // Two floodlight cans on the gantry, throwing up at the face.
+        for (const sx of [-1, 1]) glow.box(sx * 2.2, 5.7, -0.5, 0.3, 0.1, 0.18, 0xfff0c8);
+        return {
+          geo: b.build('billboard'), sign: sign.build('billboardSign'), signCells: 8,
+          glow: glow.build('billboardGlow'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'energypylon': {
+        const b = this.builder();
+        const H = 12.5;
+        b.box(0, 0.3, 0, 0.85, 0.3, 0.85, 0x2a2e34);
+        // Four splayed legs meeting a shaft: a lattice read without the tri count.
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          b.tube(sx * 0.7, 0.5, sz * 0.7, sx * 0.22, H * 0.42, sz * 0.22, 0.09, 4, 0x6b727a);
+        }
+        b.prism(0, H * 0.42, 0, 0.3, H * 0.58, 6, 0x757c85, { taper: 0.72 });
+        for (let i = 0; i < 3; i++) {
+          const y = H * 0.5 + i * 1.5;
+          b.box(0, y, 0, 1.7 - i * 0.35, 0.09, 0.16, 0x878e96);
+        }
+        const glow = this.builder();
+        // The energy: a stack of rings up the shaft plus cross-arm terminals.
+        for (let i = 0; i < 4; i++) {
+          glow.torus(0, 3.2 + i * 2.4, 0, 0.42 - i * 0.05, 0.09, 12, 5, 0x39ff88, 1);
+        }
+        for (let i = 0; i < 3; i++) {
+          const y = H * 0.5 + i * 1.5, x = 1.7 - i * 0.35;
+          for (const sx of [-1, 1]) glow.sphere(sx * x, y, 0, 0.15, 7, 5, 0xd8ffe8);
+        }
+        return {
+          geo: b.build('energyPylon'), glow: glow.build('energyPylonGlow'),
+          cull: CULL_MID,
+        };
+      }
+
+      case 'agpylon': {
+        // Marks the anti-gravity stretch, authored both sides at lat 12. Reads
+        // as the thing generating the effect: a split column with a floating
+        // core between the halves.
+        const b = this.builder();
+        b.prism(0, 0, 0, 1.0, 1.1, 6, 0x2f353d, { capBottom: true, taper: 0.82 });
+        b.prism(0, 1.1, 0, 0.62, 3.1, 6, 0x454d57, { taper: 0.9 });
+        b.prism(0, 6.4, 0, 0.56, 2.4, 6, 0x454d57, { taper: 1.08 });
+        b.prism(0, 8.8, 0, 0.66, 0.5, 6, 0x2f353d, { taper: 0.8 });
+        const glow = this.builder();
+        // The 1.9 m gap between the two halves is where the effect lives.
+        glow.sphere(0, 5.35, 0, 0.72, 10, 7, 0x8b5cff, { squash: 0.82 });
+        glow.torus(0, 4.4, 0, 0.78, 0.08, 14, 5, 0xc9a8ff, 1);
+        glow.torus(0, 6.3, 0, 0.78, 0.08, 14, 5, 0xc9a8ff, 1);
+        glow.torus(0, 1.25, 0, 0.66, 0.06, 12, 4, 0x8b5cff, 1);
+        return { geo: b.build('agPylon'), glow: glow.build('agPylonGlow'), cull: CULL_MID };
+      }
+
+      case 'monorailpylon': {
+        const b = this.builder();
+        const H = 14;
+        b.box(0, 0.45, 0, 1.5, 0.45, 1.5, 0x3a3f47, { shade: { top: 1.1 } });
+        b.prism(0, 0.8, 0, 0.9, H - 0.8, 6, 0xb4b8bd, { taper: 0.66 });
+        // Cantilever head carrying the beam off to one side.
+        b.box(0, H + 0.5, -1.6, 0.75, 0.5, 2.6, 0xa8acb2, { shade: { top: 1.14 } });
+        b.tube(0, H - 1.4, 0, 0, H + 0.3, -3.0, 0.18, 5, 0xa8acb2);
+        // A stub of track: authored on a 0.011 step, so consecutive pylons very
+        // nearly join their beams into one continuous guideway.
+        b.box(0, H + 1.5, -3.2, 0.62, 0.62, 9.5, 0xd2d6da, { shade: { top: 1.2 } });
+        b.box(0, H + 0.85, -3.2, 0.42, 0.14, 9.4, 0x8f959c);
+        const glow = this.builder();
+        for (const sz of [-1, 1]) glow.box(0.66, H + 1.5, -3.2 + sz * 4.2, 0.05, 0.1, 0.5, 0x2ef0ff);
+        return {
+          geo: b.build('monorailPylon'), glow: glow.build('monorailPylonGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'bridgepylon': case 'spiralpylon': {
+        // ---------------------------------------------------------------------
+        // These are authored BELOW the carriageway (`up: -12` on the city
+        // flyover, -22 on the volcano bridge, -18 on the spiral), i.e. the
+        // anchor is the depth at which the author wanted the pylon to read.
+        //
+        // One geometry cannot bridge all three depths: sized to reach the deck
+        // at -12 it would stand 10 m proud of the road at -22. So the shaft is
+        // built with its CAPITAL AT THE ANCHOR and descends 46 m from there —
+        // deep enough to meet the ground in all three places. The consequence
+        // is an intentional gap between capital and deck underside, which is
+        // invisible from the road (you cannot see under your own deck) and only
+        // shows from a distant side-on view. Fixing it properly needs a
+        // per-anchor height query, which `authoredSpec` has no access to.
+        // ---------------------------------------------------------------------
+        const spiral = key === 'spiralpylon';
+        const b = this.builder();
+        const D = 46;
+        const r = spiral ? 1.15 : 1.7;
+        b.prism(0, -D, 0, r * 1.5, D, spiral ? 8 : 6, spiral ? 0x6b5f56 : 0x8f959c,
+          { taper: 0.62, capTop: false, capBottom: false });
+        // Capital: a widening head so the column meets the deck with a shoulder
+        // instead of a butt joint.
+        b.prism(0, -1.4, 0, r, 1.4, spiral ? 8 : 6, spiral ? 0x7d7167 : 0xa8acb2,
+          { taper: 1.35, capBottom: false });
+        b.box(0, 0.15, 0, r * 1.45, 0.3, r * 1.45, spiral ? 0x8a7d72 : 0xb4b8bd,
+          { shade: { top: 1.18 } });
+        if (spiral) {
+          // A helical rib: the prop is holding up a 40 m corkscrew, so say so.
+          for (let i = 0; i < 26; i++) {
+            const a0 = i * 0.62, a1 = (i + 1) * 0.62;
+            const y0 = -D + i * 1.6, y1 = -D + (i + 1) * 1.6;
+            const rr = 1.9;
+            b.tube(Math.cos(a0) * rr, y0, Math.sin(a0) * rr,
+              Math.cos(a1) * rr, y1, Math.sin(a1) * rr, 0.16, 4, 0x5f554d);
+          }
+        } else {
+          // Straight bracing collars at intervals down the shaft.
+          for (let i = 1; i < 6; i++) {
+            b.box(0, -i * 7.2, 0, r * 1.25, 0.28, r * 1.25, 0x7a8088, { shade: { top: 1.1 } });
+          }
+        }
+        return {
+          geo: b.build(spiral ? 'spiralPylon' : 'bridgePylon'),
+          cull: CULL_FAR,
+        };
+      }
+
+      case 'ventstack': {
+        // Alley-side industrial vent, authored at lat 10 on a 0.012 step.
+        const b = this.builder();
+        b.box(0, 0.5, 0, 1.15, 0.5, 0.9, 0x4a4f55, { shade: { top: 1.08 } });
+        b.box(0, 1.15, 0, 0.95, 0.2, 0.75, 0x3a3f45);
+        for (const sx of [-0.5, 0.5]) {
+          const h = 2.6 + rng.range(0, 1.4);
+          b.prism(sx, 1.3, 0, 0.3, h, 8, 0x6e757c, { taper: 0.94, capBottom: false });
+          // Cowl: an inverted cone cap, the silhouette that says "extractor".
+          b.prism(sx, 1.3 + h, 0, 0.44, 0.42, 8, 0x565c63, { taper: 0.5 });
+          b.torus(sx, 1.3 + h * 0.5, 0, 0.33, 0.05, 8, 4, 0x565c63);
+        }
+        b.tube(-0.5, 2.1, 0, 0.5, 2.1, 0, 0.09, 5, 0x565c63);
+        return { geo: b.build('ventStack'), cull: CULL_NEAR };
+      }
+
+      case 'barrelstack': {
+        // Reuses the `barrel` read at authored scale: a leaning stack, never a
+        // tidy pyramid — the whole point is that it looks abandoned.
+        const b = this.builder();
+        const cols: number[] = [0xd94f3d, 0x3f7a4a, 0x2f6fd0, 0xb8862a];
+        const lay = (x: number, y: number, z: number, upright: boolean, hex: number) => {
+          if (upright) {
+            b.prism(x, y, z, 0.42, 1.05, 10, hex, { capBottom: true, bulge: 1 });
+            b.torus(x, y + 0.28, z, 0.43, 0.045, 10, 4, 0xe8e4d8);
+            b.torus(x, y + 0.78, z, 0.43, 0.045, 10, 4, 0xe8e4d8);
+          } else {
+            // On its side: a tube along X reads as a rolled barrel.
+            b.tube(x - 0.52, y + 0.42, z, x + 0.52, y + 0.42, z, 0.42, 10, hex);
+            for (const sx of [-0.25, 0.25]) {
+              b.torus(x + sx, y + 0.42, z, 0.2, 0.05, 8, 4, 0xe8e4d8);
+            }
+          }
+        };
+        lay(-0.5, 0, -0.2, true, cols[0]);
+        lay(0.52, 0, 0.1, true, cols[1]);
+        lay(0.05, 0, 0.85, true, cols[2]);
+        lay(0.0, 1.05, 0.3, true, cols[3]);
+        lay(-0.7, 0, 0.95, false, cols[rng.int(0, 3)]);
+        return { geo: b.build('barrelStack'), cull: CULL_NEAR };
+      }
+
+      // ---- volcano dressing ------------------------------------------------
+      // `obsidianSpire` is absent on purpose: `buildVolcano`'s shard cluster is
+      // that silhouette and now claims the authored anchors.
+
+      case 'basaltcolumn': {
+        // Giant's-Causeway hexagonal jointing: a cluster of flat-topped hex
+        // prisms at different heights, which is what makes it read as basalt
+        // rather than as generic rock.
+        const b = this.builder();
+        const n = 5 + rng.int(0, 3);
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + rng.range(-0.5, 0.5);
+          const d = i === 0 ? 0 : rng.range(0.9, 2.3);
+          const h = rng.range(3.5, 9.5);
+          const r = rng.range(0.7, 1.15);
+          const x = Math.cos(a) * d, z = Math.sin(a) * d;
+          b.prism(x, -0.4, z, r, h, 6, i % 3 === 0 ? 0x3f3a38 : 0x4a4442,
+            { taper: 0.97, yaw: rng.range(0, 1.05), shade: { top: 1.24, side: 0.98 } });
+          // Horizontal joints: basalt breaks into stacked segments.
+          const joints = Math.floor(h / 2.2);
+          for (let j = 1; j <= joints; j++) {
+            b.prism(x, -0.4 + j * 2.2, z, r * 1.03, 0.1, 6, 0x2e2a29, { yaw: rng.range(0, 1.05) });
+          }
+        }
+        return { geo: b.build('basaltColumn'), cull: CULL_FAR };
+      }
+
+      case 'deadtree': {
+        const b = this.builder();
+        const h = rng.range(4.5, 7.5);
+        b.prism(0, 0, 0, rng.range(0.26, 0.4), h, 7, 0x2e2622,
+          { taper: 0.34, capBottom: false, shade: { side: 0.95 } });
+        // Bare branches, thinner and steeper as they go up.
+        const n = 4 + rng.int(0, 2);
+        for (let i = 0; i < n; i++) {
+          const a = rng.range(0, 6.28);
+          const y = h * rng.range(0.4, 0.92);
+          const len = rng.range(1.1, 2.4) * (1 - y / (h * 1.4));
+          const tipY = y + rng.range(0.5, 1.5);
+          b.tube(0, y, 0, Math.cos(a) * len, tipY, Math.sin(a) * len,
+            rng.range(0.07, 0.13), 4, 0x352b26);
+          // One fork per branch is enough to stop them reading as spikes.
+          if (rng.next() < 0.6) {
+            b.tube(Math.cos(a) * len, tipY, Math.sin(a) * len,
+              Math.cos(a) * len * 1.5, tipY + rng.range(0.3, 0.9), Math.sin(a) * len * 1.5,
+              0.05, 4, 0x352b26);
+          }
+        }
+        return { geo: b.build('deadTree'), cull: CULL_MID };
+      }
+
+      case 'ashplume': {
+        // Authored far out (lat -34 to 56) as a background silhouette. Stacked
+        // squashed spheres, widening and paling with height so it reads as a
+        // column of ash lit from above. No shadow — a shadow-casting cloud
+        // looks like a rock.
+        const b = this.builder();
+        const H = rng.range(26, 40);
+        const puffs = 9;
+        for (let i = 0; i < puffs; i++) {
+          const t = i / (puffs - 1);
+          const y = t * H;
+          const r = 2.6 + t * 7.5;
+          // 0x4a4340 at the base to 0x9a9088 at the top: the vertical gradient
+          // is doing all the work here.
+          const g = Math.round(0x4a + t * (0x9a - 0x4a));
+          const hex = (g << 16) | (Math.round(0x43 + t * (0x90 - 0x43)) << 8)
+            | Math.round(0x40 + t * (0x88 - 0x40));
+          for (let k = 0; k < 2; k++) {
+            const a = rng.range(0, 6.28);
+            const d = t * rng.range(0, 3.2);
+            b.sphere(Math.cos(a) * d, y, Math.sin(a) * d, r * rng.range(0.7, 1.0),
+              8, 6, hex, { squash: rng.range(0.6, 0.85) });
+          }
+        }
+        return { geo: b.build('ashPlume'), cull: CULL_FAR, shadow: false };
+      }
+
+      case 'lavafountain': {
+        // Authored deep in the chasm (`up: -26`) and on the crater rim, at
+        // scale 1.6–2.2. Built upward from the anchor: vent, spout, arc of
+        // thrown gobbets.
+        const b = this.builder();
+        b.prism(0, -0.6, 0, 3.2, 1.9, 9, 0x1d1517, { taper: 0.66, shade: { top: 0.82 } });
+        b.prism(0, 1.3, 0, 2.1, 0.5, 9, 0x140e10, { taper: 0.86 });
+        const glow = this.builder();
+        // The spout: a tapering column, brightest at the throat.
+        glow.prism(0, 1.5, 0, 1.7, 7.5, 9, 0xff7a1e, { taper: 0.22 });
+        glow.prism(0, 1.4, 0, 1.9, 0.7, 9, 0xffd48a, { taper: 0.9 });
+        // Gobbets on ballistic arcs, each with its own atlas cell so the
+        // shader's per-cell flicker desynchronises them.
+        for (let i = 0; i < 9; i++) {
+          glow.cell = i;
+          const a = (i / 9) * Math.PI * 2 + rng.range(-0.3, 0.3);
+          const d = rng.range(1.6, 4.6);
+          const y = rng.range(5.5, 11.5);
+          glow.sphere(Math.cos(a) * d, y, Math.sin(a) * d, rng.range(0.28, 0.62),
+            7, 5, i % 2 ? 0xffb04a : 0xff5e1e, { squash: rng.range(0.7, 1.1) });
+        }
+        glow.cell = 0;
+        return {
+          geo: b.build('lavaFountain'), glow: glow.build('lavaFountainGlow'),
+          cull: CULL_FAR, shadow: false,
+        };
+      }
+
+      case 'lavarock': {
+        // Cooled crust with molten cracks showing through: the body is near
+        // black and every bit of colour comes from the glow pass, which is what
+        // makes it read as hot rather than as a red rock.
+        const b = this.builder();
+        const R = rng.range(1.3, 2.4);
+        for (let i = 0; i < 4; i++) {
+          const a = rng.range(0, 6.28);
+          const d = i === 0 ? 0 : rng.range(0.3, 0.9);
+          b.prism(Math.cos(a) * d, -0.3, Math.sin(a) * d, R * rng.range(0.55, 1.0),
+            R * rng.range(0.7, 1.25), 7, i % 2 ? 0x1b1517 : 0x231a1b,
+            { taper: rng.range(0.35, 0.7), yaw: rng.range(0, 3), shade: { top: 1.3 } });
+        }
+        const glow = this.builder();
+        for (let i = 0; i < 5; i++) {
+          const a = rng.range(0, 6.28);
+          const y = rng.range(0.2, R * 0.95);
+          glow.cell = i;
+          // Thin plates wedged in the crevices between the prisms.
+          glow.plate(Math.cos(a) * R * 0.62, y, Math.sin(a) * R * 0.62,
+            rng.range(0.5, 1.1), rng.range(0.12, 0.28), a + Math.PI * 0.5,
+            i % 2 ? 0xff6a1e : 0xffa347, { single: true });
+        }
+        glow.cell = 0;
+        return {
+          geo: b.build('lavaRock'), glow: glow.build('lavaRockGlow'),
+          softGlow: true, cull: CULL_MID,
+        };
+      }
+
+      case 'warningpost': {
+        // Lines the lava-field shortcut at lat -11 on a 0.006 step, so this is
+        // seen at close range and at speed: high-contrast diagonal hazard
+        // stripes, nothing subtle.
+        const b = this.builder();
+        b.box(0, 0.12, 0, 0.3, 0.12, 0.3, 0x2a2e34, { shade: { top: 1.1 } });
+        b.prism(0, 0.2, 0, 0.12, 2.05, 6, 0x1f2328, { capBottom: false });
+        // Stripes as stacked collars: cheaper than a texture and it reads
+        // correctly from every angle.
+        for (let i = 0; i < 7; i++) {
+          b.prism(0, 0.28 + i * 0.25, 0, 0.135, 0.25, 6,
+            i % 2 ? 0xffc93a : 0x1f2328, { shade: { side: 1.05 } });
+        }
+        b.box(0, 2.35, 0, 0.46, 0.36, 0.05, 0xffc93a, { shade: { top: 1.0 } });
+        b.plate(0, 2.35, 0.07, 0.3, 0.3, 0, 0x1f2328, { single: true, pitch: 0.78 });
+        const glow = this.builder();
+        glow.sphere(0, 2.68, 0, 0.09, 6, 4, 0xff6a2a);
+        return {
+          geo: b.build('warningPost'), glow: glow.build('warningPostGlow'),
+          softGlow: true, cull: CULL_NEAR,
+        };
       }
 
       default: return this.simpleAuthored(key);
@@ -3451,6 +3942,39 @@ function normaliseType(type: string): string | null {
       return 'rockspire';
     case 'planter': case 'flowerbed': case 'plantpot': return 'planter';
     case 'townhouse': case 'house': case 'building': case 'villa': return 'townhouse';
+
+    // --- city dressing ---------------------------------------------------
+    // Everything from here down was authored by TrackDefs and had NO alias, so
+    // `collectAuthored` dropped it on the floor with one console.info. That cost
+    // Neon Metropolis 17 of its 25 authored placements and Volcano 14 of 21 —
+    // i.e. two of the three circuits were missing two thirds of their scenery,
+    // which is most of why they read as bare next to the coastal track (0 lost).
+    // Six of these keys were already listed in CORRIDOR_PROPS and `holoAd` in
+    // Track's SPANS_THE_ROAD, so the placement plumbing was waiting for them.
+    case 'skyscraper': case 'tower': return 'skyscraper';
+    case 'towerblock': case 'apartmentblock': case 'block': return 'towerblock';
+    case 'arcologytower': case 'arcology': case 'megatower': return 'arcologytower';
+    case 'alleyblock': case 'alley': case 'backlot': return 'alleyblock';
+    case 'neonsign': case 'neon': return 'neonsign';
+    case 'hoload': case 'hologram': case 'holo': return 'hoload';
+    case 'billboard': case 'hoarding': return 'billboard';
+    case 'energypylon': case 'energymast': return 'energypylon';
+    case 'agpylon': case 'antigravpylon': case 'agmast': return 'agpylon';
+    case 'monorailpylon': case 'monorail': return 'monorailpylon';
+    case 'bridgepylon': case 'flyoverpylon': case 'deckpylon': return 'bridgepylon';
+    case 'spiralpylon': case 'helixpylon': return 'spiralpylon';
+    case 'trafficlight': case 'signal': case 'stoplight': return 'trafficlight';
+    case 'ventstack': case 'vent': case 'roofvent': case 'chimney': return 'ventstack';
+    case 'barrelstack': case 'barrels': case 'drumstack': return 'barrelstack';
+
+    // --- volcano dressing ------------------------------------------------
+    case 'basaltcolumn': case 'basalt': case 'columncluster': return 'basaltcolumn';
+    case 'deadtree': case 'burnttree': case 'snag': return 'deadtree';
+    case 'ashplume': case 'ashcolumn': case 'smokeplume': return 'ashplume';
+    case 'lavafountain': case 'lavaspout': case 'lavajet': return 'lavafountain';
+    case 'lavarock': case 'magmarock': case 'emberrock': return 'lavarock';
+    case 'obsidianspire': case 'obsidian': case 'glassspire': return 'obsidianspire';
+    case 'warningpost': case 'hazardpost': case 'warningmarker': return 'warningpost';
     default: return null;
   }
 }
