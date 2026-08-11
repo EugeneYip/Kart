@@ -1235,19 +1235,42 @@ function tMisc(): TestReport {
   void fwd0;
 
   // --- respawn on falling out of bounds ----------------------------------
+  // TWO BUGS LIVED HERE, both of which made this pair of assertions lie.
+  //
+  // 1. The teleport target was `(0, 8, 0)` — "dead centre of the infield". That
+  //    is the ONE point on an oval where the projection is degenerate: it is
+  //    equidistant from both straights, so the road frame resolves ambiguously
+  //    and the kart was flung 40 m laterally in the FIRST 8 ms step, from x=0 to
+  //    x=-40.9. `stepKart` runs before `checkBounds`, so by the time the bounds
+  //    test looked, |u| was 19.1 m — inside OOB_LIMIT (34) — and no respawn was
+  //    ever due. `isOutOfBounds` was true at the moment of the teleport and
+  //    false one step later. Now it teleports straight out past the apron on a
+  //    straight, where the projection is unambiguous.
+  //
+  // 2. `offset` was read as `G.u` AFTER calling `track.project()` — but
+  //    `project` returns the nearest CENTRELINE point and leaves `G` describing
+  //    that point, where `u` is ~0 by construction. So `offset` was always
+  //    ~0.01 and `offset < ROAD` was trivially true: it measured nothing at all.
+  //    `isOutOfBounds()` calls `geoAt` on the position you pass it, so asking it
+  //    is both the real question and a correct way to leave `G` on the kart.
+  //
+  // Respawn itself was never broken. Verified independently against all three
+  // shipping circuits: a kart put 120 m to the side, or 60 m below the road,
+  // raises `kart:respawn` on the very first step with respawnTime 0.95.
   place(2 * STRAIGHT_LEN + ARC_LEN + 55, 0, 10);
   const bb = physics.getBody(0)!;
-  bb.position.set(0, 8, 0); // dead centre of the infield → out of bounds
+  // x = R + 80 on a straight: |u| = 80 m, well past OOB_LIMIT, unambiguous.
+  bb.position.set(R + 80, 8, 0);
+  const oobAtStart = track.isOutOfBounds(bb.position);
   let didRespawn = false;
   const off = bus.on('kart:respawn', () => (didRespawn = true));
   stepPhysics(200);
   off();
-  const backOnTrack = track.project(bb.position);
-  const offset = Math.abs(G.u);
-  notes.push(`out-of-bounds respawn fired: ${didRespawn}; ended ${offset.toFixed(2)} m off the centreline at ${bb.forwardSpeed.toFixed(2)} m/s`);
+  const stillOut = track.isOutOfBounds(bb.position);
+  const offset = Math.abs(G.u); // set by the isOutOfBounds call above, not by project
+  notes.push(`out-of-bounds respawn: OOB at start ${oobAtStart}, fired ${didRespawn}; ended ${offset.toFixed(2)} m off the centreline (still out: ${stillOut}) at ${bb.forwardSpeed.toFixed(2)} m/s`);
   a.push({ name: 'out of bounds → respawn', value: `${didRespawn}, |u| ${offset.toFixed(2)} m`, expect: 'true, < 11 m', pass: didRespawn && offset < ROAD });
   a.push({ name: 'respawn at ~40 % speed', value: `${bb.forwardSpeed.toFixed(2)} m/s`, expect: `≈ ${(t.maxSpeed * 0.4).toFixed(1)}`, pass: bb.forwardSpeed > 4 });
-  void backOnTrack;
 
   // --- anti-gravity arc ---------------------------------------------------
   // THIS WAS A TEST BUG, NOT A GAME BUG — recording the arithmetic so nobody

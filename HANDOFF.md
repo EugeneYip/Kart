@@ -4,7 +4,7 @@
 
 ## 🔴 P0c — THE PHYSICS BATTERY IS NOT GREEN (9 failing assertions)
 
-`node src/dev/node-run.mjs src/dev/physics-run.ts` → **33 passed / 9 failed**.
+`node src/dev/node-run.mjs src/dev/physics-run.ts` → **34 passed / 8 failed**.
 The suite now runs headlessly (the WebGL bench split out into `src/dev/physics.ts`;
 assertions live in `physics-tests.ts`). Triaged, most-actionable first:
 
@@ -25,14 +25,62 @@ both PASS at `0` penalties, which is the new model working as designed.
 "slows the player down", so a cost is intended — this is a tuning call on *how
 much*, not a bug. Pick a target and move the assertion to match it.
 
-**3. `out of bounds → respawn` + `respawn at ~40 % speed` — UNCLASSIFIED, possibly serious.**
-A kart parked at the infield centre (`position.set(0, 8, 0)`, dead centre of the
-oval, definitively out of bounds) never fires `kart:respawn` over 200 ticks and
-ends `|u| = 0.01 m` at 3.26 m/s. **If this is real, a player who leaves the
-track is stuck forever** — that outranks everything else in this file. It could
-equally be a bench artifact (`checkBounds` changed in P0b-5). Classify it first:
-probe `checkBounds` directly with a known out-of-bounds position on a real
-circuit, not the TestTrack.
+**3. ✅ RESPAWN IS FINE IN THE GAME — the bench lies. Root cause found.**
+
+Classified, so nobody else has to panic about it. **Respawn works correctly on
+all three shipping circuits**: a kart put 120 m to the side, or 60 m below the
+road, gets `isOutOfBounds() === true` and raises `kart:respawn` with
+`respawnTime = 0.95` on the **very first step**. The fuzz test independently
+logs 3 respawns over 60 s × 12 karts. Nobody is getting stuck.
+
+Two separate bench bugs were making the assertion lie, both now fixed:
+
+- The teleport target was `(0, 8, 0)`, "dead centre of the infield" — the one
+  point on an oval where the projection is degenerate (equidistant from both
+  straights). `isOutOfBounds` was **true** at the teleport and **false one step
+  later**, because the kart was flung from x=0 to x=−40.9 inside the first 8 ms.
+- `offset` was read as `G.u` *after* `track.project()`, but `project` leaves `G`
+  describing the nearest **centreline** point, where `u ≈ 0` by construction. So
+  `offset` was always ~0.01 and `offset < ROAD` was trivially true — it measured
+  nothing. `isOutOfBounds()` calls `geoAt` on the position you give it, so asking
+  it is both the real question and a correct way to leave `G` on the kart.
+
+`respawn at ~40 % speed` now PASSES. Suite is **34 passed / 8 failed**.
+
+### 🔴 What the fix uncovered — a TestTrack bug that taints other measurements
+
+`out of bounds → respawn` still fails, and now for an understood reason. Even
+from `x = R + 80` on a clean straight (`|u| = 80 m`, unambiguous projection, well
+past `OOB_LIMIT` 34), the kart is **snapped laterally back to `|u| = 11.8 m`
+before `checkBounds` ever runs** — `stepKart` is called before `checkBounds` in
+`PhysicsWorld.fixedUpdate`, and something in the TestTrack's road-frame
+resolution "corrects" the position first. So the kart is never out of bounds at
+the moment the bounds test looks.
+
+This does **not** reproduce on the shipping circuits (which respawn at step 0
+from 120 m out), so it is the `TestTrack`'s own `project`/`sampleAt`, not the
+physics. **Why it matters beyond this one assertion: every bench measurement
+taken far from the centreline is suspect**, which plausibly includes the wall
+tests (they drive at the guardrail) and item 4 below. Fix `TestTrack.project`
+before trusting any of them.
+
+**4b. The off-road test is broken more deeply than a stale threshold.** Measured
+while investigating the above, all on the apron straight:
+- A kart at **lat 0** (middle of the road) with full throttle for 4 s settles at
+  **14.97 m/s** against a 28.7 m/s cap — so `< 20.7` passes for the wrong reason.
+  Nothing in this setup ever gets fast.
+- `body.surface` is non-monotonic in lateral offset: lat 12 → Grass, 15 → Grass,
+  18 → **Road**, 22 → Grass, 26 → **Road**, 32 → **Road**.
+- Every run ends back at `|u| ≈ 12` (i.e. Road) inside an arc, whatever lateral
+  offset it started at — the kart does not stay off-road for the measurement.
+- Worst signal: from `place(APRON + 5, …)` the kart covers **169 m in 3 s while
+  reporting 15.8 m/s**. Displacement and `forwardSpeed` disagree by ~3.7×, which
+  is almost certainly the same lateral snap. Start here — it is the clearest
+  handle on the TestTrack bug.
+
+Deliberately left failing rather than tuned green: making this assertion pass
+without understanding the snap would hide exactly the kind of bug that let three
+mechanics ship dead.
 
 **4. `off-road slows you` — classification readback, not grip.**
 Grass settles at 15.27 m/s (correctly slow, the cap is 28.7), but the assertion
