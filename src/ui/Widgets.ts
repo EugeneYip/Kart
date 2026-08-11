@@ -30,6 +30,17 @@ import type {
 } from '@/core/Types';
 import { ItemType } from '@/core/Types';
 import { clamp, clamp01 } from '@/core/MathUtils';
+// The item set is DERIVED, never retyped here. `LIVE_ITEMS` is the roulette's
+// own reading order, `ITEM_NAMES` its own display names (post re-skin: Battery,
+// Rocket, Plastic Bottle, Ninja) and `TRIPLE_ITEMS` its own stacking set — which
+// is now empty, every tier having collapsed to one. This file used to carry a
+// parallel copy of all three, including `Lightning` and `Squid`, both since
+// removed: the reel would have spun through icons for items no roll can produce
+// and the HUD would have called the Battery a "MUSHROOM". A parallel list is the
+// exact defect that made the character-select screen a placebo — see the note at
+// the top of `./Catalogue`.
+import { LIVE_ITEMS } from '@/items/ItemRoulette';
+import { ITEM_NAMES, TRIPLE_ITEMS } from '@/items/ItemModels';
 
 // ===========================================================================
 // Host shapes
@@ -326,11 +337,11 @@ export class ItemIcons {
    * given as {x,y,w,h}, {u0,v0,u1,v1} or a Vector4.
    */
   useAtlas(items: ItemsLike | undefined): void {
-    if (!items) return;
+    if (!items) { this.warnNoAtlas('no items subsystem was handed to the HUD'); return; }
     const atlas = tryCall<unknown>(items, 'getIconAtlas');
-    if (!atlas) return;
+    if (!atlas) { this.warnNoAtlas('getIconAtlas() returned nothing'); return; }
     const src = this.resolveImage(atlas);
-    if (!src) return;
+    if (!src) { this.warnNoAtlas('the atlas is not a readable canvas'); return; }
     this.atlasUrl = src.url;
     this.atlasSize = { w: src.w, h: src.h };
     const uvFn = probe<(i: ItemType) => unknown>(items, 'getIconUV');
@@ -376,6 +387,32 @@ export class ItemIcons {
       return null;
     }
   }
+
+  /**
+   * Say so, once, when the item slot falls back to the procedural drawings.
+   *
+   * This is not cosmetic any more. `ItemModels` owns the real icon art and is
+   * being RE-SKINNED (Rocket / Plastic Bottle / Battery / Ninja); the drawings in
+   * this file are the old MK8 shapes, so without the atlas the HUD shows a
+   * banana for the Plastic Bottle and a mushroom for the Battery. A silent
+   * fallback is how a whole subsystem hides — same shape as the minimap's
+   * normalised-path warning.
+   *
+   * As of this writing `Game.ts` never calls `hud.setItems(this.items)`, so this
+   * fires on every boot. One line next to `wire(this.hud, 'setAudio', …)` fixes
+   * it: `wire(this.hud, 'setItems', this.items);`
+   */
+  private warnNoAtlas(why: string): void {
+    if (ItemIcons.warnedNoAtlas) return;
+    ItemIcons.warnedNoAtlas = true;
+    console.warn(
+      `[ItemIcons] no item icon atlas (${why}) — falling back to the built-in `
+      + 'drawings, which are NOT the re-skinned art. Game.ts needs '
+      + 'wire(this.hud, \'setItems\', this.items).',
+    );
+  }
+
+  private static warnedNoAtlas = false;
 
   /** Point a DOM node's background at the icon for `item`. */
   apply(node: HTMLElement, item: ItemType | null): void {
@@ -430,39 +467,36 @@ export class ItemIcons {
     }
   }
 
+  /**
+   * Triples are the items module's business, not ours — the set is currently
+   * EMPTY (every tier collapsed to one), and a hardcoded copy of the old four
+   * would have kept drawing a "x3" badge for items that no longer stack.
+   */
   static isTriple(item: ItemType): boolean {
-    return item === ItemType.TripleBoost || item === ItemType.TripleGreenShell
-      || item === ItemType.TripleRedShell || item === ItemType.TripleBanana;
+    return TRIPLE_ITEMS.has(item);
   }
 
+  /**
+   * Display name, from the items module's own `ITEM_NAMES`.
+   *
+   * This used to be a hardcoded switch of MK8 names, which after the re-skin
+   * would have shown "MUSHROOM" for the Battery, "RED SHELL" for the Rocket,
+   * "BANANA" for the Plastic Bottle and "BOO" for the Ninja — a parallel list
+   * drifting from the game, which is the exact failure that made the whole
+   * character-select screen a placebo. Derived now.
+   */
   static label(item: ItemType): string {
-    switch (item) {
-      case ItemType.Boost: return 'MUSHROOM';
-      case ItemType.TripleBoost: return 'TRIPLE MUSHROOM';
-      case ItemType.GreenShell: return 'GREEN SHELL';
-      case ItemType.TripleGreenShell: return 'TRIPLE GREEN';
-      case ItemType.RedShell: return 'RED SHELL';
-      case ItemType.TripleRedShell: return 'TRIPLE RED';
-      case ItemType.Banana: return 'BANANA';
-      case ItemType.TripleBanana: return 'TRIPLE BANANA';
-      case ItemType.Bomb: return 'BOB-OMB';
-      case ItemType.Star: return 'STAR';
-      case ItemType.Lightning: return 'LIGHTNING';
-      case ItemType.Ghost: return 'BOO';
-      case ItemType.Bullet: return 'BULLET';
-      case ItemType.BlueShell: return 'BLUE SHELL';
-      case ItemType.Coin: return 'COIN';
-      case ItemType.Squid: return 'SQUID';
-      default: return 'ITEM';
-    }
+    return (ITEM_NAMES[item] ?? 'ITEM').toUpperCase();
   }
 
-  /** The full roulette order. */
-  static readonly ROULETTE: readonly ItemType[] = [
-    ItemType.Boost, ItemType.GreenShell, ItemType.Banana, ItemType.RedShell,
-    ItemType.Star, ItemType.Bomb, ItemType.Coin, ItemType.Lightning,
-    ItemType.Ghost, ItemType.Squid, ItemType.TripleBanana, ItemType.Bullet,
-  ];
+  /**
+   * Roulette spin order — the items module's live set, in its own reading order.
+   *
+   * The old hardcoded array listed twelve kinds including `Lightning` and
+   * `Squid`, both now REMOVED, and `TripleBanana`, now unreachable. The reel
+   * would have spun through icons for items no roll can ever produce.
+   */
+  static get ROULETTE(): readonly ItemType[] { return LIVE_ITEMS; }
 
   private paint(item: ItemType): HTMLCanvasElement {
     const S = this.size;

@@ -171,6 +171,12 @@ export class Game {
     engine.setRenderCallback((dt) => this.pipeline.render(dt));
     wire(this.vfx, 'setPipeline', this.pipeline);
     wire(this.hud, 'setAudio', this.audio);
+    // Without this the HUD never receives the items module, so `ItemIcons` never
+    // calls `useAtlas()` and silently falls back to its own procedural drawings.
+    // That fallback is the OLD item art, so after the item re-skin the HUD showed
+    // a banana for the Plastic Bottle and a mushroom for the Battery. `setItems`
+    // and `useAtlas` both existed and were fully plumbed; nothing ever called them.
+    wire(this.hud, 'setItems', this.items);
     wire(this.menus, 'setAudio', this.audio);
     this.progress(++n, steps, 'Ready');
 

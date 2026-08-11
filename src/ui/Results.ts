@@ -56,6 +56,7 @@ export class Results {
   private audio: AudioLike | null = null;
 
   private confettiBox: HTMLDivElement;
+  private inner: HTMLDivElement;
   private title: HTMLElement;
   private podium: HTMLDivElement;
   private table: HTMLDivElement;
@@ -74,14 +75,21 @@ export class Results {
     this.audio = audio ?? null;
     this.el = el('div', 'ak-results');
     this.confettiBox = el('div', 'ak-confetti', this.el);
+    // Everything measurable lives in ONE inner column, so `ui.css` can centre it
+    // with `margin: auto 0` instead of `justify-content: center`. Auto margins
+    // collapse to zero when there is no free space, whereas centring an
+    // over-tall column pushes half the overflow off the TOP of the frame — which
+    // is exactly how the title, the whole podium and the first table row left
+    // the screen on the Grand Prix board.
+    this.inner = el('div', 'ak-results__inner', this.el);
     this.title = numeral('RESULTS', { tone: 'gold', className: 'ak-results__title' });
-    this.el.appendChild(this.title);
-    this.podium = el('div', 'ak-podium', this.el);
-    this.table = el('div', 'ak-results__table', this.el);
-    this.standBox = el('div', 'ak-stand-wrap', this.el);
-    this.standTitle = el('div', 'ak-head__sub', this.standBox, 'GRAND PRIX STANDINGS');
+    this.inner.appendChild(this.title);
+    this.podium = el('div', 'ak-podium', this.inner);
+    this.table = el('div', 'ak-results__table', this.inner);
+    this.standBox = el('div', 'ak-stand-wrap', this.inner);
+    this.standTitle = el('div', 'ak-stand__head', this.standBox, 'GRAND PRIX STANDINGS');
     this.stand = el('div', 'ak-stand', this.standBox);
-    this.buttons = el('div', 'ak-buttons', this.el);
+    this.buttons = el('div', 'ak-buttons', this.inner);
     container.appendChild(this.el);
   }
 
@@ -131,7 +139,9 @@ export class Results {
     el('span', undefined, head, '');
     el('span', undefined, head, 'RACER');
     el('span', undefined, head, 'TOTAL');
-    el('span', undefined, head, 'BEST LAP');
+    // 'BEST LAP' at the legibility floor is wider than its `--u`-sized column on
+    // a short viewport, and wrapping it doubled the header row's height.
+    el('span', undefined, head, 'BEST');
     el('span', undefined, head, 'PTS');
 
     for (let i = 0; i < sorted.length; i++) {

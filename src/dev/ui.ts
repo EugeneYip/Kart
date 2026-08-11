@@ -19,8 +19,31 @@
  *    sweep()                audit() across all 4 sizes x positions 1..12
  *    table()                the sweep as a printable text table
  *    bench(n)               measured HUD cost per frame
+ *    board()                RESULTS board containment — does it fit the frame?
+ *    fonts() / fontTable()  computed font size of every text-bearing class
+ *    screens()              every menu screen: containment + clipped parts
+ *    showScreen(id) / closeMenus()
+ *    state(id)              one of the 7 race states
+ *    items()                the HUD's item reel, as derived from `src/items/*`
+ *    matrix()               EVERYTHING: 7 states x 4 viewports x 12 positions,
+ *                           + both results boards x 3 positions, + 9 menu
+ *                           screens, all x 4 viewports. 396 configurations.
+ *
+ *  What `matrix()` measures, and why each one exists:
+ *    - `scrollWidth <= clientWidth` and precise child-ink overflow (P0-4)
+ *    - every element rect inside the viewport
+ *    - no two persistent HUD rects intersecting
+ *    - the RESULTS board and every MENU screen contained. These are `inset: 0`
+ *      flex columns, so their own rect always reports as the viewport however
+ *      far the content spills — measure the FLEX ITEMS or you measure nothing.
+ *      That blind spot is why a Grand Prix board at 150 % of an 800x450 frame,
+ *      losing 112.9 px off the top, passed a 340-configuration audit.
  *
  *  Delete this file once the HUD work is signed off.
+ *
+ *  NO BROWSER REQUIRED. `.probe-tmp/wkrun.swift` drives this page in an
+ *  off-screen WKWebView (real WebKit layout, no window, no preview pane):
+ *      .probe-tmp/wkrun http://localhost:5173/src/dev/ui.html 1280 720 probe.js
  * ============================================================================
  */
 
@@ -28,9 +51,11 @@ import * as THREE from 'three';
 import { DriftStage, ItemType, SurfaceType } from '@/core/Types';
 import type { FrameContext, KartState, QualitySettings } from '@/core/Types';
 import { HUD } from '@/ui/HUD';
+import { MenuSystem } from '@/ui/MenuSystem';
 import { Results } from '@/ui/Results';
-import type { ResultRow } from '@/ui/Results';
-import { uiScale } from '@/ui/Widgets';
+import type { ResultRow, StandingRow } from '@/ui/Results';
+import { ItemIcons, uiScale } from '@/ui/Widgets';
+import type { GameLike } from '@/ui/Widgets';
 
 // ===========================================================================
 // Stubs
@@ -155,8 +180,19 @@ const engine = {
 const hud = new HUD(stage, karts, race, track, engine);
 const results = new Results(stage);
 
-/** The post-race board shares `--u` and the same clip-vs-outline hazard. */
-function showResults(playerPos = 12): void {
+/** MK8's points table, as `MenuSystem` awards it. */
+const POINTS = [15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+
+/**
+ * The post-race board shares `--u` and the same clip-vs-outline hazard.
+ *
+ * `gp` reproduces the **Grand Prix** payload — the same `standings` array
+ * `MenuSystem.onRaceComplete()` passes for `mode === 'gp'`, which is the DEFAULT
+ * mode and therefore the common case, not an exotic one. Measuring only the
+ * versus board (no standings) is how a board 44 % taller than the frame went
+ * unnoticed.
+ */
+function showResults(playerPos = 12, gp = true): void {
   const rows: ResultRow[] = [];
   for (let i = 0; i < 12; i++) {
     rows.push({
@@ -165,12 +201,48 @@ function showResults(playerPos = 12): void {
       name: i + 1 === playerPos ? 'YOU' : RACER_NAMES[i % RACER_NAMES.length],
       time: 214.3 + i * 1.87,
       bestLap: 41.882 + i * 0.31,
-      points: Math.max(0, 15 - i),
+      points: POINTS[i] ?? 0,
       isPlayer: i + 1 === playerPos,
       color: undefined,
     });
   }
-  results.show(rows, { title: 'RESULTS' });
+  const standings: StandingRow[] = gp
+    ? rows.map((r) => ({
+      kartId: r.kartId,
+      name: r.name,
+      points: (r.points ?? 0) * 2 + 3,      // two races in, so two-digit points
+      isPlayer: r.isPlayer,
+      color: r.color,
+    }))
+    : [];
+  results.show(rows, {
+    title: gp ? 'RACE 3 RESULTS' : 'RESULTS',
+    standings,
+    nextLabel: gp ? 'NEXT RACE' : 'FINISH',
+    onNext: () => { /* measured, never clicked */ },
+    onRetry: () => { /* measured, never clicked */ },
+    onQuit: () => { /* measured, never clicked */ },
+  });
+}
+
+// ===========================================================================
+// Menus
+// ===========================================================================
+//
+// Mounted so the MENU text sizes are measurable too: the 4-5 px supporting copy
+// lives on classes that only `MenuSystem` builds, and `getComputedStyle`
+// resolves `calc(N * var(--u))` on a hidden screen just as well as a visible
+// one — so every screen can be measured without showing any of it.
+//
+// Wrapped, because the roster/chassis/circuit tables it derives from live in
+// other agents' files; a broken sibling must not take the HUD audit with it.
+//
+const game: GameLike = { engine, karts, race, track, hud };
+let menu: MenuSystem | null = null;
+try {
+  menu = new MenuSystem(stage, game);
+} catch (err) {
+  console.warn('[ui-harness] MenuSystem did not mount — menu measurements skipped:', err);
 }
 
 // ===========================================================================
@@ -593,6 +665,9 @@ function setSize(w: number, h: number): void {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   hud.resize(w, h);
+  // Both consumers write the same `--ak-u`; drive them together or whichever
+  // ran last wins and the measurement is of a scale nothing asked for.
+  menu?.resize(w, h);
   frame(0.0166);
 }
 
@@ -771,6 +846,427 @@ function noJsScale(): { u: number; expectedForWindow: number; plateW: number; pl
 }
 
 // ===========================================================================
+// Results board / menu screens — VERTICAL containment
+// ===========================================================================
+//
+// `.ak-results` and `.ak-screen` are both `position: fixed; inset: 0` flex
+// COLUMNS with `justify-content: center`. Centring an over-tall column splits
+// the overflow between the two ends, so the first child (the title) leaves the
+// top of the frame and the last row leaves the bottom — the board is
+// "incomplete, with the top portion off the screen". Nothing in the old audit
+// looked at it: `TEXT_SEL`/`BLOCK_SEL` are HUD widgets only.
+//
+// Measured on the FLEX ITEMS, not on `.ak-results` itself: the root is
+// `inset: 0`, so its own rect always reports as exactly the viewport however far
+// its content spills. That is precisely why this was invisible.
+
+/** Direct children that actually take part in the column's layout. */
+function flowChildren(root: Element): Element[] {
+  const out: Element[] = [];
+  for (const c of Array.from(root.children)) {
+    const s = getComputedStyle(c);
+    if (s.position === 'absolute' || s.position === 'fixed') continue;
+    if (!visible(c)) continue;
+    out.push(c);
+  }
+  return out;
+}
+
+export interface FitReport {
+  /** What was measured — `results`, or a menu screen id. */
+  what: string;
+  size: string;
+  shown: boolean;
+  /** Union height of the in-flow children, CSS px. */
+  contentH: number;
+  vpH: number;
+  /** contentH / vpH as a percentage. >100 cannot fit. */
+  fillPct: number;
+  /** How far the content escapes each edge of the frame. 0 = contained. */
+  offTop: number;
+  offBottom: number;
+  offLeft: number;
+  offRight: number;
+  /** The elements that are actually outside, worst first. */
+  clipped: Array<{ sel: string; by: string }>;
+  pass: boolean;
+}
+
+function fitOf(what: string, root: Element | null, extraSel: readonly string[]): FitReport {
+  const vp = rectOf(stage);
+  const base: FitReport = {
+    what,
+    size: `${Math.round(vp.w)}x${Math.round(vp.h)}`,
+    shown: false,
+    contentH: 0, vpH: +vp.h.toFixed(1), fillPct: 0,
+    offTop: 0, offBottom: 0, offLeft: 0, offRight: 0,
+    clipped: [], pass: true,
+  };
+  if (!root) return base;
+  // A board or screen is revealed by an OPACITY TRANSITION. Until a style recalc
+  // has run the transition is not in `getAnimations()` yet and the computed
+  // opacity is still 0 — so `visible()` would report the whole board hidden and
+  // the measurement would silently be of nothing. Flush, freeze, flush again
+  // (finishing one animation can start the next).
+  for (let i = 0; i < 2; i++) {
+    void (root as HTMLElement).offsetHeight;
+    freezeAnims();
+  }
+  void (root as HTMLElement).offsetHeight;
+  const kids = flowChildren(root);
+  if (kids.length === 0) return base;
+
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  for (const k of kids) {
+    const kr = k.getBoundingClientRect();
+    l = Math.min(l, kr.left); t = Math.min(t, kr.top);
+    r = Math.max(r, kr.right); b = Math.max(b, kr.bottom);
+  }
+
+  // Per-element detail: which named parts are off-frame, and by how much.
+  const clipped: Array<{ sel: string; by: string }> = [];
+  for (const sel of extraSel) {
+    const els = Array.from(root.querySelectorAll(sel));
+    // Both ends of a repeated row matter: the head row is the top of the table,
+    // the last row is the player's own at 11TH/12TH.
+    const probes = els.length > 2 ? [els[0], els[els.length - 1]] : els;
+    for (const e of probes) {
+      if (!visible(e)) continue;
+      const er = e.getBoundingClientRect();
+      const dt = vp.t - er.top, db = er.bottom - vp.b;
+      const dl = vp.l - er.left, dr = er.right - vp.r;
+      if (Math.max(dt, db, dl, dr) > 0.5) {
+        clipped.push({
+          sel: `${sel}${els.length > 2 ? (e === els[0] ? '[first]' : '[last]') : ''}`,
+          by: `t${dt > 0.5 ? dt.toFixed(1) : 0} b${db > 0.5 ? db.toFixed(1) : 0} `
+            + `l${dl > 0.5 ? dl.toFixed(1) : 0} r${dr > 0.5 ? dr.toFixed(1) : 0}`,
+        });
+      }
+    }
+  }
+
+  const offTop = Math.max(0, vp.t - t);
+  const offBottom = Math.max(0, b - vp.b);
+  return {
+    what,
+    size: base.size,
+    shown: true,
+    contentH: +(b - t).toFixed(1),
+    vpH: base.vpH,
+    fillPct: +((b - t) / vp.h * 100).toFixed(1),
+    offTop: +offTop.toFixed(1),
+    offBottom: +offBottom.toFixed(1),
+    offLeft: +Math.max(0, vp.l - l).toFixed(1),
+    offRight: +Math.max(0, r - vp.r).toFixed(1),
+    clipped,
+    pass: offTop <= 0.5 && offBottom <= 0.5 && (vp.l - l) <= 0.5 && (r - vp.r) <= 0.5,
+  };
+}
+
+const BOARD_PARTS = [
+  '.ak-results__title', '.ak-podium', '.ak-podium__col', '.ak-results__table',
+  '.ak-rrow', '.ak-stand-wrap', '.ak-stand', '.ak-stand__chip', '.ak-buttons', '.ak-btn',
+] as const;
+
+/** Containment of whichever results board is currently on screen. */
+function board(): FitReport {
+  return fitOf('results', stage.querySelector('.ak-results--on'), BOARD_PARTS);
+}
+
+const SCREEN_PARTS = [
+  '.ak-head', '.ak-head__title', '.ak-head__sub', '.ak-list', '.ak-item-row',
+  '.ak-grid', '.ak-card', '.ak-stats', '.ak-stat', '.ak-hints', '.ak-hint',
+  '.ak-logo', '.ak-press', '.ak-controls-table', '.ak-cc',
+] as const;
+
+const SCREEN_IDS = ['title', 'main', 'chars', 'karts', 'tracks', 'cc', 'options', 'controls', 'pause'] as const;
+
+/** Every menu screen, at the current stage size. */
+function screens(): FitReport[] {
+  const rows: FitReport[] = [];
+  if (!menu) return rows;
+  for (const id of SCREEN_IDS) {
+    menu.show(id);
+    settle(3);
+    const root = stage.querySelector(`.ak-screen--on[data-screen="${id}"]`);
+    rows.push(fitOf(id, root, SCREEN_PARTS));
+  }
+  return rows;
+}
+
+/** Put the HUD back after `screens()` — `MenuSystem.show()` hides it. */
+function closeMenus(): void {
+  if (!menu) return;
+  menu.show('title');
+  hud.setMenuActive(false);
+  hud.setVisible(true);
+  settle(3);
+}
+
+// ===========================================================================
+// Type size
+// ===========================================================================
+//
+// Every size in `ui.css` is `calc(N * var(--u))` and `--u` is one design pixel
+// at 1920x1080, so supporting copy authored at a perfectly reasonable 10-13
+// design px lands at 4-5 CSS px in an 800x450 frame. That is below the point
+// where a glyph has enough pixels to be a glyph, so the numbers below are the
+// defect — no screenshot needed to know 4.17 px is unreadable.
+
+const FONT_SEL = [
+  // menu chrome
+  '.ak-head__title', '.ak-head__sub', '.ak-logo__sub', '.ak-press',
+  '.ak-item-row__label', '.ak-item-row__hint', '.ak-item-row__value',
+  '.ak-card__name', '.ak-card__tag', '.ak-cc__sub',
+  '.ak-stats__name', '.ak-stats__sub', '.ak-stat__k', '.ak-stat__v',
+  '.ak-hint', '.ak-key', '.ak-controls-table',
+  // results
+  '.ak-results__title', '.ak-rrow--head', '.ak-rrow__name', '.ak-rrow__time',
+  '.ak-rrow__best', '.ak-rrow__pts', '.ak-podium__name', '.ak-btn',
+  '.ak-stand__pos', '.ak-stand__name', '.ak-stand__pts',
+  // hud
+  '.ak-lap__label', '.ak-lap__tot', '.ak-timer__k', '.ak-timer__v',
+  '.ak-rival__name', '.ak-rival__gap', '.ak-rival__pos', '.ak-speed__unit',
+  '.ak-drift__label', '.ak-item__count', '.ak-map__label',
+  '.ak-plate3d__name', '.ak-warn__blue-sub',
+] as const;
+
+export interface FontRow {
+  sel: string;
+  /** Computed font-size in CSS px. -1 when no element of that class exists. */
+  px: number;
+  /** The authored multiple of `--u`, recovered from px / u. */
+  u: number;
+  present: boolean;
+}
+
+/** Minimum size at which a 900-weight, letter-spaced label is still readable. */
+const LEGIBLE_PX = 11;
+
+function fonts(): FontRow[] {
+  const u = measureU();
+  const rows: FontRow[] = [];
+  for (const sel of FONT_SEL) {
+    const e = stage.querySelector(sel);
+    if (!e) { rows.push({ sel, px: -1, u: -1, present: false }); continue; }
+    const px = parseFloat(getComputedStyle(e).fontSize) || 0;
+    rows.push({ sel, px: +px.toFixed(2), u: +(px / u).toFixed(1), present: true });
+  }
+  rows.sort((a, b) => a.px - b.px);
+  return rows;
+}
+
+function fontTable(): string {
+  const lines: string[] = [];
+  // The results rows, podium labels, buttons and standings chips are built by
+  // `show()`, so without a board on screen every one of them reports "absent"
+  // and silently drops out of the table.
+  showResults(12, true);
+  for (const [w, h] of SIZES) {
+    setSize(w, h);
+    settle(2);
+    const u = measureU();
+    const rows = fonts().filter((r) => r.present);
+    const bad = rows.filter((r) => r.px < LEGIBLE_PX);
+    lines.push(`--- ${w}x${h}   --u ${u.toFixed(4)}px   ${bad.length}/${rows.length} classes below ${LEGIBLE_PX}px ---`);
+    for (const r of rows) {
+      lines.push(`  ${r.sel.padEnd(24)} ${r.px.toFixed(2).padStart(7)} px  (${String(r.u).padStart(5)}u)`
+        + (r.px < LEGIBLE_PX ? '  <-- ILLEGIBLE' : ''));
+    }
+  }
+  results.hide();
+  return lines.join('\n');
+}
+
+// ===========================================================================
+// Item set
+// ===========================================================================
+//
+// The HUD's item names, icons and reel order are DERIVED from the items module,
+// not retyped — so this reports what the HUD will actually show. Run it after any
+// change to the item set: if the reel still lists something that was removed, or
+// a label still reads "MUSHROOM" instead of "BATTERY", it shows up here.
+
+export interface ItemReport {
+  reel: Array<{ id: number; label: string; icon: boolean }>;
+  triples: number[];
+}
+
+function items(): ItemReport {
+  return {
+    reel: ItemIcons.ROULETTE.map((it) => ({
+      id: it as number,
+      label: ItemIcons.label(it),
+      // A real painted icon, not the blank fallback.
+      icon: new ItemIcons(64).url(it).length > 64,
+    })),
+    triples: ItemIcons.ROULETTE.filter((it) => ItemIcons.isTriple(it)).map((it) => it as number),
+  };
+}
+
+// ===========================================================================
+// Race states
+// ===========================================================================
+
+type StateId = 'countdown' | 'racing' | 'drift' | 'boost' | 'item3' | 'blue' | 'finalLap';
+
+/**
+ * Clear every timed overlay so each state in the sweep is measured on its own.
+ *
+ * The blue-shell overlay needs BOTH writes and in this order: the display test is
+ * `threat === 'blue' || blueUntil > 0`, so expiring the clock first and then
+ * dropping the threat kind is the only sequence that actually turns it off. Get
+ * it the other way round and every later configuration is measured with a
+ * full-frame vignette still up.
+ */
+function resetTransients(): void {
+  race.raceTime = 74.312;
+  hud.warn('blue', Math.PI, -1000);
+  hud.warn('none');
+  stage.querySelector('.ak-countdown')?.classList.remove('ak-countdown--on');
+  stage.querySelector('.ak-banner')?.classList.remove('ak-banner--on');
+  frame(0.0166);
+}
+
+/** The seven HUD configurations the sweep has to cover. */
+function setState2(id: StateId): void {
+  const p = KARTS[0];
+  // Reset the busy pose, then apply this state's deltas.
+  poseBusy();
+  race.state = 'racing';
+  resetTransients();
+  switch (id) {
+    case 'countdown':
+      race.state = 'countdown';
+      hud.showCountdown(2);
+      break;
+    case 'racing':
+      p.drifting = false; p.driftStage = DriftStage.None; p.driftCharge = 0;
+      p.boostTime = 0; p.heldItem = null; p.itemCount = 0;
+      break;
+    case 'drift':
+      p.drifting = true; p.driftStage = DriftStage.Orange; p.driftCharge = 0.9;
+      break;
+    case 'boost':
+      p.boostTime = 1.7; p.boostStrength = 1;
+      break;
+    case 'item3':
+      p.heldItem = ItemType.TripleRedShell; p.itemCount = 3;
+      break;
+    case 'blue':
+      hud.warn('blue', Math.PI, 6);
+      break;
+    case 'finalLap':
+      p.lap = 3;
+      hud.showBanner('FINAL LAP!', 'gold');
+      break;
+    default:
+      break;
+  }
+  settle(3);
+}
+
+const STATES: readonly StateId[] = ['countdown', 'racing', 'drift', 'boost', 'item3', 'blue', 'finalLap'];
+
+export interface Matrix {
+  configs: number;
+  overflow: number;
+  clippedInk: number;
+  intersections: number;
+  outsideViewport: number;
+  boards: number;
+  boardsClipped: number;
+  screens: number;
+  screensClipped: number;
+  worstCut: number;
+  worstInk: number;
+  fails: string[];
+}
+
+/**
+ * The whole matrix in one call: 7 race states x 4 viewports x 12 positions,
+ * plus both results boards (versus + grand prix) and every menu screen at every
+ * viewport. This is the number to quote.
+ */
+function matrix(): Matrix {
+  const m: Matrix = {
+    configs: 0, overflow: 0, clippedInk: 0, intersections: 0, outsideViewport: 0,
+    boards: 0, boardsClipped: 0, screens: 0, screensClipped: 0,
+    worstCut: 0, worstInk: 0, fails: [],
+  };
+  results.hide();
+  closeMenus();
+  hud.setMenuActive(false);
+  hud.setVisible(true);
+
+  for (const [w, h] of SIZES) {
+    setSize(w, h);
+    for (const st of STATES) {
+      setState2(st);
+      for (let pos = 1; pos <= 12; pos++) {
+        setPos(pos);
+        const a = audit();
+        m.configs++;
+        const over = a.overflow.filter((o) => !o.ok).length;
+        m.overflow += over;
+        m.clippedInk += a.clips.length;
+        m.intersections += a.overlaps.length;
+        m.outsideViewport += a.outside.length;
+        m.worstCut = Math.max(m.worstCut, a.worstCut);
+        m.worstInk = Math.max(m.worstInk, a.worstInk);
+        if (!a.pass) {
+          m.fails.push(`${a.size} ${st} pos${pos}: `
+            + `${over ? `overflow ${a.overflow.filter((o) => !o.ok).map((o) => o.sel).join(',')} ` : ''}`
+            + `${a.clips.length ? `cut ${a.worstCut}px ` : ''}`
+            + `${a.outside.length ? `outside ${a.outside.map((o) => `${o.sel}(${o.by})`).join(',')} ` : ''}`
+            + `${a.overlaps.length ? `overlap ${a.overlaps.map((o) => `${o.a}/${o.b}`).join(',')}` : ''}`);
+        }
+      }
+    }
+  }
+
+  // --- results boards ---------------------------------------------------
+  poseBusy();
+  for (const [w, h] of SIZES) {
+    setSize(w, h);
+    for (const gp of [false, true]) {
+      for (const pos of [1, 11, 12]) {
+        showResults(pos, gp);
+        settle(4);
+        const f = board();
+        m.boards++;
+        if (!f.pass) {
+          m.boardsClipped++;
+          m.fails.push(`${f.size} results${gp ? '(gp)' : '(vs)'} pos${pos}: `
+            + `fill ${f.fillPct}% offTop ${f.offTop} offBottom ${f.offBottom} `
+            + `[${f.clipped.slice(0, 4).map((c) => `${c.sel} ${c.by}`).join('; ')}]`);
+        }
+        results.hide();
+        settle(2);
+      }
+    }
+  }
+
+  // --- menu screens ------------------------------------------------------
+  if (menu) {
+    for (const [w, h] of SIZES) {
+      setSize(w, h);
+      for (const f of screens()) {
+        m.screens++;
+        if (!f.pass) {
+          m.screensClipped++;
+          m.fails.push(`${f.size} screen:${f.what}: fill ${f.fillPct}% `
+            + `offTop ${f.offTop} offBottom ${f.offBottom} `
+            + `[${f.clipped.slice(0, 4).map((c) => `${c.sel} ${c.by}`).join('; ')}]`);
+        }
+      }
+    }
+    closeMenus();
+  }
+  return m;
+}
+
+// ===========================================================================
 // Boot
 // ===========================================================================
 
@@ -782,7 +1278,7 @@ interface UiQa {
   setState(s: string): void;
   setPath(space: 'unit' | 'world' | 'none'): void;
   reset(): void;
-  results(playerPos?: number): void;
+  results(playerPos?: number, gp?: boolean): void;
   hideResults(): void;
   frame(dt?: number): void;
   settle(n?: number): void;
@@ -798,6 +1294,17 @@ interface UiQa {
   noJsScale(): { u: number; expectedForWindow: number; plateW: number; platePctOfWindow: number };
   mapPixels(): { canvasPx: number; dotPixels: number; placeable: boolean };
   plateSpread(): { shown: number; minGapY: number; collisions: number };
+  // --- added for D6 -------------------------------------------------------
+  board(): FitReport;
+  screens(): FitReport[];
+  showScreen(id: string): void;
+  closeMenus(): void;
+  fonts(): FontRow[];
+  fontTable(): string;
+  state(id: StateId): void;
+  matrix(): Matrix;
+  items(): ItemReport;
+  u(): number;
 }
 
 /**
@@ -888,6 +1395,12 @@ async function boot(): Promise<void> {
   button('bench', () => { out.textContent = JSON.stringify(bench(), null, 2); });
   button('map dots', () => { out.textContent = JSON.stringify(mapPixels(), null, 2); });
   button('nameplates', () => { out.textContent = JSON.stringify(plateSpread(), null, 2); });
+  button('results VS', () => { showResults(12, false); settle(4); out.textContent = JSON.stringify(board(), null, 2); });
+  button('results GP', () => { showResults(12, true); settle(4); out.textContent = JSON.stringify(board(), null, 2); });
+  button('FONTS', () => { out.textContent = fontTable(); });
+  button('SCREENS', () => { out.textContent = screens().map((f) => JSON.stringify(f)).join('\n'); closeMenus(); });
+  button('MATRIX', () => { out.textContent = JSON.stringify(matrix(), null, 2); });
+  button('items', () => { out.textContent = JSON.stringify(items(), null, 2); });
 
   const api: UiQa = {
     hud, karts: KARTS,
@@ -895,13 +1408,17 @@ async function boot(): Promise<void> {
     setState: (s: string) => { race.state = s; frame(); },
     setPath: (space) => { pathSpace = space; hud.refreshTrackPath(); frame(); },
     reset: () => { poseKarts(); poseBusy(); settle(4); },
-    results: (playerPos = 12) => showResults(playerPos),
+    results: (playerPos = 12, gp = true) => showResults(playerPos, gp),
     hideResults: () => results.hide(),
     frame, settle,
     countdown: (n: number) => hud.showCountdown(n),
     finalLap: () => hud.showBanner('FINAL LAP!', 'gold'),
     blue: () => hud.warn('blue', Math.PI, 6),
     audit, sweep, table, summary, detail, bench, noJsScale, mapPixels, plateSpread,
+    board, screens, closeMenus, fonts, fontTable, matrix, items,
+    showScreen: (id: string) => { menu?.show(id as Parameters<MenuSystem['show']>[0]); settle(3); },
+    state: (id: StateId) => setState2(id),
+    u: measureU,
   };
   (window as unknown as { __UIQA__: UiQa }).__UIQA__ = api;
 

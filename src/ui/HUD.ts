@@ -639,11 +639,11 @@ export class HUD implements ISubsystem {
       this.threat = 'none';
       this.threatUntil = -1;
       this.blueUntil = -1;
-      const label = item === ItemType.Banana ? 'SLIPPED!'
-        : item === ItemType.Lightning ? 'ZAPPED!'
-        : item === ItemType.Squid ? 'BLINDED!'
-        : 'SPUN OUT!';
-      this.showMessage(label, 1.2);
+      // `Banana` is the Plastic Bottle — you skid on it rather than spin out.
+      // The old chain also had `Lightning` -> 'ZAPPED!' and `Squid` ->
+      // 'BLINDED!'; both items have been REMOVED, so those were two branches
+      // that could never be reached again.
+      this.showMessage(item === ItemType.Banana ? 'SKIDDED!' : 'SPUN OUT!', 1.2);
     }));
 
     own(bus.on('kart:driftTier', ({ kartId, tier }) => {
@@ -1047,10 +1047,14 @@ export class HUD implements ISubsystem {
       const interval = 0.035 + 0.2 * (k * k);
       if (r.next <= 0) {
         r.next = interval;
-        r.index = (r.index + 1) % ItemIcons.ROULETTE.length;
-        const it = r.target !== null && k > 0.82
+        // `ROULETTE` is the items module's live set now, so its length is data.
+        // Guard the modulo: an empty set would make this NaN and hand `apply()`
+        // an undefined item for the rest of the race.
+        const reel = ItemIcons.ROULETTE;
+        r.index = reel.length > 0 ? (r.index + 1) % reel.length : 0;
+        const it = (r.target !== null && k > 0.82
           ? r.target
-          : ItemIcons.ROULETTE[r.index];
+          : reel[r.index]) ?? ItemType.Boost;
         this.icons.apply(this.itemIconEls[0], it);
         if (typeof this.itemIconEls[0].animate === 'function') {
           this.itemIconEls[0].animate(

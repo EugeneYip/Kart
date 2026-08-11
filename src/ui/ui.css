@@ -36,6 +36,27 @@
      min() of the two keeps the HUD inside the frame at any aspect ratio. */
   --u: var(--ak-u, clamp(0.34px, min(0.0926vh, 0.0651vw), 1.55px));
 
+  /* LEGIBILITY FLOOR — every informational label reads
+        font-size: max(var(--u-min), calc(N * var(--u)));
+     `--u` is one design pixel at 1920x1080, so supporting copy authored at a
+     perfectly sane 10-13 design px lands at 4.17-5.42 CSS px in an 800x450
+     frame: below the size at which a 900-weight, 0.16em-tracked glyph has
+     enough pixels left to be a glyph at all. Measured before this floor, 27 of
+     31 text classes were under 11 px at 800x450 against a 19.17 px `h1`.
+
+     This is NOT a breakpoint and must not become one. It keys off the same
+     container-derived `--u` as everything else, so there is still exactly one
+     scale input and still nothing anywhere that keys off the WINDOW — which is
+     the specific mistake that made the rival tracker vanish from a full-size
+     HUD in an embedded canvas. `max()` is a per-property clamp; it introduces
+     no second layout regime and no viewport threshold.
+
+     Applies to every `font-size` authored at 26u or below (26u x 0.4167 =
+     10.8 px, the last size that still falls under the floor at 800x450).
+     Anything larger is already legible everywhere and stays purely
+     proportional. */
+  --u-min: 11px;
+
   --ak-font: system-ui, -apple-system, "SF Pro Display", "Segoe UI Variable Display",
     "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
 
@@ -187,7 +208,27 @@
    HUD root
    ========================================================================= */
 
+/* THE IN-RACE HUD IS EXEMPT FROM THE LEGIBILITY FLOOR — measured decision.
+   Every HUD label sits in a box whose width and height are `--u`-derived: the
+   rival badge is a 26u square, the nameplate is a fixed 116u tag, the drift
+   label is pinned 17u above its bar. Floor the text and the text outgrows the
+   box. Measured across 336 configurations (7 race states x 4 viewports x 12
+   positions): `--u-min: 0` gives 0 overflow, 7px gives 2, 8px gives 4, 11px
+   gives 10, with up to 18.3 px of ink escaping `.ak-drift`. Making all ~14
+   widgets floor-aware means re-deriving their geometry from their own font size
+   — a redesign of the HUD's layout model, not a fix, and it would break the
+   proportional invariant the P0-4 pass established and measured (position plate
+   at 8.79 % of frame width at every viewport).
+
+   The menus and the results board carry the floor instead, because their layout
+   is content-sized and simply grows to accommodate it — verified, they fit.
+
+   Legibility at a small frame is genuinely worse here than in the menus. If the
+   owner wants it anyway, change this one value and run
+   `__UIQA__.matrix()`: it will name every widget that breaks. Do NOT reach for a
+   media query — see the note at the foot of this file. */
 .ak-hud {
+  --u-min: 0px;
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -244,7 +285,7 @@
   transform-origin: left center;
 }
 .ak-lap__label {
-  font-size: calc(21 * var(--u));
+  font-size: max(var(--u-min), calc(21 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.14em;
   color: #a9c8ef;
@@ -291,24 +332,24 @@
   gap: calc(12 * var(--u));
 }
 .ak-timer__k {
-  font-size: calc(11 * var(--u));
+  font-size: max(var(--u-min), calc(11 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.2em;
   color: rgba(168, 198, 236, 0.75);
 }
 .ak-timer__v {
-  font-size: calc(24 * var(--u));
+  font-size: max(var(--u-min), calc(24 * var(--u)));
   font-weight: 850;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   color: #f2f8ff;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.7);
 }
-.ak-timer__row--sub .ak-timer__v { font-size: calc(16 * var(--u)); color: #b9d3f4; }
+.ak-timer__row--sub .ak-timer__v { font-size: max(var(--u-min), calc(16 * var(--u))); color: #b9d3f4; }
 .ak-timer__delta {
   align-self: flex-end;
   margin-top: calc(3 * var(--u));
-  font-size: calc(16 * var(--u));
+  font-size: max(var(--u-min), calc(16 * var(--u)));
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   padding: calc(1 * var(--u)) calc(8 * var(--u));
@@ -365,7 +406,7 @@
   40%  { transform: rotateY(360deg) scale(1.45); }
   100% { transform: rotateY(720deg) scale(1); }
 }
-.ak-coins__num { font-size: calc(26 * var(--u)); --ak-fill-a: #fffbe6; --ak-fill-b: #ffd447; --ak-fill-c: #d68a06; }
+.ak-coins__num { font-size: max(var(--u-min), calc(26 * var(--u))); --ak-fill-a: #fffbe6; --ak-fill-b: #ffd447; --ak-fill-c: #d68a06; }
 
 /* =========================================================================
    Item slot
@@ -460,7 +501,7 @@
   min-width: calc(38 * var(--u));
   padding: calc(1 * var(--u)) calc(7 * var(--u)) calc(3 * var(--u));
   text-align: center;
-  font-size: calc(23 * var(--u));
+  font-size: max(var(--u-min), calc(23 * var(--u)));
   font-weight: 900;
   color: #08101f;
   background: linear-gradient(180deg, #ffffff, #ffd447 70%, #f0a713);
@@ -494,7 +535,7 @@
   position: absolute;
   top: calc(6 * var(--u));
   left: calc(10 * var(--u));
-  font-size: calc(10 * var(--u));
+  font-size: max(var(--u-min), calc(10 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.22em;
   color: rgba(160, 195, 240, 0.6);
@@ -527,7 +568,7 @@
   display: grid;
   place-items: center;
   border-radius: calc(8 * var(--u));
-  font-size: calc(14 * var(--u));
+  font-size: max(var(--u-min), calc(14 * var(--u)));
   font-weight: 900;
   color: #08101f;
   background: linear-gradient(180deg, #e8f3ff, #92b6e2);
@@ -535,7 +576,7 @@
 .ak-rival__swatch { width: calc(6 * var(--u)); height: calc(20 * var(--u)); border-radius: calc(3 * var(--u)); }
 .ak-rival__name {
   flex: 1;
-  font-size: calc(14 * var(--u));
+  font-size: max(var(--u-min), calc(14 * var(--u)));
   font-weight: 850;
   letter-spacing: 0.06em;
   color: #dcebff;
@@ -543,7 +584,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ak-rival__gap { font-size: calc(15 * var(--u)); font-weight: 900; font-variant-numeric: tabular-nums; }
+.ak-rival__gap { font-size: max(var(--u-min), calc(15 * var(--u))); font-weight: 900; font-variant-numeric: tabular-nums; }
 .ak-rival--ahead .ak-rival__gap { color: #ff9d9d; }
 .ak-rival--behind .ak-rival__gap { color: #8ff0b6; }
 
@@ -646,7 +687,7 @@
   gap: calc(6 * var(--u));
   padding: calc(5 * var(--u)) calc(13 * var(--u)) calc(6 * var(--u));
   border-radius: calc(12 * var(--u));
-  font-size: calc(21 * var(--u));
+  font-size: max(var(--u-min), calc(21 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -700,7 +741,7 @@
   text-align: right;
 }
 .ak-speed__unit {
-  font-size: calc(13 * var(--u));
+  font-size: max(var(--u-min), calc(13 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.16em;
   color: rgba(180, 212, 250, 0.85);
@@ -782,7 +823,7 @@
   top: calc(-17 * var(--u));
   left: 50%;
   transform: translateX(-50%);
-  font-size: calc(11 * var(--u));
+  font-size: max(var(--u-min), calc(11 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.26em;
   color: rgba(190, 220, 255, 0.8);
@@ -979,7 +1020,7 @@
   box-shadow: 0 0 calc(40 * var(--u)) rgba(60, 150, 255, 0.9);
 }
 .ak-warn__blue-sub {
-  font-size: calc(15 * var(--u));
+  font-size: max(var(--u-min), calc(15 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.3em;
   color: #b8d8ff;
@@ -1033,7 +1074,7 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  font-size: calc(12 * var(--u));
+  font-size: max(var(--u-min), calc(12 * var(--u)));
   font-weight: 900;
   color: #060b16;
   background: linear-gradient(180deg, #ffffff, #9dc0e8);
@@ -1043,7 +1084,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: calc(14 * var(--u));
+  font-size: max(var(--u-min), calc(14 * var(--u)));
   font-weight: 850;
   letter-spacing: 0.07em;
   color: #e8f2ff;
@@ -1066,7 +1107,7 @@
   background: rgba(3, 6, 14, 0.86);
   box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(120, 220, 160, 0.4);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: calc(12 * var(--u));
+  font-size: max(var(--u-min), calc(12 * var(--u)));
   line-height: 1.5;
   color: #9effc9;
   white-space: pre;
@@ -1098,15 +1139,27 @@
 .ak-scrim--on { opacity: 1; }
 .ak-scrim--blur { backdrop-filter: blur(calc(14 * var(--u))) saturate(0.85) brightness(0.7); -webkit-backdrop-filter: blur(calc(14 * var(--u))) saturate(0.85) brightness(0.7); }
 
+/* Menu screens get the same safe centring as the results board, for the same
+   reason: `inset: 0` + `justify-content: center` splits any overflow between the
+   two ends, so an over-tall screen loses its heading off the TOP. With the
+   legibility floor active the controls screen measured 100.4 % of an 800x450
+   frame and did exactly that.
+   The auto-margin PAIR is used here rather than an inner wrapper because these
+   screens are built directly into `.ak-screen` by `MenuSystem.makeScreen()`.
+   Two auto margins split the free space (so the group is centred) and collapse
+   to zero when there is none (so the top edge is a hard stop). `.ak-title-bg` is
+   an absolutely-positioned backdrop and must not be mistaken for the first
+   in-flow child. */
 .ak-screen {
   position: absolute;
   inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  overflow: hidden;
   gap: calc(22 * var(--u));
-  padding: calc(40 * var(--u));
+  padding: calc(28 * var(--u));
   opacity: 0;
   visibility: hidden;
   transform: translateY(calc(26 * var(--u))) scale(0.985);
@@ -1119,6 +1172,10 @@
   transition: opacity 320ms var(--ak-spring), transform 480ms var(--ak-spring), visibility 0s;
 }
 .ak-screen--out { transform: translateY(calc(-26 * var(--u))) scale(0.985); }
+
+.ak-screen > :not(.ak-title-bg):first-child,
+.ak-screen > .ak-title-bg + * { margin-top: auto; }
+.ak-screen > :last-child { margin-bottom: auto; }
 
 /* Logotype -------------------------------------------------------------- */
 .ak-logo {
@@ -1140,7 +1197,7 @@
   transform: skewX(-7deg);
 }
 .ak-logo__sub {
-  font-size: calc(22 * var(--u));
+  font-size: max(var(--u-min), calc(22 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.66em;
   margin-left: 0.66em;
@@ -1168,7 +1225,7 @@
 }
 
 .ak-press {
-  font-size: calc(24 * var(--u));
+  font-size: max(var(--u-min), calc(24 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.34em;
   color: #dff0ff;
@@ -1217,7 +1274,7 @@
   letter-spacing: 0.06em;
 }
 .ak-head__sub {
-  font-size: calc(13 * var(--u));
+  font-size: max(var(--u-min), calc(13 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.32em;
   color: rgba(160, 198, 240, 0.72);
@@ -1270,9 +1327,9 @@
   color: #eef6ff;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.6);
 }
-.ak-item-row__hint { font-size: calc(13 * var(--u)); font-weight: 800; letter-spacing: 0.16em; color: rgba(160, 196, 240, 0.7); }
+.ak-item-row__hint { font-size: max(var(--u-min), calc(13 * var(--u))); font-weight: 800; letter-spacing: 0.16em; color: rgba(160, 196, 240, 0.7); }
 .ak-item-row__value {
-  font-size: calc(20 * var(--u));
+  font-size: max(var(--u-min), calc(20 * var(--u)));
   font-weight: 900;
   color: var(--ak-gold-b);
   min-width: calc(120 * var(--u));
@@ -1286,7 +1343,7 @@
   display: grid;
   place-items: center;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04));
-  font-size: calc(18 * var(--u));
+  font-size: max(var(--u-min), calc(18 * var(--u)));
 }
 
 /* Slider ---------------------------------------------------------------- */
@@ -1359,7 +1416,7 @@
   right: 0;
   bottom: 0;
   padding: calc(16 * var(--u)) calc(10 * var(--u)) calc(7 * var(--u));
-  font-size: calc(18 * var(--u));
+  font-size: max(var(--u-min), calc(18 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.1em;
   text-align: center;
@@ -1373,7 +1430,7 @@
   left: calc(8 * var(--u));
   padding: calc(2 * var(--u)) calc(8 * var(--u)) calc(3 * var(--u));
   border-radius: calc(8 * var(--u));
-  font-size: calc(10 * var(--u));
+  font-size: max(var(--u-min), calc(10 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.16em;
   background: rgba(6, 10, 22, 0.8);
@@ -1410,14 +1467,20 @@
   gap: calc(2 * var(--u));
 }
 .ak-cc__num { font-size: calc(56 * var(--u)); }
-.ak-cc__sub { font-size: calc(12 * var(--u)); font-weight: 900; letter-spacing: 0.24em; color: rgba(180, 212, 250, 0.8); }
+.ak-cc__sub { font-size: max(var(--u-min), calc(12 * var(--u))); font-weight: 900; letter-spacing: 0.24em; color: rgba(180, 212, 250, 0.8); }
 
 /* Stat panel ------------------------------------------------------------ */
 .ak-stats {
   display: flex;
   flex-direction: column;
   gap: calc(7 * var(--u));
-  width: min(calc(430 * var(--u)), 84vw);
+  /* A BOX THAT HOLDS FLOORED TEXT NEEDS A FLOORED WIDTH. The smallest type in
+     here is authored at 12u, so the panel's design width is ~36x it; keep that
+     ratio against `--u-min` and the stat labels and the controls table stop
+     wrapping when the floor takes over from `--u`. Without this the controls
+     screen wrapped every second column and measured 100.4 % of an 800x450 frame.
+     Still one input, still no media query, still nothing keyed off the window. */
+  width: min(max(calc(430 * var(--u)), calc(36 * var(--u-min))), 84vw);
   padding: calc(16 * var(--u)) calc(20 * var(--u)) calc(18 * var(--u));
   border-radius: calc(18 * var(--u));
   background: linear-gradient(180deg, rgba(16, 26, 54, 0.8), rgba(6, 10, 24, 0.86));
@@ -1428,7 +1491,7 @@
    label at an 800x450 viewport. `.ak-stats__sub` carries the real roster
    `tagline`, the chassis' `BODY_TYRE` family and the circuit `subtitle`. */
 .ak-stats__name {
-  font-size: calc(20 * var(--u));
+  font-size: max(var(--u-min), calc(20 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.1em;
   text-align: center;
@@ -1437,7 +1500,7 @@
 }
 .ak-stats__sub {
   margin-top: calc(-3 * var(--u));
-  font-size: calc(12 * var(--u));
+  font-size: max(var(--u-min), calc(12 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.14em;
   text-align: center;
@@ -1448,7 +1511,7 @@
 .ak-stat { display: flex; align-items: center; gap: calc(12 * var(--u)); }
 .ak-stat__k {
   width: calc(96 * var(--u));
-  font-size: calc(12 * var(--u));
+  font-size: max(var(--u-min), calc(12 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.16em;
   color: rgba(174, 206, 246, 0.85);
@@ -1482,7 +1545,7 @@
     rgba(0, 0, 0, 0) calc(1.5 * var(--u)) calc(10 * var(--u)));
   pointer-events: none;
 }
-.ak-stat__v { width: calc(34 * var(--u)); text-align: right; font-size: calc(13 * var(--u)); font-weight: 900; font-variant-numeric: tabular-nums; color: #d6e9ff; }
+.ak-stat__v { width: calc(34 * var(--u)); text-align: right; font-size: max(var(--u-min), calc(13 * var(--u))); font-weight: 900; font-variant-numeric: tabular-nums; color: #d6e9ff; }
 .ak-stat--delta-up .ak-stat__v { color: var(--ak-green); }
 .ak-stat--delta-down .ak-stat__v { color: var(--ak-red); }
 
@@ -1493,7 +1556,7 @@
   align-items: center;
   padding-top: calc(6 * var(--u));
 }
-.ak-hint { display: flex; align-items: center; gap: calc(7 * var(--u)); font-size: calc(12 * var(--u)); font-weight: 800; letter-spacing: 0.14em; color: rgba(166, 200, 242, 0.72); }
+.ak-hint { display: flex; align-items: center; gap: calc(7 * var(--u)); font-size: max(var(--u-min), calc(12 * var(--u))); font-weight: 800; letter-spacing: 0.14em; color: rgba(166, 200, 242, 0.72); }
 .ak-key {
   display: inline-grid;
   place-items: center;
@@ -1502,11 +1565,11 @@
   border-radius: calc(7 * var(--u));
   background: rgba(255, 255, 255, 0.1);
   box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(255, 255, 255, 0.32);
-  font-size: calc(11 * var(--u));
+  font-size: max(var(--u-min), calc(11 * var(--u)));
   color: #e6f2ff;
 }
 
-.ak-controls-table { display: grid; grid-template-columns: auto auto; gap: calc(6 * var(--u)) calc(18 * var(--u)); font-size: calc(14 * var(--u)); }
+.ak-controls-table { display: grid; grid-template-columns: auto 1fr; gap: calc(6 * var(--u)) calc(18 * var(--u)); font-size: max(var(--u-min), calc(14 * var(--u))); line-height: 1.25; width: 100%; }
 .ak-controls-table > span:nth-child(odd) { color: rgba(170, 202, 244, 0.75); font-weight: 800; letter-spacing: 0.1em; }
 .ak-controls-table > span:nth-child(even) { color: #eaf3ff; font-weight: 850; }
 
@@ -1522,6 +1585,21 @@
    RESULTS
    ========================================================================= */
 
+/* THE BOARD MUST FIT THE FRAME — measured, not assumed.
+   `.ak-results` is `inset: 0`, so its OWN rect is always exactly the viewport
+   however far its content spills; only the flex items escape, which is why an
+   audit that measured the root saw nothing wrong. Two independent guarantees:
+
+   1. `margin: auto 0` on the inner column instead of `justify-content: center`.
+      Auto margins take the free space when there is any and collapse to zero
+      when there is none, so the top edge is a hard stop. Centring an over-tall
+      column instead splits the overflow between BOTH ends: the Grand Prix board
+      measured 150.2 % of an 800x450 frame and lost 112.9 px off the top —
+      the title, the entire podium and the first table row.
+   2. The content is sized to fit 12 rows + podium + standings + buttons inside
+      1080u, with the legibility floor active, at every viewport. Worst case is
+      the SHORTEST frame, because the floor stops the text shrinking with it.
+   Verified by `src/dev/ui.ts` -> `__UIQA__.board()`. */
 .ak-results {
   position: fixed;
   inset: 0;
@@ -1530,8 +1608,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: calc(18 * var(--u));
+  justify-content: flex-start;
+  overflow: hidden;
   opacity: 0;
   visibility: hidden;
   transition: opacity 320ms var(--ak-spring), visibility 0s linear 320ms;
@@ -1541,11 +1619,22 @@
 }
 .ak-results--on { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
 
-.ak-results__title { font-size: calc(58 * var(--u)); --ak-stroke-w: 0.06em; }
+.ak-results__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(12 * var(--u));
+  /* Safe centring: never above the top edge. See the note above. */
+  margin: auto 0;
+  padding: calc(10 * var(--u)) 0;
+  max-width: 100%;
+}
+
+.ak-results__title { font-size: calc(44 * var(--u)); --ak-stroke-w: 0.06em; }
 .ak-results__table {
   display: flex;
   flex-direction: column;
-  gap: calc(5 * var(--u));
+  gap: calc(4 * var(--u));
   width: min(calc(820 * var(--u)), 92vw);
 }
 .ak-rrow {
@@ -1553,8 +1642,13 @@
   grid-template-columns: calc(66 * var(--u)) calc(46 * var(--u)) 1fr calc(150 * var(--u)) calc(140 * var(--u)) calc(66 * var(--u));
   align-items: center;
   gap: calc(10 * var(--u));
-  padding: calc(7 * var(--u)) calc(16 * var(--u)) calc(8 * var(--u));
+  padding: calc(4 * var(--u)) calc(16 * var(--u)) calc(5 * var(--u));
   border-radius: calc(14 * var(--u));
+  /* Pinned leading. The cells' font sizes carry the legibility floor, so at a
+     short viewport they stop shrinking while the row's `--u` padding keeps
+     going — and the system font's default ~1.4 leading then becomes the row's
+     tallest item and drives 12 rows past the bottom of the frame. */
+  line-height: 1.15;
   background: linear-gradient(180deg, rgba(20, 32, 64, 0.82), rgba(7, 11, 26, 0.88));
   box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(160, 200, 245, 0.2);
   opacity: 0;
@@ -1573,11 +1667,16 @@
   opacity: 1;
   transform: none;
   padding-bottom: 0;
-  font-size: calc(11 * var(--u));
+  font-size: max(var(--u-min), calc(11 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.2em;
   color: rgba(160, 196, 240, 0.6);
 }
+/* Column headers are floored text inside `--u`-sized grid columns, so at a small
+   viewport the label is wider than its column. Left to wrap it doubled the
+   header's height (33.66 px against a 20 px design row at 800x450); the labels
+   are short enough to fit once wrapping is off. */
+.ak-rrow--head > span { white-space: nowrap; overflow: hidden; }
 .ak-rrow--player {
   background: linear-gradient(180deg, rgba(90, 66, 16, 0.9), rgba(40, 26, 6, 0.92));
   box-shadow: inset 0 0 0 calc(3 * var(--u)) var(--ak-gold-b), 0 calc(6 * var(--u)) calc(20 * var(--u)) rgba(255, 170, 30, 0.28);
@@ -1598,19 +1697,19 @@
   100%    { opacity: 0; }
 }
 .ak-rrow { position: relative; overflow: hidden; }
-.ak-rrow__pos { font-size: calc(30 * var(--u)); }
+.ak-rrow__pos { font-size: max(var(--u-min), calc(26 * var(--u))); }
 .ak-rrow__pos.ak-num { --ak-stroke-w: 0.07em; }
-.ak-rrow__art { width: calc(42 * var(--u)); height: calc(42 * var(--u)); border-radius: calc(10 * var(--u)); object-fit: cover; box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.4); }
-.ak-rrow__name { font-size: calc(20 * var(--u)); font-weight: 900; letter-spacing: 0.06em; color: #eef6ff; }
-.ak-rrow__time, .ak-rrow__best { font-size: calc(19 * var(--u)); font-weight: 850; font-variant-numeric: tabular-nums; text-align: right; color: #d7e8ff; }
-.ak-rrow__best { color: #9fd2ff; font-size: calc(16 * var(--u)); }
-.ak-rrow__pts { font-size: calc(22 * var(--u)); font-weight: 900; text-align: right; color: var(--ak-gold-b); font-variant-numeric: tabular-nums; }
+.ak-rrow__art { width: calc(30 * var(--u)); height: calc(30 * var(--u)); border-radius: calc(8 * var(--u)); object-fit: cover; box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.4); }
+.ak-rrow__name { font-size: max(var(--u-min), calc(20 * var(--u))); font-weight: 900; letter-spacing: 0.06em; color: #eef6ff; }
+.ak-rrow__time, .ak-rrow__best { font-size: max(var(--u-min), calc(19 * var(--u))); font-weight: 850; font-variant-numeric: tabular-nums; text-align: right; color: #d7e8ff; }
+.ak-rrow__best { color: #9fd2ff; font-size: max(var(--u-min), calc(16 * var(--u))); }
+.ak-rrow__pts { font-size: max(var(--u-min), calc(22 * var(--u))); font-weight: 900; text-align: right; color: var(--ak-gold-b); font-variant-numeric: tabular-nums; }
 
 .ak-podium {
   display: flex;
   align-items: flex-end;
   gap: calc(10 * var(--u));
-  height: calc(150 * var(--u));
+  height: calc(104 * var(--u));
 }
 .ak-podium__col {
   width: calc(112 * var(--u));
@@ -1629,9 +1728,91 @@
 }
 .ak-podium__col--1 { background: linear-gradient(180deg, rgba(190, 148, 30, 0.95), rgba(70, 48, 6, 0.92)); box-shadow: inset 0 0 0 calc(3 * var(--u)) var(--ak-gold-b), 0 0 calc(34 * var(--u)) rgba(255, 180, 40, 0.4); }
 @keyframes ak-podium-rise { to { transform: scaleY(1); } }
-.ak-podium__art { width: calc(56 * var(--u)); height: calc(56 * var(--u)); border-radius: calc(12 * var(--u)); box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.5); }
-.ak-podium__name { font-size: calc(13 * var(--u)); font-weight: 900; letter-spacing: 0.08em; }
-.ak-podium__pos { font-size: calc(26 * var(--u)); }
+.ak-podium__art { width: calc(44 * var(--u)); height: calc(44 * var(--u)); border-radius: calc(10 * var(--u)); box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.5); }
+.ak-podium__name { font-size: max(var(--u-min), calc(13 * var(--u))); font-weight: 900; letter-spacing: 0.08em; }
+.ak-podium__pos { font-size: max(var(--u-min), calc(26 * var(--u))); }
+
+/* Grand Prix standings -------------------------------------------------- */
+/* THIRD INSTANCE OF THE SAME BUG. `.ak-stand-wrap`, `.ak-stand`,
+   `.ak-stand__chip`, `__pos`, `__dot`, `__name` and `__pts` had NO rule
+   anywhere in this file, exactly as `.ak-stats__name` had none. `Results.ts`
+   sets `display: flex` inline on the wrapper, so the wrapper existed — but the
+   twelve chips inside it were unstyled block `div`s at the browser's default
+   16 px, i.e. the one part of this UI that did not scale with `--u` at all.
+
+   The proof it was unscaled is in the measurements: the standings added 223.5 px
+   to the board at 800x450 and 234 px at 1920x1080 — the same ABSOLUTE height at
+   viewports 2.4x apart, while every `--u`-derived part grew 2.4x. That alone
+   pushed the Grand Prix board to 150 % of an 800x450 frame.
+
+   Now a wrapping grid of compact chips: bounded at 3 rows for a 12-kart grid,
+   and it shrinks with the frame like everything else. */
+.ak-stand-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  width: min(calc(820 * var(--u)), 92vw);
+}
+.ak-stand__head {
+  font-size: max(var(--u-min), calc(11 * var(--u)));
+  font-weight: 900;
+  letter-spacing: 0.28em;
+  color: rgba(160, 198, 240, 0.72);
+}
+.ak-stand {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: calc(4 * var(--u)) calc(6 * var(--u));
+  width: 100%;
+}
+.ak-stand__chip {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--u));
+  min-width: 0;
+  padding: calc(2 * var(--u)) calc(8 * var(--u)) calc(3 * var(--u));
+  border-radius: calc(9 * var(--u));
+  background: linear-gradient(180deg, rgba(22, 34, 68, 0.8), rgba(7, 11, 26, 0.86));
+  box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(160, 200, 245, 0.22);
+  font-size: max(var(--u-min), calc(13 * var(--u)));
+  font-weight: 850;
+  line-height: 1.25;
+}
+.ak-stand__chip--player {
+  background: linear-gradient(180deg, rgba(90, 66, 16, 0.9), rgba(40, 26, 6, 0.92));
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) var(--ak-gold-b);
+}
+.ak-stand__pos {
+  flex: none;
+  min-width: calc(16 * var(--u));
+  text-align: right;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: rgba(174, 206, 246, 0.9);
+}
+.ak-stand__dot {
+  flex: none;
+  width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(255, 255, 255, 0.45);
+}
+.ak-stand__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.06em;
+  color: #eaf3ff;
+}
+.ak-stand__pts {
+  flex: none;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--ak-gold-b);
+}
 
 .ak-confetti { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .ak-confetti > i {
@@ -1652,9 +1833,9 @@
 .ak-buttons { display: flex; gap: calc(14 * var(--u)); }
 .ak-btn {
   position: relative;
-  padding: calc(12 * var(--u)) calc(30 * var(--u)) calc(14 * var(--u));
+  padding: calc(9 * var(--u)) calc(30 * var(--u)) calc(11 * var(--u));
   border-radius: calc(16 * var(--u));
-  font-size: calc(21 * var(--u));
+  font-size: max(var(--u-min), calc(21 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.12em;
   color: #eef6ff;
@@ -1682,7 +1863,15 @@
    from an otherwise full-size HUD. The single scale factor already keeps every
    HUD element proportionate at every viewport; nothing needs a breakpoint.
    Menu and results reflow below is different in kind: those are column-count
-   decisions on full-window screens, which is what media queries are for. */
+   decisions on full-window screens, which is what media queries are for.
+
+   AND THE LEGIBILITY FLOOR IS NOT A BREAKPOINT EITHER. If you are here because
+   menu text is too small at some viewport, the knob is `--u-min` at the top of
+   this file — a `max()` clamp on the same container-derived `--u`. It has no
+   threshold and no second layout regime, which is exactly why it is allowed and a
+   `@media (max-height: …) { font-size: … }` is not. Anything keyed off the WINDOW
+   is wrong here: the HUD and menus are sized from the render CONTAINER, and in an
+   embedded or letterboxed canvas the two disagree. */
 @media (max-width: 820px), (max-height: 520px) {
   .ak-grid--chars { grid-template-columns: repeat(4, calc(120 * var(--u))); }
   .ak-grid--tracks { grid-template-columns: repeat(3, calc(190 * var(--u))); }
