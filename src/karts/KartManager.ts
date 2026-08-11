@@ -55,8 +55,12 @@ import {
   type LodLevel, type SocketName,
 } from './KartModel';
 import { DRIVERS, NEUTRAL_POSE, faceSpecFor, type DriverPose } from './Driver';
+import {
+  PortraitStudio, type PortraitFraming, type PortraitSubject,
+} from './Portrait';
 
 export type { SocketName } from './KartModel';
+export type { PortraitFraming } from './Portrait';
 
 // ---------------------------------------------------------------------------
 // Loose dependency shapes — these subsystems are authored in parallel, so we
@@ -179,6 +183,13 @@ export class KartManager implements ISubsystem {
    */
   private playerBodyId: KartBodyId | null = null;
   private offs: Array<() => void> = [];
+
+  /** Finished portraits, keyed `id|size`. See `renderPortrait`. */
+  private portraits = new Map<string, HTMLCanvasElement>();
+  /** Built on the first portrait request and torn down with the subsystem. */
+  private studio: PortraitStudio | null = null;
+  /** Last framing per character id — read by the QA probe. */
+  private portraitFramings = new Map<string, PortraitFraming>();
 
   constructor(
     scene: THREE.Scene,
@@ -755,6 +766,117 @@ export class KartManager implements ISubsystem {
     return this.byId.get(kartId)?.character ?? null;
   }
 
+  // --- character portraits -------------------------------------------------
+
+  /**
+   * A head-and-shoulders bust of a racer, rendered offscreen from the real
+   * `DriverRig` under a dedicated portrait light rig. **This is the method
+   * `MenuSystem.buildArt()` feature-detects** — it accepts a canvas or a data
+   * URL and falls back to a flat procedural portrait when the call returns
+   * nothing, and until now it always fell back: the critic's finding was that
+   * all ten select-screen portraits were the same grey visor ellipse.
+   *
+   * Contract notes, because the call site is synchronous and runs for the whole
+   * roster in one go when the menu opens:
+   *
+   *  - **Cached per `id|size`.** The tenth call is the last work this ever does;
+   *    re-opening the menu is free.
+   *  - **Never throws.** Any failure returns `''`, which puts `MenuSystem` back
+   *    on its procedural fallback. A menu must not be able to take the game down.
+   *  - **Costs no geometry, materials or textures** once `init()` has run: the
+   *    studio borrows the live racer's rig buffers and face atlas.
+   *  - Returns `''` when the renderer cannot read pixels back (the headless
+   *    fake renderer), so probes get a defined answer instead of a blank image.
+   */
+  renderPortrait(id: string, size = 220): HTMLCanvasElement | string {
+    const px = Math.round(clamp(size, 64, 512));
+    const key = `${id}|${px}`;
+    const hit = this.portraits.get(key);
+    if (hit) return hit;
+
+    const subject = this.portraitSubject(id);
+    if (!subject) return '';
+    try {
+      const studio = this.portraitStudio();
+      const shot = studio.render(subject, px);
+      if (!shot) return '';
+      this.portraits.set(key, shot.canvas);
+      this.portraitFramings.set(id, shot.framing);
+      return shot.canvas;
+    } catch (err) {
+      console.warn(`[KartManager] portrait for "${id}" failed:`, err);
+      return '';
+    }
+  }
+
+  /**
+   * Framing diagnostics for a racer's portrait — the projected NDC bounds of the
+   * head box and of the head-and-shoulders subject box, plus `inFrame`.
+   *
+   * This runs the identical camera-solve path as `renderPortrait` but never
+   * touches the GPU, which is the only way to prove the framing is right in a
+   * headless probe: a fake renderer cannot rasterise, so `inFrame` is the
+   * measurement that stands in for looking at it. Same discipline as
+   * `__QA__.shot()`'s `subject.inFrame`.
+   */
+  portraitFraming(id: string): PortraitFraming | null {
+    const subject = this.portraitSubject(id);
+    if (!subject) return null;
+    try {
+      return this.portraitStudio().framing(subject);
+    } catch (err) {
+      console.warn(`[KartManager] portrait framing for "${id}" failed:`, err);
+      return null;
+    }
+  }
+
+  /** Ids that already have a cached portrait canvas. */
+  portraitCacheKeys(): string[] {
+    return [...this.portraits.keys()];
+  }
+
+  /** Live studio resources, or `null` when no portrait has been asked for. */
+  portraitStudioStats(): { targets: number; lights: number; env: number; size: number } | null {
+    return this.studio ? this.studio.stats() : null;
+  }
+
+  private portraitStudio(): PortraitStudio {
+    if (!this.studio) {
+      this.studio = new PortraitStudio(this.renderer, this.assets, this.quality);
+    }
+    return this.studio;
+  }
+
+  /**
+   * Describe one racer to the studio.
+   *
+   * The paint key is deliberately the roster's own `"<id>#0"`: `createVisual`
+   * builds exactly that key for the first kart of every character, so all ten
+   * portraits reuse material sets that already exist. It is also the *canonical*
+   * livery — duplicate racers are hue-shifted, and a portrait must show the
+   * character, not the fourth repaint of them.
+   */
+  private portraitSubject(id: string): PortraitSubject | null {
+    const character = CHARACTER_BY_ID[id];
+    if (!character) return null;
+    let live: Visual | null = null;
+    for (const v of this.visuals) {
+      if (v.character.id === id && v.model.driver) { live = v; break; }
+    }
+    return {
+      id,
+      driverId: character.driverId,
+      paintKey: `${character.id}#0`,
+      paint: this.paintFor(character, 0),
+      faceSpec: faceSpecFor(character.driverId),
+      build: live?.model.driver?.build ?? null,
+      face: live?.model.face ?? null,
+      colorA: character.color,
+      colorB: character.secondaryColor,
+      glow: character.glowColor,
+    };
+  }
+
   tuningOf(kartId: number): KartTuning | null {
     return this.byId.get(kartId)?.tuning ?? null;
   }
@@ -869,6 +991,12 @@ export class KartManager implements ISubsystem {
   dispose(): void {
     for (const off of this.offs) off();
     this.offs.length = 0;
+    // The studio holds a render target and a gradient texture; the cached
+    // canvases are plain DOM and go with the map.
+    this.studio?.dispose();
+    this.studio = null;
+    this.portraits.clear();
+    this.portraitFramings.clear();
     for (const v of this.visuals) v.model.dispose();
     this.visuals.length = 0;
     this.byId.clear();

@@ -28,6 +28,7 @@ import { FIXED_DT, QUALITY_PRESETS } from '@/core/Config';
 import { clamp, clamp01 } from '@/core/MathUtils';
 import { KartManager } from '@/karts/KartManager';
 import { BODY_NAMES } from '@/karts/KartBodies';
+import { CHARACTERS } from '@/karts/Characters';
 
 // ===========================================================================
 //  Stubs
@@ -79,6 +80,7 @@ class StubPhysics {
 
 const app = document.getElementById('app') as HTMLElement;
 const hud = document.getElementById('hud') as HTMLElement;
+const portraitStrip = document.getElementById('portraits') as HTMLElement | null;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -338,6 +340,53 @@ function applyPreset(): void {
 }
 
 // ===========================================================================
+//  Portrait strip — the select-screen busts, side by side
+// ===========================================================================
+//  `KartManager.renderPortrait(id, size)` is what `MenuSystem.buildArt()`
+//  calls for every racer. A headless probe can prove the framing, the types and
+//  the disposal, but it cannot rasterise, so this is where a human (or the
+//  visual critic) actually looks at the ten portraits. Press P.
+// ===========================================================================
+
+let portraitsBuilt = false;
+
+function buildPortraitStrip(): void {
+  if (!portraitStrip || portraitsBuilt) return;
+  portraitsBuilt = true;
+  const t = performance.now();
+  for (const c of CHARACTERS) {
+    const fig = document.createElement('figure');
+    const art = karts.renderPortrait(c.id, 220);
+    if (art instanceof HTMLCanvasElement) {
+      fig.appendChild(art);
+    } else {
+      const miss = document.createElement('div');
+      miss.className = 'miss';
+      miss.textContent = art === '' ? 'no portrait' : String(art).slice(0, 24);
+      fig.appendChild(miss);
+    }
+    const cap = document.createElement('figcaption');
+    cap.textContent = c.name;
+    fig.appendChild(cap);
+    const f = karts.portraitFraming(c.id);
+    const ndc = document.createElement('div');
+    ndc.className = 'ndc';
+    ndc.textContent = f
+      ? `${f.inFrame ? 'inFrame' : 'OUT OF FRAME'} worst ${f.worst.toFixed(2)} head ${f.headFill.toFixed(2)}`
+      : 'no framing';
+    fig.appendChild(ndc);
+    portraitStrip.appendChild(fig);
+  }
+  console.log(`[karts bench] ten portraits in ${(performance.now() - t).toFixed(0)} ms`);
+}
+
+function togglePortraits(): void {
+  if (!portraitStrip) return;
+  buildPortraitStrip();
+  portraitStrip.classList.toggle('on');
+}
+
+// ===========================================================================
 //  Input
 // ===========================================================================
 
@@ -371,6 +420,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'g') forced.ghost = !forced.ghost;
   else if (k === 'r') forced.roll = !forced.roll;
   else if (k === 'h') bus_hop();
+  else if (k === 'p') togglePortraits();
   else if (k === 'l') { lodOverride = lodOverride >= 2 ? -1 : lodOverride + 1; }
   else if (k === 'w') { wireframe = !wireframe; setWireframe(wireframe); }
   else if (k === ',') speed = Math.max(0, speed - 3);
@@ -481,4 +531,8 @@ interface DevWindow { __KARTS__?: unknown }
   setSpeed: (v: number) => { speed = v; },
   setLod: (v: number) => { lodOverride = v; },
   stats: () => karts.stats(),
+  // Portrait inspection for the visual pass: `portraits()` shows the strip,
+  // `framings()` dumps the NDC numbers the headless probe asserts on.
+  portraits: () => { togglePortraits(); },
+  framings: () => CHARACTERS.map((c) => karts.portraitFraming(c.id)),
 };

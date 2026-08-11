@@ -764,6 +764,15 @@ export class KartModel {
   /** Local-space Y of the ground plane when parked. */
   get restGroundY(): number { return this.frame.groundY * this.modelScale; }
 
+  /**
+   * This racer's face material, or `null` for a chassis with no driver rig.
+   *
+   * Exposed for the portrait studio, which borrows it for one offscreen frame
+   * rather than building a second 1248×416 face atlas per portrait, and restores
+   * its expression + blink row afterwards (`FaceMaterial.atlasState`).
+   */
+  get face(): FaceMaterial | null { return this.faceMat; }
+
   dispose(): void {
     this.driver?.dispose();
     this.root.removeFromParent();

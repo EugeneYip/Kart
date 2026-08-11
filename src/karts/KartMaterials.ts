@@ -1270,6 +1270,27 @@ export class FaceMaterial {
     this.applyUv();
   }
 
+  /**
+   * The complete atlas state: which expression column and which blink row the
+   * material is currently showing.
+   *
+   * This exists so the portrait renderer can *borrow* a live racer's face
+   * material for one offscreen frame and put it back exactly as it found it. A
+   * face atlas is a 1248×416 canvas, so building a second one per portrait is
+   * the difference between a free portrait and a ~30 ms one — but a portrait
+   * must also never leave a rival mid-blink or permanently smiling, and
+   * `setExpression` alone cannot restore the blink row.
+   */
+  get atlasState(): { expr: number; blink: boolean } {
+    return { expr: this.expr, blink: this.blink };
+  }
+
+  setAtlasState(s: { expr: number; blink: boolean }): void {
+    this.expr = Math.max(0, Math.min(FACE_EXPRESSIONS.length - 1, Math.round(s.expr)));
+    this.blink = s.blink;
+    this.applyUv();
+  }
+
   /** Advance the blink timer. `dt` in seconds. */
   tick(dt: number): void {
     this.blinkTimer -= dt;
