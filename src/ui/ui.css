@@ -1379,6 +1379,14 @@
   background: rgba(6, 10, 22, 0.8);
   box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(255, 255, 255, 0.35);
 }
+/* The mascot's badge on the character grid — Foxy is what the game is named
+   after, so her card says so. */
+.ak-card__tag--gold {
+  color: #2a1a02;
+  background: linear-gradient(180deg, var(--ak-gold-a), var(--ak-gold-b));
+  box-shadow: inset 0 0 0 calc(1.5 * var(--u)) rgba(255, 255, 255, 0.6),
+    0 0 calc(12 * var(--u)) rgba(255, 180, 40, 0.55);
+}
 .ak-card__meta {
   position: absolute;
   top: calc(8 * var(--u));
@@ -1415,6 +1423,28 @@
   background: linear-gradient(180deg, rgba(16, 26, 54, 0.8), rgba(6, 10, 24, 0.86));
   box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(160, 200, 245, 0.22);
 }
+/* Panel caption. `.ak-stats__name` had no rule at all, so it rendered at the
+   browser's default 16px — i.e. unscaled, which is enormous next to a 12u stat
+   label at an 800x450 viewport. `.ak-stats__sub` carries the real roster
+   `tagline`, the chassis' `BODY_TYRE` family and the circuit `subtitle`. */
+.ak-stats__name {
+  font-size: calc(20 * var(--u));
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-align: center;
+  color: #eef6ff;
+  text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.75);
+}
+.ak-stats__sub {
+  margin-top: calc(-3 * var(--u));
+  font-size: calc(12 * var(--u));
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-align: center;
+  color: rgba(166, 200, 242, 0.78);
+}
+.ak-track-caption { display: flex; flex-direction: column; gap: calc(4 * var(--u)); }
+
 .ak-stat { display: flex; align-items: center; gap: calc(12 * var(--u)); }
 .ak-stat__k {
   width: calc(96 * var(--u));

@@ -10,10 +10,17 @@
  *  (n columns) of focusable items, and the highlight slides between them with
  *  spring easing.
  *
- *  Nothing here assumes the rest of the game exists. Portraits, kart thumbs and
- *  track previews are generated procedurally at init; if `game.karts` later
- *  exposes a real portrait renderer it is used instead. Audio, camera modes,
- *  quality and pause hooks are all feature-detected.
+ *  Nothing here assumes the rest of the game is RUNNING — audio, camera modes,
+ *  quality, portraits and pause hooks are all feature-detected, and portraits,
+ *  kart thumbs and course previews fall back to procedural art at init.
+ *
+ *  It does, however, assume the game's DATA exists: the roster, chassis list and
+ *  circuit list all come from `./Catalogue`, which derives them from
+ *  `@/karts/Characters`, `@/karts/KartBodies` and `@/track/TrackDefs`. There is
+ *  no parallel copy of those ids here any more — there used to be, and because
+ *  every id lookup in the game falls back silently, six of eight racers drove as
+ *  Nova and all three course cards loaded the same circuit.
+ *  Guarded by `.probe-tmp/menu-ids.ts` and `.probe-tmp/menu-flow.ts`.
  * ============================================================================
  */
 
@@ -28,29 +35,20 @@ import {
   setClass, setText, trackPreview, tryCall,
 } from './Widgets';
 import type { AudioLike, GameLike } from './Widgets';
+import { CHARACTERS, KART_BODIES, TRACKS, characterColumns } from './Catalogue';
+import type { CharacterDef, StatBlock } from './Catalogue';
 
 // ===========================================================================
-// Roster / catalogue data (local until the karts subsystem publishes its own)
+// Roster / catalogue data
 // ===========================================================================
-
-export interface StatBlock {
-  speed: number; accel: number; weight: number;
-  handling: number; traction: number; turbo: number;
-}
-
-export interface CharacterDef {
-  id: string; name: string; colorA: string; colorB: string; stats: StatBlock;
-}
-
-export interface KartBodyDef {
-  id: string; name: string; colorA: string; colorB: string;
-  deltas: Partial<StatBlock>; tag: string;
-}
-
-export interface TrackDef {
-  id: string; name: string; themeA: string; themeB: string; road: string;
-  difficulty: number; lengthKm: number; laps: number; seed: number; tag: string;
-}
+//
+// These three lists are DERIVED from the real game tables in `./Catalogue`
+// (`@/karts/Characters`, `@/karts/KartBodies`, `@/track/TrackDefs`) — the menu
+// no longer keeps a parallel copy of the ids it emits. Re-exported here because
+// this module was their previous home.
+//
+export { CHARACTERS, KART_BODIES, TRACKS } from './Catalogue';
+export type { CharacterDef, KartBodyDef, StatBlock, TrackDef } from './Catalogue';
 
 const STAT_KEYS: ReadonlyArray<keyof StatBlock> = [
   'speed', 'accel', 'weight', 'handling', 'traction', 'turbo',
@@ -59,32 +57,6 @@ const STAT_LABEL: Record<keyof StatBlock, string> = {
   speed: 'SPEED', accel: 'ACCEL', weight: 'WEIGHT',
   handling: 'HANDLING', traction: 'TRACTION', turbo: 'MINI-TURBO',
 };
-
-export const CHARACTERS: readonly CharacterDef[] = [
-  { id: 'blaze', name: 'Blaze', colorA: '#ff6a3d', colorB: '#b81616', stats: { speed: 3.75, accel: 3.25, weight: 3.5, handling: 3.25, traction: 3.0, turbo: 3.5 } },
-  { id: 'nova', name: 'Nova', colorA: '#5ad2ff', colorB: '#1b4fd6', stats: { speed: 3.25, accel: 4.0, weight: 2.75, handling: 4.0, traction: 3.5, turbo: 4.0 } },
-  { id: 'pixel', name: 'Pixel', colorA: '#9bff5c', colorB: '#159b3f', stats: { speed: 2.75, accel: 4.75, weight: 2.0, handling: 4.5, traction: 4.0, turbo: 4.75 } },
-  { id: 'brutus', name: 'Brutus', colorA: '#ffb03a', colorB: '#8a4a05', stats: { speed: 4.75, accel: 2.25, weight: 4.75, handling: 2.25, traction: 2.5, turbo: 2.25 } },
-  { id: 'zephyr', name: 'Zephyr', colorA: '#c69bff', colorB: '#5b21b6', stats: { speed: 3.5, accel: 3.5, weight: 3.0, handling: 3.75, traction: 3.25, turbo: 3.75 } },
-  { id: 'iris', name: 'Iris', colorA: '#ff8ad1', colorB: '#c01f7a', stats: { speed: 3.0, accel: 4.25, weight: 2.5, handling: 4.25, traction: 3.75, turbo: 4.25 } },
-  { id: 'orion', name: 'Orion', colorA: '#e8eef8', colorB: '#5c6b86', stats: { speed: 4.25, accel: 2.75, weight: 4.25, handling: 2.75, traction: 2.75, turbo: 2.75 } },
-  { id: 'mako', name: 'Mako', colorA: '#45f0ff', colorB: '#0b6f8c', stats: { speed: 4.0, accel: 3.0, weight: 3.75, handling: 3.0, traction: 3.25, turbo: 3.25 } },
-];
-
-export const KART_BODIES: readonly KartBodyDef[] = [
-  { id: 'standard', name: 'Standard', colorA: '#e9f1ff', colorB: '#7f95b8', tag: 'BALANCED', deltas: {} },
-  { id: 'speedster', name: 'Speedster', colorA: '#ff5252', colorB: '#8a0f0f', tag: 'TOP SPEED', deltas: { speed: 0.75, accel: -0.5, handling: -0.25, turbo: -0.25 } },
-  { id: 'buggy', name: 'Dune Buggy', colorA: '#ffd447', colorB: '#a86b05', tag: 'OFF-ROAD', deltas: { traction: 0.75, accel: 0.25, speed: -0.5 } },
-  { id: 'hauler', name: 'Heavy Hauler', colorA: '#8fa5c4', colorB: '#33445e', tag: 'HEAVYWEIGHT', deltas: { weight: 1.0, speed: 0.25, accel: -0.5, handling: -0.5 } },
-  { id: 'glider', name: 'Glider GT', colorA: '#7ee8ff', colorB: '#1560a8', tag: 'AIR TIME', deltas: { handling: 0.5, turbo: 0.5, weight: -0.5 } },
-  { id: 'drifter', name: 'Drifter', colorA: '#b46bff', colorB: '#4c1d95', tag: 'DRIFT KING', deltas: { turbo: 1.0, handling: 0.5, speed: -0.25, traction: -0.25 } },
-];
-
-export const TRACKS: readonly TrackDef[] = [
-  { id: 'sunset', name: 'Sunset Circuit', themeA: '#ff9a4d', themeB: '#a33b6f', road: '#f2f6ff', difficulty: 1, lengthKm: 1.9, laps: 3, seed: 7, tag: 'RESORT' },
-  { id: 'harbor', name: 'Neon Harbor', themeA: '#2b3fa8', themeB: '#0d1233', road: '#dfe9ff', difficulty: 2, lengthKm: 2.3, laps: 3, seed: 13, tag: 'NIGHT CITY' },
-  { id: 'canyon', name: 'Canyon Rush', themeA: '#ffb35c', themeB: '#6b2b12', road: '#f6ead7', difficulty: 3, lengthKm: 2.6, laps: 3, seed: 23, tag: 'DESERT' },
-];
 
 const CC_OPTIONS = [50, 100, 150, 200] as const;
 const QUALITY_ORDER: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra'];
@@ -152,6 +124,8 @@ export class MenuSystem implements ISubsystem {
 
   // --- art ---------------------------------------------------------------
   private portraits: string[] = [];
+  /** Portrait by real character id — lets the results screen match AI racers. */
+  private portraitById = new Map<string, string>();
   private kartArt: string[] = [];
   private trackArt: string[] = [];
 
@@ -165,8 +139,11 @@ export class MenuSystem implements ISubsystem {
   private kartStatBars: Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }> = [];
   private optionRefresh: Array<() => void> = [];
   private charName!: HTMLElement;
+  private charTagline!: HTMLElement;
   private kartName!: HTMLElement;
+  private kartTyre!: HTMLElement;
   private trackName!: HTMLElement;
+  private trackSub!: HTMLElement;
   private offs: Array<() => void> = [];
 
   constructor(container: HTMLElement, game: GameLike) {
@@ -255,6 +232,13 @@ export class MenuSystem implements ISubsystem {
     }
   }
 
+  /**
+   * `KartManager.renderPortrait(id)` is the intended source — a real 3-D bust of
+   * the chosen racer. The ids handed to it are now the roster's own, so it can
+   * actually resolve one; until it exists (nothing in `src/karts` implements it
+   * today) `tryCall` returns undefined and the procedural portrait stands in,
+   * painted with the racer's real paint + shade rather than an invented pair.
+   */
   private buildArt(): void {
     for (const c of CHARACTERS) {
       const fromKarts = tryCall<unknown>(this.game.karts, 'renderPortrait', c.id, 220);
@@ -268,15 +252,17 @@ export class MenuSystem implements ISubsystem {
         catch { url = ''; }
       }
       this.portraits.push(url);
+      this.portraitById.set(c.id, url);
     }
     for (const k of KART_BODIES) {
       try { this.kartArt.push(kartThumb(k.colorA, k.colorB, 240, 180).toDataURL('image/png')); }
       catch { this.kartArt.push(''); }
     }
-    const livePath = tryCall<readonly { x: number; y: number }[]>(this.game.track, 'getMinimapPath');
-    for (let i = 0; i < TRACKS.length; i++) {
-      const t = TRACKS[i];
-      const path = i === 0 && livePath && livePath.length > 8 ? livePath : proceduralLoop(t.seed);
+    // Preview loops are the circuits' own centrelines (`TrackDef.outline`), so a
+    // card shows the shape you will actually drive. `proceduralLoop` is only a
+    // fallback for a def with no usable node list.
+    for (const t of TRACKS) {
+      const path = t.outline.length > 8 ? t.outline : proceduralLoop(t.seed);
       try {
         this.trackArt.push(trackPreview(path, t.themeA, t.themeB, t.road, 320, 200).toDataURL('image/png'));
       } catch { this.trackArt.push(''); }
@@ -372,17 +358,22 @@ export class MenuSystem implements ISubsystem {
   // --- character select --------------------------------------------------
 
   private buildChars(): void {
-    const s = this.makeScreen('chars', 4);
+    // The roster decides how wide the grid is, and the same number drives both
+    // the CSS columns and the focus model — they cannot drift apart.
+    const cols = characterColumns(CHARACTERS.length);
+    const s = this.makeScreen('chars', cols);
     this.head(s.root, 'CHOOSE YOUR RACER', 'STATS UPDATE AS YOU BROWSE');
 
     const grid = el('div', 'ak-grid ak-grid--chars ak-stagger', s.root);
     grid.style.setProperty('--d', '120ms');
+    grid.style.gridTemplateColumns = `repeat(${cols}, calc(150 * var(--u)))`;
     for (let i = 0; i < CHARACTERS.length; i++) {
       const c = CHARACTERS[i];
       const card = el('div', 'ak-card ak-card--char', grid);
       const art = el('div', 'ak-card__art', card);
       if (this.portraits[i]) art.style.backgroundImage = `url("${this.portraits[i]}")`;
       art.style.backgroundSize = 'cover';
+      if (c.mascot) el('div', 'ak-card__tag ak-card__tag--gold', card, 'MASCOT');
       el('div', 'ak-card__name', card, c.name.toUpperCase());
       const idx = s.items.length;
       s.items.push({
@@ -396,6 +387,7 @@ export class MenuSystem implements ISubsystem {
     const panel = el('div', 'ak-stats ak-stagger', s.root);
     panel.style.setProperty('--d', '260ms');
     this.charName = el('div', 'ak-stats__name', panel, '');
+    this.charTagline = el('div', 'ak-stats__sub', panel, '');
     this.statBars = this.buildStatRows(panel);
     this.hints(s.root, [['ENTER', 'CONFIRM'], ['ESC', 'BACK']], 380);
 
@@ -437,6 +429,7 @@ export class MenuSystem implements ISubsystem {
   private paintCharStats(): void {
     const c = CHARACTERS[this.charIndex];
     setText(this.charName, c.name.toUpperCase());
+    setText(this.charTagline, c.tagline);
     this.paintStats(this.statBars, c.stats);
   }
 
@@ -465,6 +458,8 @@ export class MenuSystem implements ISubsystem {
     const panel = el('div', 'ak-stats ak-stagger', s.root);
     panel.style.setProperty('--d', '240ms');
     this.kartName = el('div', 'ak-stats__name', panel, '');
+    // Real data: `BODY_TYRE` says which tyre family each chassis ships with.
+    this.kartTyre = el('div', 'ak-stats__sub', panel, '');
     this.kartStatBars = this.buildStatRows(panel);
     this.hints(s.root, [['ENTER', 'CONFIRM'], ['ESC', 'BACK']], 360);
 
@@ -477,17 +472,20 @@ export class MenuSystem implements ISubsystem {
     const k = KART_BODIES[this.kartIndex];
     const c = CHARACTERS[this.charIndex];
     setText(this.kartName, `${c.name.toUpperCase()} + ${k.name.toUpperCase()}`);
+    setText(this.kartTyre, `${k.tyre.toUpperCase()} TYRES`);
     this.paintStats(this.kartStatBars, c.stats, k.deltas);
   }
 
   // --- track select ------------------------------------------------------
 
   private buildTracks(): void {
-    const s = this.makeScreen('tracks', 3);
-    this.head(s.root, 'SELECT A COURSE', 'THREE CIRCUITS');
+    const cols = Math.max(1, Math.min(3, TRACKS.length));
+    const s = this.makeScreen('tracks', cols);
+    this.head(s.root, 'SELECT A COURSE', `${TRACKS.length} CIRCUITS`);
 
     const grid = el('div', 'ak-grid ak-grid--tracks ak-stagger', s.root);
     grid.style.setProperty('--d', '120ms');
+    grid.style.gridTemplateColumns = `repeat(${cols}, calc(252 * var(--u)))`;
     for (let i = 0; i < TRACKS.length; i++) {
       const t = TRACKS[i];
       const card = el('div', 'ak-card ak-card--track', grid);
@@ -505,8 +503,10 @@ export class MenuSystem implements ISubsystem {
       card.addEventListener('click', () => { this.setFocus(idx); this.activate(); });
       card.addEventListener('pointerenter', () => this.setFocus(idx));
     }
-    this.trackName = el('div', 'ak-stats__name ak-stagger', s.root, '');
-    (this.trackName as HTMLElement).style.setProperty('--d', '240ms');
+    const caption = el('div', 'ak-track-caption ak-stagger', s.root);
+    caption.style.setProperty('--d', '240ms');
+    this.trackName = el('div', 'ak-stats__name', caption, '');
+    this.trackSub = el('div', 'ak-stats__sub', caption, '');
     this.hints(s.root, [['ENTER', 'CONFIRM'], ['ESC', 'BACK']], 340);
 
     s.onFocus = (i) => { this.trackIndex = i; this.paintTrackName(); };
@@ -517,7 +517,8 @@ export class MenuSystem implements ISubsystem {
   private paintTrackName(): void {
     const t = TRACKS[this.trackIndex];
     const diff = ['EASY', 'MEDIUM', 'HARD'][clamp(t.difficulty - 1, 0, 2)];
-    setText(this.trackName, `${t.name.toUpperCase()}  —  ${diff}  ·  ${t.laps} LAPS  ·  ${t.lengthKm.toFixed(1)} KM`);
+    setText(this.trackName, `${t.name.toUpperCase()}  —  ${diff}  ·  ${t.laps} LAPS  ·  ${t.lengthKm.toFixed(2)} KM`);
+    setText(this.trackSub, t.subtitle);
   }
 
   // --- CC ----------------------------------------------------------------
@@ -788,6 +789,12 @@ export class MenuSystem implements ISubsystem {
     bus.emit('camera:mode', { mode: 'cinematic' });
   }
 
+  /**
+   * Every id emitted here comes from the real tables via `./Catalogue`:
+   * `trackId` resolves in `TRACKS`/`getTrackDef`, `characterId` in `CHARACTERS`
+   * and `CHARACTER_STATS`, `kartId` in `KART_BODY_IDS`. `.probe-tmp/menu-ids.ts`
+   * asserts all three for every selectable row.
+   */
   private startRace(): void {
     const t = TRACKS[this.trackIndex];
     const c = CHARACTERS[this.charIndex];
@@ -847,6 +854,22 @@ export class MenuSystem implements ISubsystem {
   // Results
   // =====================================================================
 
+  /**
+   * Which catalogue row a finishing kart belongs to. The player is whatever the
+   * menu picked; for everyone else `KartManager.characterOf(id)` knows, and only
+   * if that isn't wired yet do we fall back to spreading the roster over the
+   * grid by index.
+   */
+  private characterFor(kartId: number, isPlayer: boolean): CharacterDef {
+    if (isPlayer) return CHARACTERS[this.charIndex];
+    const live = tryCall<{ id?: string }>(this.game.karts, 'characterOf', kartId);
+    if (live && typeof live.id === 'string') {
+      const hit = CHARACTERS.find((c) => c.id === live.id);
+      if (hit) return hit;
+    }
+    return CHARACTERS[((kartId % CHARACTERS.length) + CHARACTERS.length) % CHARACTERS.length];
+  }
+
   private onRaceComplete(results: ReadonlyArray<{ kartId: number; position: number; time: number }>): void {
     this.raceLive = false;
     const karts = this.game.karts?.karts ?? [];
@@ -861,9 +884,14 @@ export class MenuSystem implements ISubsystem {
         for (const t of k.lapTimes) if (t > 0 && t < best) best = t;
         if (!Number.isFinite(best)) best = 0;
       }
+      // Ask the roster who this racer actually is before falling back to the
+      // menu's own index. `characterOf`/`getColorHex` are real `KartManager`
+      // methods; with real ids the portrait and swatch now match the kart on
+      // track instead of being `kartId % 10` of the menu list.
+      const entry = this.characterFor(r.kartId, isPlayer);
       const name = isPlayer
-        ? CHARACTERS[this.charIndex].name
-        : (tryCall<string>(this.game.karts, 'getName', r.kartId) ?? `Racer ${r.kartId + 1}`);
+        ? entry.name
+        : (tryCall<string>(this.game.karts, 'getName', r.kartId) ?? entry.name);
       rows.push({
         kartId: r.kartId,
         position: r.position,
@@ -872,8 +900,8 @@ export class MenuSystem implements ISubsystem {
         bestLap: best,
         points: this.mode === 'gp' ? pts : undefined,
         isPlayer,
-        color: CHARACTERS[r.kartId % CHARACTERS.length].colorA,
-        portrait: isPlayer ? this.portraits[this.charIndex] : this.portraits[r.kartId % this.portraits.length],
+        color: tryCall<string>(this.game.karts, 'getColorHex', r.kartId) ?? entry.colorA,
+        portrait: this.portraitById.get(entry.id) ?? '',
       });
       if (this.mode === 'gp') {
         this.standings.set(r.kartId, (this.standings.get(r.kartId) ?? 0) + pts);
