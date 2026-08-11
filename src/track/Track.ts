@@ -115,6 +115,49 @@ export interface DecorationHints {
   waterLevel: number | null;
 }
 
+/**
+ * ============================ PROP ORIENTATION ============================
+ *
+ * There are exactly **two** prop local-space conventions in this project, and
+ * mixing them up is what put the start gantry lengthwise down the middle of the
+ * road and drove the grandstand terraces across the racing surface.
+ *
+ * 1. **FACES the road** — the default, and what `Props.roadside()` /
+ *    `Props.planStands()` / `PropBuilder.plate()` all assume:
+ *      local **+Z points at the road**, local **±X runs along** it.
+ *    Boards, signs, stands, sea walls, traffic lights, anything with a front.
+ *    yaw = atan2(-binormal.x * side, -binormal.z * side), where `side` is the
+ *    sign of the prop's lateral offset.
+ *
+ * 2. **SPANS the road** — gates: a form built along local ±X that has to arch
+ *    *across* the carriageway:
+ *      local **±X follows the binormal**, local **+Z follows the tangent**.
+ *    yaw = atan2(tangent.x, tangent.z).
+ *
+ * A rotation of `yaw` about +Y sends local +Z to (sin yaw, 0, cos yaw) and
+ * local +X to (cos yaw, 0, -sin yaw); with `binormal = tangent x normal`, that
+ * makes convention 2's +X exactly **-binormal**. The old code used the single
+ * convention-2 formula for every authored prop, so every stand and board came
+ * out 90 degrees out — which is also why a 22 m crowd stand at lat +21 had its
+ * near end sitting 9 m from the centreline, on the asphalt.
+ *
+ * Keep this list in sync with `Props.normaliseType()`. Anything not named here
+ * gets convention 1; rotationally symmetric props (palms, rocks, pylons) don't
+ * care either way.
+ */
+const SPANS_THE_ROAD = new Set([
+  'startgantry', 'gantry', 'startline', 'finishgantry',
+  'balloonarch', 'balloons', 'balloongate',
+  'arch', 'gate', 'gateway',
+  'tunnelportal', 'portal', 'tunnel',
+  'hoload', 'hologram', 'holo',
+  'overheadsign', 'gantrybanner',
+]);
+
+function spansTheRoad(type: string): boolean {
+  return SPANS_THE_ROAD.has(type.toLowerCase().replace(/[^a-z]/g, ''));
+}
+
 // ---------------------------------------------------------------------------
 
 export class Track implements ITrackService, ISubsystem {
@@ -395,7 +438,14 @@ export class Track implements ITrackService, ISubsystem {
     const d = this.projectDistance(position);
     const s = this.spline.sampleAtDistance(d, _work);
     this.spline.attribsAtDistance(s.distance, _at);
-    if (_at.flags & TF.Gap) return SurfaceType.Void;
+    if (_at.flags & TF.Gap) {
+      // A gap flagged `Glider` is a glider volume, not nothing. KartPhysics only
+      // ever latches `gliding` from a *point* query (`surfaceAt`) while airborne,
+      // and this branch used to answer `Void` for both — which is why no kart has
+      // ever deployed a glider on any of the three circuits: every authored
+      // glider volume sits on a `TF.Gap` segment, so `TF.Glider` was unreachable.
+      return (_at.flags & TF.Glider) ? SurfaceType.Glider : SurfaceType.Void;
+    }
     _v0.copy(position).sub(s.position);
     const lat = _v0.dot(s.binormal);
     return this.classify(lat, _at, s.distance);
@@ -601,9 +651,22 @@ export class Track implements ITrackService, ISubsystem {
         .copy(s.position)
         .addScaledVector(s.binormal, lat)
         .addScaledVector(s.normal, h + (spec.up ?? 0));
-      // Yaw so +Z of the prop looks back down the road.
-      _v0.copy(s.tangent);
-      const yaw = Math.atan2(_v0.x, _v0.z) + (spec.yaw ?? 0);
+      // See the PROP ORIENTATION block above: gates span the road (local +X
+      // along the binormal), everything else faces it (local +Z at the road).
+      // A "gate" type authored *outside* the asphalt is not straddling anything —
+      // e.g. neon's `holoAd` appears both at lat 0 (over the road) and at
+      // lat -20 (a trackside hologram) — so the span convention is gated on the
+      // prop actually being over the carriageway.
+      let yaw: number;
+      if (Math.abs(lat) < 1e-3 || (spansTheRoad(spec.type) && Math.abs(lat) < _at.halfWidth)) {
+        _v0.copy(s.tangent);
+        yaw = Math.atan2(_v0.x, _v0.z);
+      } else {
+        const side = lat < 0 ? -1 : 1;
+        _v0.copy(s.binormal).multiplyScalar(-side);
+        yaw = Math.atan2(_v0.x, _v0.z);
+      }
+      yaw += spec.yaw ?? 0;
       props.push({ type: spec.type, position: pos, rotation: yaw, scale: spec.scale ?? 1 });
     };
 

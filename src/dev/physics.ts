@@ -38,6 +38,7 @@ import {
 } from '@/core/Types';
 import { Rng, clamp, clamp01, smoothstep } from '@/core/MathUtils';
 import { PhysicsWorld } from '@/physics/PhysicsWorld';
+import { PHYS } from '@/physics/KartPhysics';
 import { CHARACTER_STATS, makeTuning } from '@/physics/Tuning';
 
 // ===========================================================================
@@ -1059,12 +1060,18 @@ function tDrift(): TestReport {
     }
   }
   const driftSpeed = physics.getBody(0)!.forwardSpeed;
+  // NOTE: judge "does the drift hold speed" on |velocity|, NOT on forwardSpeed.
+  // forwardSpeed is the component along the CHASSIS, and a 36° drift is sideways
+  // by definition, so cos(36°) ≈ 0.81 of the speed is missing from that number no
+  // matter how perfectly the momentum is preserved. Momentum is the thing the
+  // player feels, and momentum is |velocity|.
+  const driftMag = physics.getBody(0)!.velocity.length();
   notes.push(`engage at ${engaged.toFixed(2)}s after press; Blue ${blue.toFixed(2)}s  Orange ${orange.toFixed(2)}s  Purple ${purple.toFixed(2)}s`);
-  notes.push(`speed through the drift: ${entrySpeed.toFixed(2)} → ${driftSpeed.toFixed(2)} m/s`);
+  notes.push(`through the drift: entry ${entrySpeed.toFixed(2)} → |v| ${driftMag.toFixed(2)} m/s (chassis-forward component ${driftSpeed.toFixed(2)})`);
   notes.push(`sustained drift angle ${((physics.getBody(0)!.driftAngle * 180) / Math.PI).toFixed(1)}°`);
   a.push({ name: 'entry → Purple', value: `${purple.toFixed(2)} s`, expect: '2.6–3.4 s', pass: purple > 2.6 && purple < 3.4 });
   a.push({ name: 'entry → Blue', value: `${blue.toFixed(2)} s`, expect: '0.5–1.0 s', pass: blue > 0.5 && blue < 1.0 });
-  a.push({ name: 'drift holds speed', value: `${((driftSpeed / entrySpeed) * 100).toFixed(1)} %`, expect: '> 90 %', pass: driftSpeed / entrySpeed > 0.9 });
+  a.push({ name: 'drift holds speed (|v|)', value: `${((driftMag / entrySpeed) * 100).toFixed(1)} %`, expect: '> 90 %', pass: driftMag / entrySpeed > 0.9 });
 
   // --- release grants the boost -------------------------------------------
   let releasedTier = -1;
@@ -1127,7 +1134,32 @@ function tCorner(): TestReport {
   solo();
   const t = physics.tuningOf(0)!;
 
-  const run = (drifting: boolean): { loss: number; time: number; v0: number; v1: number } => {
+  // Yaw authority must fall off hard with speed — that is the whole of "planted
+  // and predictable". Guard it so nobody can quietly re-twitch the steering.
+  const yawAt = (speed: number): number => {
+    placeFlat(speed);
+    const b = physics.getBody(0)!;
+    for (let i = 0; i < 180; i++) {
+      physics.setControl(0, ctrl(1, 1));
+      stepPhysics(1);
+      // Pin the planar speed; leave the vertical alone or the kart lifts off its
+      // springs and silently reads the AIRBORNE yaw branch instead.
+      const vUp = b.velocity.dot(b.up);
+      b.velocity.copy(b.forward).multiplyScalar(speed).addScaledVector(b.up, vUp);
+      b.forwardSpeed = speed;
+    }
+    return b.grounded ? Math.abs(b.yawRate) : NaN;
+  };
+  const yaw5 = yawAt(5);
+  const yaw25 = yawAt(25);
+  const yaw38 = yawAt(38);
+  notes.push(`full-lock yaw: 5 m/s ${yaw5.toFixed(2)}  25 m/s ${yaw25.toFixed(2)}  38 m/s ${yaw38.toFixed(2)} rad/s`);
+  notes.push(`...lateral demand: ${((5 * yaw5) / 9.81).toFixed(2)} g / ${((25 * yaw25) / 9.81).toFixed(2)} g / ${((38 * yaw38) / 9.81).toFixed(2)} g (budget ${(PHYS.latAccel / 9.81).toFixed(1)} g)`);
+  a.push({ name: 'low-speed agility survives', value: `${yaw5.toFixed(2)} rad/s at 5 m/s`, expect: '> 2.0', pass: yaw5 > 2.0 });
+  a.push({ name: 'authority falls off with speed', value: `${yaw25.toFixed(2)} @25, ${yaw38.toFixed(2)} @38`, expect: '< 1.30 and < 1.00', pass: yaw25 < 1.3 && yaw38 < 1.0 });
+  a.push({ name: 'yaw stays inside the grip budget', value: `${((38 * yaw38) / 9.81).toFixed(2)} g at 38 m/s`, expect: `< ${(PHYS.latAccel / 9.81).toFixed(1)} g`, pass: 38 * yaw38 < PHYS.latAccel });
+
+  const run = (drifting: boolean): { loss: number; time: number; v0: number; v1: number; mloss: number } => {
     placeFlat(t.maxSpeed * 0.98);
     physics.setControl(0, ctrl(0, 1));
     stepPhysics(90);
@@ -1143,7 +1175,8 @@ function tCorner(): TestReport {
         if (karts[0].drifting) break;
       }
     }
-    const v0 = physics.getBody(0)!.forwardSpeed;
+    const v0 = physics.getBody(0)!.velocity.length();
+    const f0 = physics.getBody(0)!.forwardSpeed;
     h0.copy(physics.getBody(0)!.forward);
     let steps = 0;
     for (let i = 0; i < 120 * 8; i++) {
@@ -1153,15 +1186,22 @@ function tCorner(): TestReport {
       const dot = clamp(h0.dot(physics.getBody(0)!.forward), -1, 1);
       if (Math.acos(dot) >= Math.PI / 2) break;
     }
-    const v1 = physics.getBody(0)!.forwardSpeed;
-    return { loss: 1 - v1 / v0, time: steps * FIXED_DT, v0, v1 };
+    const v1 = physics.getBody(0)!.velocity.length();
+    return {
+      loss: 1 - v1 / v0,
+      mloss: 1 - physics.getBody(0)!.forwardSpeed / f0,
+      time: steps * FIXED_DT,
+      v0,
+      v1,
+    };
   };
 
   const d = run(true);
   const g = run(false);
-  notes.push(`drifted 90°: ${d.v0.toFixed(2)} → ${d.v1.toFixed(2)} m/s in ${d.time.toFixed(2)}s (${(d.loss * 100).toFixed(1)}% lost)`);
-  notes.push(`gripping 90°: ${g.v0.toFixed(2)} → ${g.v1.toFixed(2)} m/s in ${g.time.toFixed(2)}s (${(g.loss * 100).toFixed(1)}% lost)`);
-  a.push({ name: '90° drifted corner loss', value: `${(d.loss * 100).toFixed(1)} %`, expect: '< 12 %', pass: d.loss < 0.12 });
+  // Again: |v|, not forwardSpeed. See the note in tDrift.
+  notes.push(`drifted 90°: |v| ${d.v0.toFixed(2)} → ${d.v1.toFixed(2)} m/s in ${d.time.toFixed(2)}s (${(d.loss * 100).toFixed(1)}% lost; chassis-forward component fell ${(d.mloss * 100).toFixed(1)}% because the kart is 36° sideways)`);
+  notes.push(`gripping 90°: |v| ${g.v0.toFixed(2)} → ${g.v1.toFixed(2)} m/s in ${g.time.toFixed(2)}s (${(g.loss * 100).toFixed(1)}% lost)`);
+  a.push({ name: '90° drifted corner loss (|v|)', value: `${(d.loss * 100).toFixed(1)} %`, expect: '< 12 %', pass: d.loss < 0.12 });
   a.push({ name: 'drifting turns faster than gripping', value: `${d.time.toFixed(2)}s vs ${g.time.toFixed(2)}s`, expect: 'drift ≤ grip', pass: d.time <= g.time + 0.02 });
 
   track.mode = 'track';
@@ -1173,54 +1213,80 @@ function tWall(): TestReport {
   const notes: string[] = [];
   solo();
 
-  const hitAt = (deg: number): { before: number; after: number; min: number; stopped: boolean } => {
+  const hitAt = (deg: number): { before: number; after: number; min: number; penalties: number } => {
     // Flat part of the ramp straight, well before the ramp, aimed at the
     // outer guardrail. lateral −2 gives ~13 m of run-up to the wall.
     place(4, -2, 25, deg);
+    const b0 = physics.getBody(0)!;
+    const pen0 = b0.wallImpacts;
     let before = 0;
     let after = -1;
     let min = 1e9;
     let hitStep = -1;
-    const off = bus.on('kart:wallHit', () => {
-      if (hitStep < 0) hitStep = 0;
-    });
     let prev = 25;
-    for (let i = 0; i < 240; i++) {
+    // 480 ticks, not 240: from lateral −2 a 10° line needs 54 m of run-up to
+    // reach the guardrail, which is 2.2 s at 25 m/s. The old budget expired
+    // first, so the "graze" sub-test was silently measuring a kart that had
+    // never touched anything.
+    for (let i = 0; i < 480; i++) {
       physics.setControl(0, ctrl(0, 1));
       const b = physics.getBody(0)!;
-      const speedNow = b.velocity.length();
-      if (hitStep < 0) prev = speedNow;
+      if (hitStep < 0) prev = b.velocity.length();
       stepPhysics(1);
-      if (hitStep === 0) {
+      // Drive off the PENALTY, not off the VFX event — the event is cooldown-
+      // gated and a light graze deliberately doesn't raise one at all.
+      if (hitStep < 0 && b.wallImpacts > pen0) {
         before = prev;
+        after = b.velocity.length(); // the impact tick itself: the true cost
         hitStep = 1;
       } else if (hitStep > 0) {
         hitStep++;
         min = Math.min(min, physics.getBody(0)!.velocity.length());
-        if (hitStep === 12) after = physics.getBody(0)!.velocity.length();
         if (hitStep > 40) break;
       }
     }
-    off();
-    return { before, after, min, stopped: min < 2 };
+    return { before, after, min, penalties: physics.getBody(0)!.wallImpacts - pen0 };
   };
 
+  const loss = (r: { before: number; after: number }) => (r.before - r.after) / r.before;
+
   const r30 = hitAt(30);
-  notes.push(`30° wall hit: ${r30.before.toFixed(2)} → ${r30.after.toFixed(2)} m/s (min ${r30.min.toFixed(2)}), loss ${(((r30.before - r30.after) / r30.before) * 100).toFixed(1)}%`);
-  const loss30 = (r30.before - r30.after) / r30.before;
-  a.push({ name: '30° wall scrub', value: `${(loss30 * 100).toFixed(1)} %`, expect: '15–35 % (target 25)', pass: loss30 > 0.15 && loss30 < 0.35 });
+  notes.push(`30° wall hit: ${r30.before.toFixed(2)} → ${r30.after.toFixed(2)} m/s on the impact tick (min over the next 0.33 s ${r30.min.toFixed(2)}), loss ${(loss(r30) * 100).toFixed(1)}%`);
+  a.push({ name: '30° wall scrub', value: `${(loss(r30) * 100).toFixed(1)} %`, expect: '6–20 %', pass: loss(r30) > 0.06 && loss(r30) < 0.2 });
   a.push({ name: '30° wall does NOT stop the kart', value: `min ${r30.min.toFixed(2)} m/s`, expect: '> 40 % of entry', pass: r30.min > r30.before * 0.4 });
 
   const r10 = hitAt(10);
-  const loss10 = (r10.before - r10.after) / r10.before;
-  notes.push(`10° graze:    ${r10.before.toFixed(2)} → ${r10.after.toFixed(2)} m/s, loss ${(loss10 * 100).toFixed(1)}%`);
-  a.push({ name: '10° graze is cheap', value: `${(loss10 * 100).toFixed(1)} %`, expect: '< 15 %', pass: loss10 < 0.15 });
+  notes.push(`10° graze:    ${r10.before.toFixed(2)} → ${r10.after.toFixed(2)} m/s, loss ${(loss(r10) * 100).toFixed(1)}%`);
+  a.push({ name: '10° graze is nearly free', value: `${(loss(r10) * 100).toFixed(1)} %`, expect: '< 8 %', pass: loss(r10) < 0.08 });
 
   const r60 = hitAt(60);
-  const loss60 = (r60.before - r60.after) / r60.before;
-  notes.push(`60° clout:    ${r60.before.toFixed(2)} → ${r60.after.toFixed(2)} m/s, loss ${(loss60 * 100).toFixed(1)}%, min ${r60.min.toFixed(2)}`);
-  a.push({ name: '60° hit still slides', value: `min ${r60.min.toFixed(2)} m/s`, expect: '> 3 m/s', pass: r60.min > 3 });
-  a.push({ name: 'steeper hit costs more', value: `${(loss10 * 100).toFixed(0)} < ${(loss30 * 100).toFixed(0)} < ${(loss60 * 100).toFixed(0)} %`, expect: 'monotonic', pass: loss10 < loss30 && loss30 < loss60 });
+  notes.push(`60° clout:    ${r60.before.toFixed(2)} → ${r60.after.toFixed(2)} m/s, loss ${(loss(r60) * 100).toFixed(1)}%, min ${r60.min.toFixed(2)}`);
+  a.push({ name: '60° hit keeps half its speed', value: `${((1 - loss(r60)) * 100).toFixed(1)} % retained`, expect: '45–70 %', pass: 1 - loss(r60) > 0.45 && 1 - loss(r60) < 0.7 });
+  a.push({ name: 'steeper hit costs more', value: `${(loss(r10) * 100).toFixed(0)} < ${(loss(r30) * 100).toFixed(0)} < ${(loss(r60) * 100).toFixed(0)} %`, expect: 'monotonic', pass: loss(r10) < loss(r30) && loss(r30) < loss(r60) });
+  a.push({ name: 'one penalty per impact', value: `${r30.penalties} / ${r10.penalties} / ${r60.penalties}`, expect: '≤ 3 each', pass: r30.penalties <= 3 && r10.penalties <= 3 && r60.penalties <= 3 });
+
+  // --- THE REGRESSION THAT MATTERED: grinding a wall must not be a crash ----
+  // At 120 Hz a kart merely leaning on a barrier used to take ~240 impact
+  // penalties a second; 3 s of it cost 99.9 % of the kart's speed. Anything that
+  // reintroduces a per-tick penalty will fail here and nowhere else.
+  const grind = (withWall: boolean): { v: number; contact: number; penalties: number } => {
+    // Wall-side lateral on the tight-guardrail straight, gently leaning into it.
+    place(4, withWall ? -(WALL_TIGHT - 1.0) : 0, 18, 0);
+    const b = physics.getBody(0)!;
+    const pen0 = b.wallImpacts;
+    let contact = 0;
+    for (let i = 0; i < 120 * 3; i++) {
+      physics.setControl(0, ctrl(withWall ? -0.35 : -0.35, 1));
+      stepPhysics(1);
+      if (b.wallContact) contact++;
+    }
+    return { v: b.velocity.length(), contact, penalties: b.wallImpacts - pen0 };
+  };
+  const gw = grind(true);
+  const gf = grind(false);
+  notes.push(`3 s leaning on the guardrail at 18 m/s entry: |v| ${gw.v.toFixed(2)} m/s vs ${gf.v.toFixed(2)} free (cost ${(((gf.v - gw.v) / gf.v) * 100).toFixed(1)}%), ${gw.contact}/360 contact ticks, ${gw.penalties} penalties`);
+  a.push({ name: 'grinding a wall is not a crash', value: `${gw.v.toFixed(2)} of ${gf.v.toFixed(2)} m/s`, expect: '> 60 % of free speed', pass: gw.v > gf.v * 0.6 });
+  a.push({ name: 'a grind is not re-penalised per tick', value: `${gw.penalties} penalties over ${gw.contact} contact ticks`, expect: '< 15', pass: gw.penalties < 15 });
 
   return { assertions: a, notes };
 }

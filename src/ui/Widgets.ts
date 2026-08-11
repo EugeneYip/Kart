@@ -6,8 +6,7 @@
  *  results screen:
  *
  *   - tiny DOM helpers (`el`, `svgEl`, `restartAnim`, `punch`)
- *   - `Spring`: critically-tunable numeric spring for needle inertia/overshoot
- *   - `RadialGauge`: canvas-2D speedometer with a cached static layer
+ *   - `Spring`: critically-tunable numeric spring for smoothed readouts
  *   - `ItemIcons`: procedural, chunky item artwork (uses the items subsystem's
  *     atlas when one exists, otherwise paints its own — both must look good)
  *   - procedural `characterPortrait`, `kartThumb`, `trackPreview` art
@@ -284,235 +283,13 @@ function star(
 }
 
 // ===========================================================================
-// Radial gauge (speedometer)
+// (The 232u analogue speedometer that used to live here — dished plate, tick
+//  scale with numbered majors, red zone, needle and hub — was removed. It read
+//  as a flight-sim instrument rather than a kart HUD, and MK8 ships no
+//  speedometer at all. `.ak-speed` is now a compact digital readout plus a
+//  transform-driven boost bar: pure DOM, ~1/4 the footprint, and one fewer
+//  canvas redrawn every frame.)
 // ===========================================================================
-
-export interface GaugeFrame {
-  /** 0..1+ needle position (may exceed 1 during boost — it clamps visually). */
-  needle: number;
-  /** 0..1 boost meter fill. */
-  boost: number;
-  boosting: boolean;
-  /** 0..1 drift charge, drawn as a thin outer arc. */
-  drift?: number;
-  driftTier?: number;
-}
-
-const GAUGE_START = Math.PI * 0.76;
-const GAUGE_SWEEP = Math.PI * 1.48;
-
-export class RadialGauge {
-  readonly canvas: HTMLCanvasElement;
-  private c: CanvasRenderingContext2D | null;
-  private bg: HTMLCanvasElement;
-  private size = 0;
-  private dpr = 1;
-  private maxKmh: number;
-
-  constructor(maxKmh = 160) {
-    this.maxKmh = maxKmh;
-    this.canvas = makeCanvas(2, 2);
-    this.canvas.className = 'ak-speed__canvas';
-    this.c = ctx2d(this.canvas);
-    this.bg = makeCanvas(2, 2);
-  }
-
-  /** CSS pixel size of the square gauge. */
-  resize(cssSize: number, dpr: number): void {
-    const px = Math.max(8, Math.round(cssSize * dpr));
-    if (px === this.canvas.width && dpr === this.dpr) return;
-    this.dpr = dpr;
-    this.size = px;
-    this.canvas.width = px;
-    this.canvas.height = px;
-    this.bg.width = px;
-    this.bg.height = px;
-    this.paintStatic();
-  }
-
-  private paintStatic(): void {
-    const c = ctx2d(this.bg);
-    if (!c) return;
-    const s = this.size;
-    const cx = s * 0.5;
-    const cy = s * 0.54;
-    const R = s * 0.40;
-    c.clearRect(0, 0, s, s);
-
-    // Dished plate behind the dial.
-    const plate = c.createRadialGradient(cx, cy - R * 0.5, R * 0.1, cx, cy, R * 1.28);
-    plate.addColorStop(0, 'rgba(30,46,86,0.86)');
-    plate.addColorStop(0.62, 'rgba(9,14,32,0.9)');
-    plate.addColorStop(1, 'rgba(4,7,18,0.5)');
-    c.beginPath();
-    c.arc(cx, cy, R * 1.2, 0, Math.PI * 2);
-    c.fillStyle = plate;
-    c.fill();
-
-    // Outer rim — thick white, MK8-style.
-    c.lineWidth = s * 0.022;
-    c.strokeStyle = 'rgba(255,255,255,0.92)';
-    c.beginPath();
-    c.arc(cx, cy, R * 1.2, 0, Math.PI * 2);
-    c.stroke();
-    c.lineWidth = s * 0.008;
-    c.strokeStyle = 'rgba(120,180,255,0.35)';
-    c.beginPath();
-    c.arc(cx, cy, R * 1.14, 0, Math.PI * 2);
-    c.stroke();
-
-    // Unfilled track for the value arc.
-    c.lineCap = 'round';
-    c.lineWidth = s * 0.075;
-    c.strokeStyle = 'rgba(255,255,255,0.10)';
-    c.beginPath();
-    c.arc(cx, cy, R, GAUGE_START, GAUGE_START + GAUGE_SWEEP);
-    c.stroke();
-
-    // Tick scale.
-    const majorEvery = 40;
-    const steps = Math.round(this.maxKmh / 20);
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const a = GAUGE_START + GAUGE_SWEEP * t;
-      const major = (i * 20) % majorEvery === 0;
-      const r0 = R * (major ? 0.80 : 0.85);
-      const r1 = R * 0.925;
-      c.beginPath();
-      c.lineWidth = s * (major ? 0.014 : 0.007);
-      c.strokeStyle = major ? 'rgba(226,240,255,0.92)' : 'rgba(170,205,245,0.5)';
-      c.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
-      c.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
-      c.stroke();
-
-      if (major && i > 0 && i < steps) {
-        const lr = R * 0.66;
-        c.save();
-        c.fillStyle = 'rgba(196,222,255,0.72)';
-        c.font = `900 ${Math.round(s * 0.055)}px ${FONT_STACK_CANVAS}`;
-        c.textAlign = 'center';
-        c.textBaseline = 'middle';
-        c.fillText(String(i * 20), cx + Math.cos(a) * lr, cy + Math.sin(a) * lr);
-        c.restore();
-      }
-    }
-
-    // Red zone marker near the top of the scale.
-    c.lineWidth = s * 0.02;
-    c.strokeStyle = 'rgba(255,80,60,0.85)';
-    c.beginPath();
-    c.arc(cx, cy, R * 0.955, GAUGE_START + GAUGE_SWEEP * 0.82, GAUGE_START + GAUGE_SWEEP);
-    c.stroke();
-  }
-
-  render(f: GaugeFrame): void {
-    const c = this.c;
-    if (!c || this.size <= 0) return;
-    const s = this.size;
-    const cx = s * 0.5;
-    const cy = s * 0.54;
-    const R = s * 0.40;
-
-    c.clearRect(0, 0, s, s);
-    c.drawImage(this.bg, 0, 0);
-
-    const n = clamp01(f.needle);
-    const a1 = GAUGE_START + GAUGE_SWEEP * n;
-
-    // --- value arc ---------------------------------------------------------
-    if (n > 0.004) {
-      const g = c.createLinearGradient(0, cy + R, s, cy - R);
-      if (f.boosting) {
-        g.addColorStop(0, '#ffd166'); g.addColorStop(0.5, '#ff8a2b'); g.addColorStop(1, '#ff3d00');
-      } else {
-        g.addColorStop(0, '#4ec8ff'); g.addColorStop(0.55, '#7ee8ff'); g.addColorStop(1, '#c9f4ff');
-      }
-      c.lineCap = 'round';
-      c.lineWidth = s * 0.075;
-      c.strokeStyle = g;
-      c.shadowColor = f.boosting ? 'rgba(255,140,20,0.95)' : 'rgba(80,200,255,0.75)';
-      c.shadowBlur = s * (f.boosting ? 0.09 : 0.05);
-      c.beginPath();
-      c.arc(cx, cy, R, GAUGE_START, a1);
-      c.stroke();
-      c.shadowBlur = 0;
-    }
-
-    // --- boost meter (inner arc) ------------------------------------------
-    const br = R * 0.68;
-    c.lineWidth = s * 0.032;
-    c.lineCap = 'butt';
-    c.strokeStyle = 'rgba(255,255,255,0.09)';
-    c.beginPath();
-    c.arc(cx, cy, br, GAUGE_START, GAUGE_START + GAUGE_SWEEP);
-    c.stroke();
-    const b = clamp01(f.boost);
-    if (b > 0.002) {
-      const bg = c.createLinearGradient(cx - R, 0, cx + R, 0);
-      bg.addColorStop(0, '#ffe9a8');
-      bg.addColorStop(1, f.boosting ? '#ff5b00' : '#ffb347');
-      c.strokeStyle = bg;
-      c.shadowColor = 'rgba(255,180,60,0.9)';
-      c.shadowBlur = s * 0.05;
-      c.beginPath();
-      c.arc(cx, cy, br, GAUGE_START, GAUGE_START + GAUGE_SWEEP * b);
-      c.stroke();
-      c.shadowBlur = 0;
-    }
-
-    // --- drift charge (thin outer arc) ------------------------------------
-    const d = clamp01(f.drift ?? 0);
-    if (d > 0.001) {
-      const tier = f.driftTier ?? 0;
-      c.lineWidth = s * 0.016;
-      c.lineCap = 'round';
-      c.strokeStyle = tier >= 3 ? '#c489ff' : tier >= 2 ? '#ffa32b' : '#58b6ff';
-      c.shadowColor = c.strokeStyle;
-      c.shadowBlur = s * 0.045;
-      c.beginPath();
-      c.arc(cx, cy, R * 1.06, GAUGE_START, GAUGE_START + GAUGE_SWEEP * d);
-      c.stroke();
-      c.shadowBlur = 0;
-    }
-
-    // --- needle -----------------------------------------------------------
-    const len = R * 0.99;
-    const back = R * 0.16;
-    const halfW = s * 0.019;
-    c.save();
-    c.translate(cx, cy);
-    c.rotate(a1);
-    c.beginPath();
-    c.moveTo(len, 0);
-    c.lineTo(0, -halfW);
-    c.lineTo(-back, 0);
-    c.lineTo(0, halfW);
-    c.closePath();
-    const ng = c.createLinearGradient(-back, 0, len, 0);
-    ng.addColorStop(0, '#ffffff');
-    ng.addColorStop(0.35, f.boosting ? '#ffd08a' : '#eaf4ff');
-    ng.addColorStop(1, f.boosting ? '#ff4d00' : '#ff3b3b');
-    c.fillStyle = ng;
-    c.shadowColor = 'rgba(0,0,0,0.8)';
-    c.shadowBlur = s * 0.03;
-    c.shadowOffsetY = s * 0.006;
-    c.fill();
-    c.restore();
-
-    // Hub.
-    const hub = c.createRadialGradient(cx - s * 0.01, cy - s * 0.012, s * 0.004, cx, cy, s * 0.052);
-    hub.addColorStop(0, '#ffffff');
-    hub.addColorStop(0.55, '#c9dcf5');
-    hub.addColorStop(1, '#1b2740');
-    c.beginPath();
-    c.arc(cx, cy, s * 0.05, 0, Math.PI * 2);
-    c.fillStyle = hub;
-    c.fill();
-    c.lineWidth = s * 0.012;
-    c.strokeStyle = 'rgba(8,14,28,0.9)';
-    c.stroke();
-  }
-}
 
 /** Canvas needs a literal stack — it can't read the CSS custom property. */
 const FONT_STACK_CANVAS =
@@ -1438,24 +1215,39 @@ export function confetti(host: HTMLElement, count = 90): void {
 // Misc
 // ===========================================================================
 
-/** Reference-resolution UI scale so the whole interface moves as one piece. */
+/**
+ * Reference-resolution UI scale so the whole interface moves as one piece.
+ * 1.0 == the 1920x1080 design size. Must stay numerically identical to the CSS
+ * fallback in `ui.css` (`clamp(0.34px, min(0.0926vh, 0.0651vw), 1.55px)`), which
+ * is what applies before this ever runs.
+ */
 export function uiScale(width: number, height: number): number {
   const byH = height / 1080;
   const byW = (width / 1920) * 1.25;
-  return clamp(Math.min(byH, byW), 0.42, 1.7);
+  return clamp(Math.min(byH, byW), 0.34, 1.55);
 }
 
 let appliedScale = -1;
 
 /**
- * Publish the UI scale on the document root. `ui.css` derives its design unit
- * (`--u`) from it, so one write rescales the HUD, menus and results together.
+ * Publish the UI scale on the document root, from the size of the box we
+ * actually render into. `ui.css` derives its design unit (`--u`) from `--ak-u`,
+ * so one write rescales the HUD, menus and results together — there is exactly
+ * one scale factor for ~14 HUD elements and it lives here.
+ *
+ * `--ak-u` is written as a *length* so `ui.css` can express its no-JS default as
+ * `var(--ak-u, clamp(...))`. Before this fix the stylesheet read
+ * `calc(1px * var(--ak-scale, 1))`, so any frame in which nothing had called
+ * `resize()` yet rendered the HUD at full 1080p size regardless of the viewport.
+ * `--ak-scale` is still published, purely so the value is inspectable.
  */
 export function applyUiScale(width: number, height: number): number {
   const s = uiScale(width, height);
   if (Math.abs(s - appliedScale) > 0.0005) {
     appliedScale = s;
-    document.documentElement.style.setProperty('--ak-scale', s.toFixed(4));
+    const root = document.documentElement.style;
+    root.setProperty('--ak-u', `${s.toFixed(4)}px`);
+    root.setProperty('--ak-scale', s.toFixed(4));
   }
   return s;
 }

@@ -262,11 +262,15 @@ function place(x: number, z: number, speed: number, degRight = 0): void {
   const q = new THREE.Quaternion().setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(right, up, back),
   );
-  const pos = new THREE.Vector3(x, track.surfaceY(x), z).addScaledVector(up, 0.42);
+  // Natural ride height ≈ |hubY| + (rest - sag) + wheelRadius ≈ 0.71 m. Dropping
+  // the chassis in below that bottoms the springs and LAUNCHES the kart, which
+  // silently put the first revision of this bench on the airborne yaw branch.
+  const pos = new THREE.Vector3(x, track.surfaceY(x), z).addScaledVector(up, 0.78);
   physics.place(0, pos, q);
   physics.setControl(0, IDLE);
-  step(30);
+  step(150);
   const b = physics.getBody(0)!;
+  if (!b.grounded) say(`  !! place(): kart not grounded after settle (airTime ${b.airTime.toFixed(2)})`);
   b.velocity.copy(b.forward).multiplyScalar(speed);
   b.forwardSpeed = speed;
 }
@@ -301,6 +305,11 @@ function wallImpactsOf(): number {
   const b = physics.getBody(0)! as unknown as { wallImpacts?: number };
   return b.wallImpacts ?? -1;
 }
+/** What PHYSICS thinks — not what the track mock was asked. */
+function wallContactOf(): boolean {
+  const b = physics.getBody(0)! as unknown as { wallContact?: boolean };
+  return b.wallContact === true;
+}
 
 function fireAtWall(deg: number, speed: number): WallResult {
   solo();
@@ -314,12 +323,14 @@ function fireAtWall(deg: number, speed: number): WallResult {
   const b = physics.getBody(0)!;
   const p0 = wallImpactsOf();
 
-  let prevSpeed = b.velocity.length();
   let entry = -1;
   let exit = -1;
+  let at250 = -1;
+  let atTick = -1;
   let min = 1e9;
   let contactTicks = 0;
   let sinceContact = 999;
+  let sinceFirst = 0;
   let yawPeak = 0;
   let firstSeen = false;
 
@@ -327,9 +338,8 @@ function fireAtWall(deg: number, speed: number): WallResult {
     // Throttle held (what a player actually does), no steering.
     physics.setControl(0, ctrl(0, 1));
     const before = b.velocity.length();
-    track.wallQueryHits = 0;
     step(1);
-    const contacted = track.wallQueryHits > 0;
+    const contacted = wallContactOf();
     if (contacted) {
       if (!firstSeen) {
         firstSeen = true;
@@ -338,42 +348,63 @@ function fireAtWall(deg: number, speed: number): WallResult {
       contactTicks++;
       sinceContact = 0;
       exit = b.velocity.length();
+      // The tick on which the penalty was actually charged: the pure impact cost.
+      if (atTick < 0 && wallImpactsOf() > p0) atTick = b.velocity.length();
       yawPeak = Math.max(yawPeak, Math.abs(b.yawRate));
     } else if (firstSeen) {
       sinceContact++;
     }
-    if (firstSeen) min = Math.min(min, b.velocity.length());
+    if (firstSeen) {
+      sinceFirst++;
+      min = Math.min(min, b.velocity.length());
+      // Snapshot 0.25 s after first touch: the impact response has fully played
+      // out but a long grind has not yet had time to matter.
+      if (sinceFirst === 30) at250 = b.velocity.length();
+    }
     if (firstSeen && sinceContact > 6) break;
-    prevSpeed = before;
   }
-  void prevSpeed;
+  if (at250 < 0) at250 = exit;
+  if (atTick < 0) atTick = exit;
   return {
     deg,
     entry,
     exit,
-    retain: exit / entry,
+    at250,
+    atTick,
+    tickRetain: atTick / entry,
+    retain: at250 / entry,
+    episodeRetain: exit / entry,
     min,
     minRetain: min / entry,
     contactTicks,
     penalties: wallImpactsOf() - p0,
     yawKick: yawPeak,
-    driftBroken: false,
   };
 }
 
 function tWallAngles(): void {
   head('Wall impact at 30 m/s — retained speed by impact angle');
-  say('  deg |  entry  |  exit   | retain | min |v| | minRet | contactTicks | penalties | peak|yaw|');
+  say('  impact  = |v| on the tick the penalty was charged / |v| the tick before contact.');
+  say('  @0.25s  = same, 0.25 s later (impact resolved, grind not yet significant).');
+  say('  Episode = |v| at the end of the whole contact (a shallow hit then GRINDS the wall');
+  say('            for the rest of the run because nothing steers it away).');
+  say('  deg |  entry  | impact | @0.25s | episode | min |v| | minRet | contactTicks | pen | peak|yaw|');
   for (const deg of [5, 15, 30, 60, 90]) {
     const r = fireAtWall(deg, 30);
     say(
-      `  ${String(deg).padStart(3)} | ${r.entry.toFixed(2).padStart(7)} | ${r.exit
-        .toFixed(2)
-        .padStart(7)} | ${(r.retain * 100).toFixed(1).padStart(5)}% | ${r.min
-        .toFixed(2)
-        .padStart(7)} | ${(r.minRetain * 100).toFixed(1).padStart(5)}% | ${String(
-        r.contactTicks,
-      ).padStart(12)} | ${String(r.penalties).padStart(9)} | ${r.yawKick.toFixed(2).padStart(8)}`,
+      `  ${String(deg).padStart(3)} | ${r.entry.toFixed(2).padStart(7)} | ${(
+        r.tickRetain * 100
+      )
+        .toFixed(1)
+        .padStart(5)}% | ${(r.retain * 100).toFixed(1).padStart(5)}% | ${(
+        r.episodeRetain * 100
+      )
+        .toFixed(1)
+        .padStart(6)}% | ${r.min.toFixed(2).padStart(7)} | ${(r.minRetain * 100)
+        .toFixed(1)
+        .padStart(5)}% | ${String(r.contactTicks).padStart(12)} | ${String(r.penalties).padStart(
+        3,
+      )} | ${r.yawKick.toFixed(2).padStart(8)}`,
     );
   }
 }
@@ -396,9 +427,8 @@ function tWallHug(): void {
   const off = bus.on('kart:wallHit', () => events++);
   for (let i = 0; i < 120 * 3; i++) {
     physics.setControl(0, IDLE);
-    track.wallQueryHits = 0;
     step(1);
-    if (track.wallQueryHits > 0) contactTicks++;
+    if (wallContactOf()) contactTicks++;
   }
   off();
   say(
@@ -419,9 +449,8 @@ function tWallHug(): void {
     const o = bus.on('kart:wallHit', () => ev++);
     for (let i = 0; i < 120 * 3; i++) {
       physics.setControl(0, ctrl(0.35, 1));
-      track.wallQueryHits = 0;
       step(1);
-      if (track.wallQueryHits > 0) ct++;
+      if (wallContactOf()) ct++;
     }
     o();
     return { v: bb.velocity.length(), contactTicks: ct, penalties: wallImpactsOf() - base, events: ev };
@@ -446,9 +475,8 @@ function tWallHug(): void {
     let ct = 0;
     for (let i = 0; i < 120 * 3; i++) {
       physics.setControl(0, ctrl(1, 1));
-      track.wallQueryHits = 0;
       step(1);
-      if (track.wallQueryHits > 0) ct++;
+      if (wallContactOf()) ct++;
     }
     return { v: bb.velocity.length(), ct, pen: wallImpactsOf() - base };
   };
@@ -549,24 +577,27 @@ function tYaw(): void {
     const b = physics.getBody(0)!;
     physics.setControl(0, ctrl(1, 1, 0, true, true));
     step(1);
-    for (let i = 0; i < 200; i++) {
+    let engaged = false;
+    for (let i = 0; i < 240; i++) {
       physics.setControl(0, ctrl(1, 1, 0, true, false));
       step(1);
-      b.velocity.copy(b.forward).multiplyScalar(v).addScaledVector(b.right, b.lateralSpeed);
-      b.forwardSpeed = v;
-      if (karts[0].drifting) break;
+      pin(v, true);
+      if (karts[0].drifting) {
+        engaged = true;
+        break;
+      }
     }
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 150; i++) {
       physics.setControl(0, ctrl(1, 1, 0, true, false));
       step(1);
-      b.velocity.copy(b.forward).multiplyScalar(v).addScaledVector(b.right, b.lateralSpeed);
-      b.forwardSpeed = v;
+      pin(v, true);
     }
+    const dy = Math.abs(b.yawRate);
     const g = pinnedYaw(v, 1);
     say(
-      `  ${v} m/s: drift yaw ${Math.abs(b.yawRate).toFixed(3)} rad/s vs grip ${g.toFixed(
-        3,
-      )} rad/s  (×${(Math.abs(b.yawRate) / g).toFixed(2)})`,
+      `  ${v} m/s: drift yaw ${dy.toFixed(3)} rad/s vs grip ${g.toFixed(3)} rad/s  (×${(
+        dy / g
+      ).toFixed(2)})  engaged=${engaged}  latAccel needed ${(v * dy).toFixed(1)} m/s²`,
     );
   }
 }
@@ -580,7 +611,7 @@ function tSteerRamp(): void {
   const speed = 20;
   const steady = pinnedYaw(speed, 1, 2.5);
 
-  const measure = (emulateInput: boolean): { t50: number; t90: number; t95: number } => {
+  const measure = (inputRate: number): { t50: number; t90: number; t95: number } => {
     solo();
     track.wallX = 5000;
     place(0, 0, speed, 0);
@@ -590,17 +621,11 @@ function tSteerRamp(): void {
     let t90 = -1;
     let t95 = -1;
     for (let i = 0; i < 120 * 2; i++) {
-      if (emulateInput) {
-        // Input.ts: moveTowards(steer, target, rate*dt), rate 7.5 ramping in.
-        inSteer = moveTowards(inSteer, 1, 7.5 * FIXED_DT);
-      } else {
-        inSteer = 1;
-      }
+      // Input.ts: moveTowards(steer, target, rate*dt). rate <= 0 → no pre-filter.
+      inSteer = inputRate > 0 ? moveTowards(inSteer, 1, inputRate * FIXED_DT) : 1;
       physics.setControl(0, ctrl(inSteer, 1));
       step(1);
-      b.velocity.copy(b.forward).multiplyScalar(speed);
-      b.forwardSpeed = speed;
-      b.lateralSpeed = 0;
+      pin(speed);
       const f = Math.abs(b.yawRate) / steady;
       const t = (i + 1) * FIXED_DT;
       if (t50 < 0 && f >= 0.5) t50 = t;
@@ -610,18 +635,24 @@ function tSteerRamp(): void {
     }
     return { t50, t90, t95 };
   };
-  const a = measure(false);
-  const bI = measure(true);
+  const a = measure(0);
+  const b75 = measure(7.5);
+  const b14 = measure(14);
   say(`  steady-state yaw at 20 m/s: ${steady.toFixed(3)} rad/s`);
   say(
-    `  ctrlSteer stepped to 1 instantly : 50% ${a.t50.toFixed(3)}s  90% ${a.t90.toFixed(
+    `  ctrlSteer stepped to 1 instantly  : 50% ${a.t50.toFixed(3)}s  90% ${a.t90.toFixed(
       3,
     )}s  95% ${a.t95.toFixed(3)}s`,
   );
   say(
-    `  with Input.ts ramp (7.5/s) too   : 50% ${bI.t50.toFixed(3)}s  90% ${bI.t90.toFixed(
+    `  + Input.ts ramp as shipped (7.5/s): 50% ${b75.t50.toFixed(3)}s  90% ${b75.t90.toFixed(
       3,
-    )}s  95% ${bI.t95.toFixed(3)}s`,
+    )}s  95% ${b75.t95.toFixed(3)}s`,
+  );
+  say(
+    `  + Input.ts ramp proposed  (14/s)  : 50% ${b14.t50.toFixed(3)}s  90% ${b14.t90.toFixed(
+      3,
+    )}s  95% ${b14.t95.toFixed(3)}s`,
   );
 
   // Return-to-centre.
@@ -632,18 +663,14 @@ function tSteerRamp(): void {
   for (let i = 0; i < 180; i++) {
     physics.setControl(0, ctrl(1, 1));
     step(1);
-    b.velocity.copy(b.forward).multiplyScalar(speed);
-    b.forwardSpeed = speed;
-    b.lateralSpeed = 0;
+    pin(speed);
   }
   const from = Math.abs(b.yawRate);
   let tBack = -1;
   for (let i = 0; i < 240; i++) {
     physics.setControl(0, ctrl(0, 1));
     step(1);
-    b.velocity.copy(b.forward).multiplyScalar(speed);
-    b.forwardSpeed = speed;
-    b.lateralSpeed = 0;
+    pin(speed);
     if (Math.abs(b.yawRate) < from * 0.1) {
       tBack = (i + 1) * FIXED_DT;
       break;
@@ -699,6 +726,8 @@ function tDrift(): void {
   place(0, 0, t.maxSpeed * 0.95, 0);
   const b = physics.getBody(0)!;
   const tiers: number[] = [];
+  let respawns = 0;
+  const offR = bus.on('kart:respawn', () => respawns++);
   const off = bus.on('kart:driftTier', (e) => {
     tiers[e.tier] = ctxT.elapsed;
   });
@@ -719,16 +748,22 @@ function tDrift(): void {
     if (karts[0].driftStage >= DriftStage.Purple) break;
   }
   off();
+  offR();
   const purple = tiers[3] !== undefined ? tiers[3] - engaged : -1;
   say(
     `  entry → Blue ${(tiers[1] - engaged).toFixed(2)}s, Orange ${(tiers[2] - engaged).toFixed(
       2,
-    )}s, Purple ${purple.toFixed(2)}s   [want Purple ≈ 3.0 s]`,
+    )}s, Purple ${purple.toFixed(2)}s   [want Purple ≈ 3.0 s]  respawns ${respawns}`,
   );
   say(
     `  sustained drift angle ${((b.driftAngle * 180) / Math.PI).toFixed(
       1,
-    )}°, speed held ${b.forwardSpeed.toFixed(2)} m/s of ${t.maxSpeed.toFixed(2)}`,
+    )}°, forward ${b.forwardSpeed.toFixed(2)} m/s, |v| ${b.velocity
+      .length()
+      .toFixed(2)} of maxSpeed ${t.maxSpeed.toFixed(2)}, slip ${(
+      (b.slipAngle * 180) /
+      Math.PI
+    ).toFixed(1)}°`,
   );
 
   // release payout
@@ -766,27 +801,44 @@ function tCorner(): void {
       }
     }
     const v0 = b.forwardSpeed;
+    const m0 = b.velocity.length();
     const h0 = new THREE.Vector3().copy(b.forward);
     let steps = 0;
+    let respawns = 0;
+    const or = bus.on('kart:respawn', () => respawns++);
     for (let i = 0; i < 120 * 8; i++) {
       physics.setControl(0, ctrl(1, 1, 0, drifting, false));
       step(1);
       steps++;
       if (Math.acos(clamp(h0.dot(b.forward), -1, 1)) >= Math.PI / 2) break;
     }
-    return { v0, v1: b.forwardSpeed, time: steps * FIXED_DT, loss: 1 - b.forwardSpeed / v0 };
+    or();
+    return {
+      v0,
+      v1: b.forwardSpeed,
+      m0,
+      m1: b.velocity.length(),
+      time: steps * FIXED_DT,
+      loss: 1 - b.forwardSpeed / v0,
+      mloss: 1 - b.velocity.length() / m0,
+      respawns,
+    };
   };
   const d = run(true);
   const g = run(false);
   say(
-    `  drifted  90°: ${d.v0.toFixed(2)} → ${d.v1.toFixed(2)} m/s in ${d.time.toFixed(2)}s  (${(
-      d.loss * 100
-    ).toFixed(1)}% lost)   [want < 12%]`,
+    `  drifted  90°: fwd ${d.v0.toFixed(2)} → ${d.v1.toFixed(2)} (${(d.loss * 100).toFixed(
+      1,
+    )}% lost) | |v| ${d.m0.toFixed(2)} → ${d.m1.toFixed(2)} (${(d.mloss * 100).toFixed(
+      1,
+    )}% lost) in ${d.time.toFixed(2)}s  respawns ${d.respawns}   [want < 12%]`,
   );
   say(
-    `  gripping 90°: ${g.v0.toFixed(2)} → ${g.v1.toFixed(2)} m/s in ${g.time.toFixed(2)}s  (${(
-      g.loss * 100
-    ).toFixed(1)}% lost)`,
+    `  gripping 90°: fwd ${g.v0.toFixed(2)} → ${g.v1.toFixed(2)} (${(g.loss * 100).toFixed(
+      1,
+    )}% lost) | |v| ${g.m0.toFixed(2)} → ${g.m1.toFixed(2)} (${(g.mloss * 100).toFixed(
+      1,
+    )}% lost) in ${g.time.toFixed(2)}s`,
   );
   say(`  drift is the fast line: ${d.time <= g.time + 0.02 ? 'YES' : 'NO'}`);
 }
@@ -824,6 +876,8 @@ function tBank(): void {
   );
 
   place(0, 0, 22, 0);
+  physics.setControl(0, ctrl(0, 1));
+  step(120); // let the drive/suspension transient settle before measuring
   let maxDelta = 0;
   let last = 0;
   for (let i = 0; i < 360; i++) {

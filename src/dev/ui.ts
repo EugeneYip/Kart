@@ -28,6 +28,8 @@ import * as THREE from 'three';
 import { DriftStage, ItemType, SurfaceType } from '@/core/Types';
 import type { FrameContext, KartState, QualitySettings } from '@/core/Types';
 import { HUD } from '@/ui/HUD';
+import { Results } from '@/ui/Results';
+import type { ResultRow } from '@/ui/Results';
 import { uiScale } from '@/ui/Widgets';
 
 // ===========================================================================
@@ -151,6 +153,25 @@ const engine = {
 };
 
 const hud = new HUD(stage, karts, race, track, engine);
+const results = new Results(stage);
+
+/** The post-race board shares `--u` and the same clip-vs-outline hazard. */
+function showResults(playerPos = 12): void {
+  const rows: ResultRow[] = [];
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      kartId: i,
+      position: i + 1,
+      name: i + 1 === playerPos ? 'YOU' : RACER_NAMES[i % RACER_NAMES.length],
+      time: 214.3 + i * 1.87,
+      bestLap: 41.882 + i * 0.31,
+      points: Math.max(0, 15 - i),
+      isPlayer: i + 1 === playerPos,
+      color: undefined,
+    });
+  }
+  results.show(rows, { title: 'RESULTS' });
+}
 
 // ===========================================================================
 // Scene posing — puts karts on screen so nameplates actually render
@@ -167,7 +188,9 @@ function poseKarts(): void {
     k.position.set(-3.4 + col * 3.2 + (row % 2) * 1.1, 0.4, -14 - row * 7.5);
     k.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI + i * 0.04);
     k.speed = 26 - i * 0.4;
-    k.progress = 2.4 - i * 0.012;
+    // Player deliberately mid-field so BOTH rival rows (ahead + behind) render —
+    // otherwise the audit silently never measures one of them.
+    k.progress = i === 0 ? 2.34 : 2.4 - i * 0.012;
     k.racePosition = i + 1;
     k.lap = 3;
     k.rpm = 0.8;
@@ -295,7 +318,7 @@ function inParkedCell(e: Element, parked: Set<Element>): boolean {
   return false;
 }
 
-/** Nearest ancestor (within the HUD) that clips its overflow. */
+/** Nearest ancestor (within the stage) that clips its overflow. */
 function clipper(e: Element): Element | null {
   let p = e.parentElement;
   while (p && p !== stage) {
@@ -304,6 +327,22 @@ function clipper(e: Element): Element | null {
     p = p.parentElement;
   }
   return null;
+}
+
+/**
+ * The rectangle `overflow: hidden` actually clips to: the PADDING box, not the
+ * content box. Padding is therefore usable ink budget, which is the whole point
+ * of "budget padding for the outline".
+ */
+function paddingBox(e: Element): Rect {
+  const r = e.getBoundingClientRect();
+  const s = getComputedStyle(e);
+  const num = (v: string) => parseFloat(v) || 0;
+  const l = r.left + num(s.borderLeftWidth);
+  const t = r.top + num(s.borderTopWidth);
+  const rr = r.right - num(s.borderRightWidth);
+  const b = r.bottom - num(s.borderBottomWidth);
+  return { l, t, r: rr, b, w: rr - l, h: b - t };
 }
 
 export interface ClipRow {
@@ -322,12 +361,16 @@ export interface ClipRow {
 function clipCuts(): ClipRow[] {
   const rows: ClipRow[] = [];
   const parked = parkedCells();
-  const layers = stage.querySelectorAll('.ak-num__fill, .ak-num__stroke, .ak-timer__v, .ak-timer__k, .ak-rival__name, .ak-rival__gap, .ak-lap__label, .ak-lap__tot, .ak-item__count, .ak-item__hint, .ak-speed__unit, .ak-plate3d__name, .ak-plate3d__pos, .ak-map__label, .ak-drift__label, .ak-warn__blue-text, .ak-warn__blue-sub');
+  const layers = stage.querySelectorAll(
+    '.ak-num__fill, .ak-num__stroke, .ak-timer__v, .ak-timer__k, .ak-rival__name, .ak-rival__gap, '
+    + '.ak-lap__label, .ak-lap__tot, .ak-item__count, .ak-speed__unit, .ak-plate3d__name, '
+    + '.ak-plate3d__pos, .ak-map__label, .ak-drift__label, .ak-warn__blue-text, .ak-warn__blue-sub, '
+    + '.ak-rrow__name, .ak-rrow__time, .ak-rrow__best, .ak-rrow__pts, .ak-podium__name');
   for (const e of Array.from(layers)) {
     if (!visible(e) || inParkedCell(e, parked)) continue;
     const cl = clipper(e);
     if (!cl) continue;
-    const box = contentBox(cl);
+    const box = paddingBox(cl);
     const r = e.getBoundingClientRect();
     const m = inkMargin(e);
     const il = r.left - m.l, ir = r.right + m.r, it = r.top - m.t, ib = r.bottom + m.b;
@@ -479,7 +522,7 @@ function audit(): Audit {
       // A layer parked entirely outside its clipper is masked by design.
       const cl = clipper(e);
       if (cl) {
-        const cb = contentBox(cl);
+        const cb = paddingBox(cl);
         const er = e.getBoundingClientRect();
         if (er.right <= cb.l || er.left >= cb.r || er.bottom <= cb.t || er.top >= cb.b) continue;
       }
@@ -700,17 +743,31 @@ function bench(n = 400): { avgMs: number; p95Ms: number; reported: number } {
   };
 }
 
-/** Does the JS-free path (no `--ak-scale` written) produce a sane `--u`? */
-function noJsScale(): { u: string; expectedForWindow: number } {
-  const prev = document.documentElement.style.getPropertyValue('--ak-u');
-  const prevS = document.documentElement.style.getPropertyValue('--ak-scale');
-  document.documentElement.style.removeProperty('--ak-u');
-  document.documentElement.style.removeProperty('--ak-scale');
-  const hudRoot = stage.querySelector('.ak-hud') as HTMLElement;
-  const u = getComputedStyle(hudRoot).getPropertyValue('--u').trim();
-  if (prev) document.documentElement.style.setProperty('--ak-u', prev);
-  if (prevS) document.documentElement.style.setProperty('--ak-scale', prevS);
-  return { u, expectedForWindow: +uiScale(window.innerWidth, window.innerHeight).toFixed(4) };
+/**
+ * With no JS-written scale at all, does `--u` still resolve sensibly? This is the
+ * regression guard for the original defect: the stylesheet's fallback used to be
+ * `1`, i.e. full 1080p sizing whatever the viewport.
+ *
+ * The CSS fallback is viewport-derived, so it is compared against the real
+ * window (the stage can't drive `vh`/`vw`).
+ */
+function noJsScale(): { u: number; expectedForWindow: number; plateW: number; platePctOfWindow: number } {
+  const root = document.documentElement.style;
+  const prevU = root.getPropertyValue('--ak-u');
+  const prevS = root.getPropertyValue('--ak-scale');
+  root.removeProperty('--ak-u');
+  root.removeProperty('--ak-scale');
+  const u = measureU();
+  const plate = stage.querySelector('.ak-pos__plate') as HTMLElement | null;
+  const plateW = plate ? plate.getBoundingClientRect().width : 0;
+  if (prevU) root.setProperty('--ak-u', prevU);
+  if (prevS) root.setProperty('--ak-scale', prevS);
+  return {
+    u: +u.toFixed(4),
+    expectedForWindow: +uiScale(window.innerWidth, window.innerHeight).toFixed(4),
+    plateW: +plateW.toFixed(1),
+    platePctOfWindow: +(plateW / window.innerWidth * 100).toFixed(2),
+  };
 }
 
 // ===========================================================================
@@ -724,6 +781,9 @@ interface UiQa {
   setPos(n: number): void;
   setState(s: string): void;
   setPath(space: 'unit' | 'world' | 'none'): void;
+  reset(): void;
+  results(playerPos?: number): void;
+  hideResults(): void;
   frame(dt?: number): void;
   settle(n?: number): void;
   countdown(n: number): void;
@@ -735,27 +795,71 @@ interface UiQa {
   summary(): string;
   detail(): string;
   bench(n?: number): { avgMs: number; p95Ms: number; reported: number };
-  noJsScale(): { u: string; expectedForWindow: number };
-  mapPixels(): { dots: number; nonEmpty: number };
+  noJsScale(): { u: number; expectedForWindow: number; plateW: number; platePctOfWindow: number };
+  mapPixels(): { canvasPx: number; dotPixels: number; placeable: boolean };
+  plateSpread(): { shown: number; minGapY: number; collisions: number };
 }
 
-/** Count non-background pixels in the minimap canvas — proves dots are drawn. */
-function mapPixels(): { dots: number; nonEmpty: number } {
-  const cv = stage.querySelector('.ak-map__canvas') as HTMLCanvasElement | null;
-  if (!cv) return { dots: 0, nonEmpty: 0 };
-  const c = cv.getContext('2d');
-  if (!c) return { dots: 0, nonEmpty: 0 };
-  const d = c.getImageData(0, 0, cv.width, cv.height).data;
-  let nonEmpty = 0;
-  let dots = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] > 12) nonEmpty++;
-    // Saturated hues are dots/boxes; the ribbon is desaturated blue-grey.
-    const r = d[i], g = d[i + 1], b = d[i + 2];
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    if (d[i + 3] > 100 && mx > 90 && mx - mn > 70) dots++;
+/**
+ * Nameplate de-collision check: the smallest vertical gap between any two
+ * visible nameplates whose columns overlap. Anything below the plate height is a
+ * collision — two labels sitting on top of each other.
+ */
+function plateSpread(): { shown: number; minGapY: number; collisions: number } {
+  const els = Array.from(stage.querySelectorAll('.ak-plate3d'))
+    .filter((e) => getComputedStyle(e).visibility !== 'hidden')
+    .map((e) => e.getBoundingClientRect())
+    .filter((r) => r.width > 1);
+  let minGap = Infinity;
+  let collisions = 0;
+  for (let i = 0; i < els.length; i++) {
+    for (let j = i + 1; j < els.length; j++) {
+      const a = els[i], b = els[j];
+      const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      if (ox <= 1) continue;                      // columns don't overlap
+      const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (oy > 1) collisions++;
+      const gap = Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom);
+      minGap = Math.min(minGap, gap);
+    }
   }
-  return { dots, nonEmpty };
+  return {
+    shown: els.length,
+    minGapY: Number.isFinite(minGap) ? +minGap.toFixed(2) : -1,
+    collisions,
+  };
+}
+
+/**
+ * How many minimap pixels the racer dots actually paint, measured differentially:
+ * snapshot the canvas, teleport every kart a thousand kilometres away, snapshot
+ * again, count changed pixels. Colour heuristics can't do this honestly — the
+ * ribbon's own blue-grey gradient is saturated enough to be mistaken for a dot.
+ *
+ * Zero here is the "minimap shows no racer dots at all" defect.
+ */
+function mapPixels(): { canvasPx: number; dotPixels: number; placeable: boolean } {
+  const cv = stage.querySelector('.ak-map__canvas') as HTMLCanvasElement | null;
+  const c = cv?.getContext('2d');
+  if (!cv || !c) return { canvasPx: 0, dotPixels: 0, placeable: false };
+  const snap = (): Uint8ClampedArray => c.getImageData(0, 0, cv.width, cv.height).data.slice();
+
+  const keep = KARTS.map((k) => ({ x: k.position.x, z: k.position.z }));
+  settle(4);
+  const withKarts = snap();
+  for (const k of KARTS) { k.position.x += 1e6; k.position.z += 1e6; }
+  settle(4);
+  const without = snap();
+  KARTS.forEach((k, i) => { k.position.x = keep[i].x; k.position.z = keep[i].z; });
+  settle(4);
+
+  let n = 0;
+  for (let i = 0; i < withKarts.length; i += 4) {
+    const d = Math.abs(withKarts[i] - without[i]) + Math.abs(withKarts[i + 1] - without[i + 1])
+      + Math.abs(withKarts[i + 2] - without[i + 2]) + Math.abs(withKarts[i + 3] - without[i + 3]);
+    if (d > 24) n++;
+  }
+  return { canvasPx: cv.width * cv.height, dotPixels: n, placeable: hud.minimapCanPlaceDots };
 }
 
 function button(label: string, fn: () => void): void {
@@ -782,18 +886,22 @@ async function boot(): Promise<void> {
   button('SUMMARY', () => { out.textContent = summary(); });
   button('TABLE', () => { out.textContent = table(); });
   button('bench', () => { out.textContent = JSON.stringify(bench(), null, 2); });
-  button('map px', () => { out.textContent = JSON.stringify(mapPixels(), null, 2); });
+  button('map dots', () => { out.textContent = JSON.stringify(mapPixels(), null, 2); });
+  button('nameplates', () => { out.textContent = JSON.stringify(plateSpread(), null, 2); });
 
   const api: UiQa = {
     hud, karts: KARTS,
     setSize, setPos,
     setState: (s: string) => { race.state = s; frame(); },
     setPath: (space) => { pathSpace = space; hud.refreshTrackPath(); frame(); },
+    reset: () => { poseKarts(); poseBusy(); settle(4); },
+    results: (playerPos = 12) => showResults(playerPos),
+    hideResults: () => results.hide(),
     frame, settle,
     countdown: (n: number) => hud.showCountdown(n),
     finalLap: () => hud.showBanner('FINAL LAP!', 'gold'),
     blue: () => hud.warn('blue', Math.PI, 6),
-    audit, sweep, table, summary, detail, bench, noJsScale, mapPixels,
+    audit, sweep, table, summary, detail, bench, noJsScale, mapPixels, plateSpread,
   };
   (window as unknown as { __UIQA__: UiQa }).__UIQA__ = api;
 

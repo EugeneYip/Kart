@@ -53,6 +53,8 @@ export class Minimap {
 
   private path: Pt[] = [];
   private boxes: Pt[] = [];
+  /** False when the ribbon is in a space kart positions can't be mapped into. */
+  private dotsPlaceable = true;
   /** World→layer transform. */
   private sx = 1;
   private ox = 0;
@@ -80,15 +82,36 @@ export class Minimap {
     if (this.label.textContent !== text) this.label.textContent = text;
   }
 
-  /** Accepts THREE.Vector2[] (x = world X, y = world Z) or any {x,y} list. */
-  setPath(points: readonly Pt[] | null | undefined): void {
+  /**
+   * Centreline loop. `space` declares which coordinate system the points are in:
+   *
+   *  - `'world'` — metres, the same space as `kart.position` (x, z). Racer dots
+   *    can be placed, because the same world→map transform applies to both.
+   *  - `'unit'` — bounding-box normalised to 0..1, which is what
+   *    `Track.getMinimapPath()` returns. The ribbon draws, but kart positions
+   *    cannot be mapped into it (the world bounds are not recoverable), so dots
+   *    are suppressed rather than drawn thousands of pixels off-canvas.
+   *
+   * That mismatch is the reason the map showed no racer dots at all: the fit was
+   * computed over a span of ~1 while karts were being plotted at ±200 m.
+   */
+  setPath(points: readonly Pt[] | null | undefined, space: 'world' | 'unit' = 'world'): void {
     if (!points || points.length < 3) { this.path = []; this.layerDirty = true; return; }
     this.path = points.map((p) => ({ x: p.x, y: p.y }));
+    this.dotsPlaceable = space === 'world';
+    this.dots.clear();
+    // Markers belong to the outgoing coordinate space; keeping them would paint
+    // world-metre item boxes into a 0..1 ribbon.
+    this.boxes.length = 0;
     this.layerDirty = true;
   }
 
+  /** True when the ribbon and the karts share a coordinate space. */
+  get canPlaceDots(): boolean { return this.dotsPlaceable; }
+
+  /** World-space (x, z) item-box markers. Ignored while the ribbon is unit-space. */
   setItemBoxes(points: readonly Pt[] | null | undefined): void {
-    this.boxes = points ? points.map((p) => ({ x: p.x, y: p.y })) : [];
+    this.boxes = points && this.dotsPlaceable ? points.map((p) => ({ x: p.x, y: p.y })) : [];
     this.layerDirty = true;
   }
 
@@ -110,7 +133,125 @@ export class Minimap {
     this.canvas.height = px;
     this.layer.width = px;
     this.layer.height = px;
+    this.sprites.clear();          // every glyph is sized off `px`
     this.layerDirty = true;
+  }
+
+  // =======================================================================
+  // Sprite bakery
+  //
+  // Drawing the racers straight onto the canvas cost a `createRadialGradient`
+  // per AI dot per frame — 11 gradient objects and 11 shadowed path fills every
+  // frame, which measured as ~90 % of the whole HUD's frame cost. Each glyph is
+  // now rasterised once per (size, colour) and blitted, so the per-frame work is
+  // 12 `drawImage` calls and no allocation at all. Invalidated on `resize()`.
+  // =======================================================================
+
+  private sprites = new Map<string, HTMLCanvasElement>();
+
+  /** Blit a centred sprite at (x, y) in canvas space. */
+  private blit(c: CanvasRenderingContext2D, sp: HTMLCanvasElement, x: number, y: number): void {
+    c.drawImage(sp, x - sp.width * 0.5, y - sp.height * 0.5);
+  }
+
+  private sprite(key: string, size: number, paint: (c: CanvasRenderingContext2D, mid: number) => void): HTMLCanvasElement {
+    const k = `${key}|${this.px}`;
+    const hit = this.sprites.get(k);
+    if (hit) return hit;
+    const px = Math.max(2, Math.ceil(size));
+    const cv = makeCanvas(px, px);
+    const c = ctx2d(cv);
+    if (c) paint(c, px * 0.5);
+    this.sprites.set(k, cv);
+    return cv;
+  }
+
+  private dotSprite(color: string): HTMLCanvasElement {
+    const S = this.px;
+    const r = S * 0.039;
+    return this.sprite(`dot${color}`, r * 2 + S * 0.04, (c, mid) => {
+      // Contact shadow, then a lit bead with a dark keyline.
+      c.beginPath();
+      c.arc(mid, mid + S * 0.006, r, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(0,0,0,0.55)';
+      c.fill();
+      const dg = c.createRadialGradient(mid - r * 0.4, mid - r * 0.5, r * 0.1, mid, mid, r * 1.3);
+      dg.addColorStop(0, 'rgba(255,255,255,0.9)');
+      dg.addColorStop(0.45, color);
+      dg.addColorStop(1, 'rgba(0,0,0,0.35)');
+      c.beginPath();
+      c.arc(mid, mid, r, 0, Math.PI * 2);
+      c.fillStyle = dg;
+      c.fill();
+      c.lineWidth = S * 0.009;
+      c.strokeStyle = 'rgba(6,10,22,0.9)';
+      c.stroke();
+    });
+  }
+
+  private arrowSprite(): HTMLCanvasElement {
+    const S = this.px;
+    const r = S * 0.068;
+    return this.sprite('arrow', r * 2 + S * 0.09, (c, mid) => {
+      c.translate(mid, mid);
+      c.beginPath();
+      c.moveTo(r, 0);
+      c.lineTo(-r * 0.72, -r * 0.78);
+      c.lineTo(-r * 0.34, 0);
+      c.lineTo(-r * 0.72, r * 0.78);
+      c.closePath();
+      c.fillStyle = '#ffffff';
+      c.shadowColor = 'rgba(0,0,0,0.85)';
+      c.shadowBlur = S * 0.035;
+      c.fill();
+      c.shadowBlur = 0;
+      c.lineWidth = S * 0.013;
+      c.strokeStyle = '#0b1222';
+      c.stroke();
+      // Inner tint so it never looks flat.
+      c.beginPath();
+      c.moveTo(r * 0.5, 0);
+      c.lineTo(-r * 0.35, -r * 0.38);
+      c.lineTo(-r * 0.35, r * 0.38);
+      c.closePath();
+      c.fillStyle = '#4ec8ff';
+      c.fill();
+    });
+  }
+
+  private crownSprite(): HTMLCanvasElement {
+    const S = this.px;
+    return this.sprite('crown', S * 0.06, (c, mid) => {
+      c.translate(mid, mid);
+      c.beginPath();
+      c.moveTo(-S * 0.021, S * 0.014);
+      c.lineTo(-S * 0.021, -S * 0.012);
+      c.lineTo(-S * 0.008, S * 0.001);
+      c.lineTo(0, -S * 0.016);
+      c.lineTo(S * 0.008, S * 0.001);
+      c.lineTo(S * 0.021, -S * 0.012);
+      c.lineTo(S * 0.021, S * 0.014);
+      c.closePath();
+      c.fillStyle = '#ffd447';
+      c.strokeStyle = 'rgba(6,10,22,0.9)';
+      c.lineWidth = S * 0.007;
+      c.fill();
+      c.stroke();
+    });
+  }
+
+  private starSprite(): HTMLCanvasElement {
+    const S = this.px;
+    const r = S * 0.075;
+    return this.sprite('star', r * 2, (c, mid) => {
+      const gl = c.createRadialGradient(mid, mid, 0, mid, mid, r);
+      gl.addColorStop(0, 'rgba(255,240,140,0.9)');
+      gl.addColorStop(1, 'rgba(255,210,60,0)');
+      c.fillStyle = gl;
+      c.beginPath();
+      c.arc(mid, mid, r, 0, Math.PI * 2);
+      c.fill();
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -179,7 +320,7 @@ export class Minimap {
 
     // Item boxes.
     for (const b of this.boxes) {
-      const x = X(b), y = Y(b), r = S * 0.021;
+      const x = X(b), y = Y(b), r = S * 0.024;
       c.save();
       c.translate(x, y);
       c.rotate(Math.PI * 0.25);
@@ -242,7 +383,7 @@ export class Minimap {
     c.drawImage(this.layer, 0, 0);
     if (rot !== 0) c.restore();
 
-    if (this.path.length < 3 || karts.length === 0) return;
+    if (this.path.length < 3 || karts.length === 0 || !this.dotsPlaceable) return;
 
     // Leader gets a crown pip.
     let leaderId = -1;
@@ -282,83 +423,24 @@ export class Minimap {
         const ry = (d.x - half) * sin + (d.y - half) * cos + half;
 
         const color = isPlayer ? '#ffffff' : kartColor(k.id);
-        const star = k.starTime > 0;
 
-        if (star) {
-          const gl = c.createRadialGradient(rx, ry, 0, rx, ry, S * 0.075);
-          gl.addColorStop(0, 'rgba(255,240,140,0.9)');
-          gl.addColorStop(1, 'rgba(255,210,60,0)');
-          c.fillStyle = gl;
-          c.beginPath();
-          c.arc(rx, ry, S * 0.075, 0, Math.PI * 2);
-          c.fill();
-        }
+        if (k.starTime > 0) this.blit(c, this.starSprite(), rx, ry);
 
         if (isPlayer) {
-          // Big oriented arrow.
-          const r = S * 0.055;
+          // Big oriented arrow. Baked flat and rotated as an image: the shadow
+          // blur and the three fills used to be re-rasterised every frame.
+          const sp = this.arrowSprite();
           c.save();
           c.translate(rx, ry);
           c.rotate(d.a + rot);
-          c.beginPath();
-          c.moveTo(r, 0);
-          c.lineTo(-r * 0.72, -r * 0.78);
-          c.lineTo(-r * 0.34, 0);
-          c.lineTo(-r * 0.72, r * 0.78);
-          c.closePath();
-          c.fillStyle = '#ffffff';
-          c.shadowColor = 'rgba(0,0,0,0.85)';
-          c.shadowBlur = S * 0.035;
-          c.fill();
-          c.shadowBlur = 0;
-          c.lineWidth = S * 0.013;
-          c.strokeStyle = '#0b1222';
-          c.stroke();
-          // Inner tint so it never looks flat.
-          c.beginPath();
-          c.moveTo(r * 0.5, 0);
-          c.lineTo(-r * 0.35, -r * 0.38);
-          c.lineTo(-r * 0.35, r * 0.38);
-          c.closePath();
-          c.fillStyle = '#4ec8ff';
-          c.fill();
+          c.drawImage(sp, -sp.width * 0.5, -sp.height * 0.5);
           c.restore();
         } else {
-          const r = S * 0.031;
-          c.beginPath();
-          c.arc(rx, ry + S * 0.006, r, 0, Math.PI * 2);
-          c.fillStyle = 'rgba(0,0,0,0.55)';
-          c.fill();
-          c.beginPath();
-          c.arc(rx, ry, r, 0, Math.PI * 2);
-          const dg = c.createRadialGradient(rx - r * 0.4, ry - r * 0.5, r * 0.1, rx, ry, r * 1.3);
-          dg.addColorStop(0, 'rgba(255,255,255,0.9)');
-          dg.addColorStop(0.45, color);
-          dg.addColorStop(1, 'rgba(0,0,0,0.35)');
-          c.fillStyle = dg;
-          c.fill();
-          c.lineWidth = S * 0.009;
-          c.strokeStyle = 'rgba(6,10,22,0.9)';
-          c.stroke();
+          this.blit(c, this.dotSprite(color), rx, ry);
         }
 
         if (k.id === leaderId) {
-          // Crown pip.
-          const cy = ry - S * (isPlayer ? 0.078 : 0.052);
-          c.beginPath();
-          c.moveTo(rx - S * 0.021, cy + S * 0.014);
-          c.lineTo(rx - S * 0.021, cy - S * 0.012);
-          c.lineTo(rx - S * 0.008, cy + S * 0.001);
-          c.lineTo(rx, cy - S * 0.016);
-          c.lineTo(rx + S * 0.008, cy + S * 0.001);
-          c.lineTo(rx + S * 0.021, cy - S * 0.012);
-          c.lineTo(rx + S * 0.021, cy + S * 0.014);
-          c.closePath();
-          c.fillStyle = '#ffd447';
-          c.strokeStyle = 'rgba(6,10,22,0.9)';
-          c.lineWidth = S * 0.007;
-          c.fill();
-          c.stroke();
+          this.blit(c, this.crownSprite(), rx, ry - S * (isPlayer ? 0.082 : 0.056));
         }
       }
     }
@@ -366,8 +448,11 @@ export class Minimap {
 
   dispose(): void {
     this.dots.clear();
+    this.sprites.clear();
     this.path.length = 0;
     this.boxes.length = 0;
+    this.canvas.width = this.canvas.height = 0;
+    this.layer.width = this.layer.height = 0;
     this.el.remove();
   }
 }

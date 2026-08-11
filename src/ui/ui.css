@@ -2,12 +2,25 @@
    APEX KART — UI
    DOM+CSS HUD and menus rendered above the WebGL canvas.
 
-   Scaling model
-   -------------
-   Every size is written as `calc(N * var(--u))` where `--u` is one design
-   pixel at a 1920x1080 reference. HUD.ts / MenuSystem.ts write `--ak-scale`
-   from the viewport so the whole interface scales as one piece and nothing
-   can ever overlap at a different aspect ratio.
+   Scaling model — ONE KNOB
+   ------------------------
+   Every size in this file is `calc(N * var(--u))`, where `--u` is one design
+   pixel at a 1920x1080 reference. There are no per-element media queries and
+   there must never be any: ~14 HUD elements have to stay mutually consistent,
+   and independent breakpoints drift apart.
+
+   `--u` resolves in two steps:
+     1. a pure-CSS `clamp()` on viewport units — always correct, needs no JS,
+        and is what you get on the very first paint;
+     2. `--ak-u`, written by `applyUiScale()` from the *render container* size
+        (HUD.resize / MenuSystem.resize), which is what matters when the canvas
+        is embedded or letterboxed and therefore smaller than the window.
+
+   Step 1 exists because step 2 used to be the only source: any frame in which
+   nothing had called `resize()` yet fell back to `--ak-scale: 1`, i.e. a HUD
+   authored for 1920x1080 drawn at 1:1 into an 800x450 frame. That is the
+   "HUD is enormous at small viewports" defect — the position plate measured
+   178px of an 800px frame (22.2%) instead of 74.8px (9.3%).
 
    Animation model
    ---------------
@@ -18,7 +31,10 @@
    ========================================================================= */
 
 :where(.ak-hud, .ak-menus, .ak-results) {
-  --u: calc(1px * var(--ak-scale, 1));
+  /* 0.0926vh = 1/10.8 vh, i.e. 1 design px at a 1080-tall reference.
+     0.0651vw = 1.25/19.2 vw, the same width term `uiScale()` uses.
+     min() of the two keeps the HUD inside the frame at any aspect ratio. */
+  --u: var(--ak-u, clamp(0.34px, min(0.0926vh, 0.0651vw), 1.55px));
 
   --ak-font: system-ui, -apple-system, "SF Pro Display", "Segoe UI Variable Display",
     "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -60,6 +76,15 @@
   color: #eaf2ff;
 }
 
+/* Every fixed width/height below is authored as a border-box, so don't inherit
+   whatever reset (or absence of one) the host page happens to ship. */
+:where(.ak-hud, .ak-menus, .ak-results),
+:where(.ak-hud, .ak-menus, .ak-results) *,
+:where(.ak-hud, .ak-menus, .ak-results) *::before,
+:where(.ak-hud, .ak-menus, .ak-results) *::after {
+  box-sizing: border-box;
+}
+
 /* =========================================================================
    Chunky numeral — layered stroke behind a gradient fill.
    `background-clip:text` and `text-shadow` fight each other (the shadow paints
@@ -75,6 +100,13 @@
   letter-spacing: -0.035em;
   font-variant-numeric: tabular-nums lining-nums;
   line-height: 0.94;
+  /* The tight leading above is deliberate, but it makes the line box SHORTER
+     than the font's own glyph box, so the glyphs hang ~0.115em below it. Any
+     container whose height this numeral defines exactly then reports
+     `scrollHeight > clientHeight` and, if it clips, shaves the descenders and
+     the drop shadow. Pay the leading back here, once, rather than per caller.
+     Both layers are anchored to the padding-box top, so they stay registered. */
+  padding-bottom: 0.12em;
   white-space: nowrap;
   --ak-fill-a: #ffffff;
   --ak-fill-b: #b9d8ff;
@@ -96,11 +128,28 @@
   color: var(--ak-stroke);
   -webkit-text-stroke: var(--ak-stroke-w) var(--ak-stroke);
   paint-order: stroke fill;
+  /* DEFAULT IS THE TIGHT, FULLY-BUDGETED SHADOW.
+     Layered `text-shadow` paints well outside the glyph box and is invisible to
+     `getBoundingClientRect`, so any clipping ancestor shaves it without anything
+     in the layout looking wrong. The old default carried a 26u ambient glow,
+     which no plate, row or card has 26u of padding to spare for — measured, it
+     was losing 35px per side off the position numeral at 1080p. */
+  text-shadow:
+    0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.9),
+    0 calc(3 * var(--u)) calc(6 * var(--u)) rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+/* The wide ambient glow is reserved for free-standing, centre-screen numerals
+   with no clipping ancestor anywhere near them. Opt in, never default. */
+.ak-countdown__num .ak-num__stroke,
+.ak-banner__text .ak-num__stroke,
+.ak-logo__main .ak-num__stroke,
+.ak-results__title .ak-num__stroke {
   text-shadow:
     0 calc(3 * var(--u)) 0 rgba(0, 0, 0, 0.85),
     0 calc(6 * var(--u)) calc(12 * var(--u)) rgba(0, 0, 0, 0.6),
     0 0 calc(26 * var(--u)) var(--ak-glow);
-  pointer-events: none;
 }
 
 .ak-num__fill {
@@ -227,8 +276,8 @@
    ========================================================================= */
 
 .ak-timer {
-  padding: calc(8 * var(--u)) calc(14 * var(--u)) calc(10 * var(--u));
-  min-width: calc(186 * var(--u));
+  padding: calc(7 * var(--u)) calc(12 * var(--u)) calc(8 * var(--u));
+  min-width: calc(168 * var(--u));
   display: flex;
   flex-direction: column;
   gap: calc(2 * var(--u));
@@ -322,17 +371,19 @@
    Item slot
    ========================================================================= */
 
+/* A solid roundel. It was a dashed rectangle when empty, captioned "ITEM · E" —
+   a keybind legend parked on the most important element of the HUD. */
 .ak-item {
   position: relative;
-  width: calc(132 * var(--u));
-  height: calc(132 * var(--u));
+  width: calc(118 * var(--u));
+  height: calc(118 * var(--u));
   display: grid;
   place-items: center;
 }
 .ak-item__frame {
   position: absolute;
   inset: 0;
-  border-radius: calc(30 * var(--u));
+  border-radius: 50%;
   border: calc(4 * var(--u)) solid var(--ak-rim);
   background:
     radial-gradient(ellipse at 50% 14%, rgba(96, 150, 226, 0.4) 0%, rgba(10, 16, 34, 0.86) 62%),
@@ -343,18 +394,21 @@
   -webkit-backdrop-filter: blur(calc(6 * var(--u)));
   transition: border-color 180ms ease;
 }
+/* Empty still reads as a real, solid slot — just unlit. */
 .ak-item--empty .ak-item__frame {
-  border-style: dashed;
-  border-color: rgba(190, 216, 250, 0.42);
-  background: linear-gradient(180deg, rgba(18, 28, 56, 0.42), rgba(6, 10, 24, 0.5));
-  box-shadow: none;
+  border-color: rgba(216, 232, 255, 0.72);
+  background:
+    radial-gradient(ellipse at 50% 16%, rgba(58, 92, 152, 0.32) 0%, rgba(7, 11, 26, 0.9) 66%),
+    linear-gradient(180deg, rgba(16, 25, 50, 0.9), rgba(5, 8, 20, 0.94));
+  box-shadow: var(--ak-shadow), inset 0 calc(3 * var(--u)) 0 rgba(255, 255, 255, 0.1),
+    inset 0 calc(-12 * var(--u)) calc(20 * var(--u)) rgba(0, 0, 0, 0.5);
 }
 .ak-item--empty .ak-item__glow { opacity: 0; }
 
 .ak-item__glow {
   position: absolute;
   inset: calc(-14 * var(--u));
-  border-radius: calc(44 * var(--u));
+  border-radius: 50%;
   background: radial-gradient(circle, rgba(120, 200, 255, 0.5) 0%, rgba(120, 200, 255, 0) 68%);
   opacity: 0.35;
   pointer-events: none;
@@ -362,7 +416,7 @@
 }
 .ak-item__icons {
   position: absolute;
-  inset: calc(12 * var(--u));
+  inset: calc(14 * var(--u));
   display: grid;
   place-items: center;
 }
@@ -381,7 +435,7 @@
 .ak-item__ring {
   position: absolute;
   inset: 0;
-  border-radius: calc(30 * var(--u));
+  border-radius: 50%;
   border: calc(4 * var(--u)) solid rgba(255, 255, 255, 0.95);
   opacity: 0;
   pointer-events: none;
@@ -399,8 +453,10 @@
 
 .ak-item__count {
   position: absolute;
-  right: calc(-8 * var(--u));
-  bottom: calc(-8 * var(--u));
+  /* On a roundel the corner is inside the circle, so pull the badge onto the
+     45-degree tangent instead of the (now nonexistent) bottom-right corner. */
+  right: calc(-2 * var(--u));
+  bottom: calc(2 * var(--u));
   min-width: calc(38 * var(--u));
   padding: calc(1 * var(--u)) calc(7 * var(--u)) calc(3 * var(--u));
   text-align: center;
@@ -417,28 +473,15 @@
 }
 .ak-item__count--show { opacity: 1; transform: none; }
 
-.ak-item__hint {
-  position: absolute;
-  bottom: calc(-24 * var(--u));
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: calc(11 * var(--u));
-  font-weight: 800;
-  letter-spacing: 0.22em;
-  color: rgba(180, 208, 246, 0.7);
-  text-shadow: 0 calc(2 * var(--u)) calc(4 * var(--u)) rgba(0, 0, 0, 0.9);
-  white-space: nowrap;
-}
-
 /* =========================================================================
    Minimap
    ========================================================================= */
 
 .ak-map {
   position: relative;
-  width: calc(228 * var(--u));
-  height: calc(228 * var(--u));
-  border-radius: calc(24 * var(--u));
+  width: calc(178 * var(--u));
+  height: calc(178 * var(--u));
+  border-radius: calc(20 * var(--u));
   overflow: hidden;
   border: calc(3 * var(--u)) solid var(--ak-rim);
   background: linear-gradient(180deg, rgba(14, 24, 50, 0.72), rgba(5, 9, 22, 0.82));
@@ -469,7 +512,10 @@
   padding: calc(3 * var(--u)) calc(10 * var(--u)) calc(4 * var(--u)) calc(5 * var(--u));
   border-radius: calc(11 * var(--u));
   border-width: calc(2 * var(--u));
-  min-width: calc(168 * var(--u));
+  /* Wide enough that a normal racer name never reaches the ellipsis; the cap is
+     a guard against a pathological name, not a routine truncation. */
+  min-width: calc(178 * var(--u));
+  max-width: calc(244 * var(--u));
   opacity: 0;
   transform: translateX(calc(20 * var(--u)));
   transition: opacity 220ms var(--ak-spring), transform 320ms var(--ak-spring);
@@ -505,17 +551,43 @@
    Position plate + reel
    ========================================================================= */
 
-.ak-pos { position: relative; transform-origin: 12% 82%; will-change: transform; }
+/* -------------------------------------------------------------------------
+   The plate is sized FROM its text, not alongside it. `--ak-pos-digit` is the
+   only number to tune: the ordinal suffix, the gap, the padding and both plate
+   dimensions are all derived from it, so the box can never drift out of step
+   with the glyphs it has to contain.
+
+   Worst case is a two-digit position — with 12 racers, 10TH/11TH/12TH are
+   ordinary, not edge cases. Measured at digit size D:
+     two digits   1.211 D      ("11", tabular, -0.035em tracking)
+     "TH"/"ND"    0.47..0.49 D * 0.38  (suffix is 0.38 D)
+     ink bleed    0.0425 D stroke, plus the drop shadow below
+   Content therefore needs ~1.86 D of width including the ink budget, and
+   ~0.94 D of glyph height. The plate gives 2.28 D x 1.52 D, i.e. 1.96 D of
+   usable inner width once the borders and the ink budget are taken out.
+   ------------------------------------------------------------------------- */
+.ak-pos {
+  position: relative;
+  transform-origin: 12% 82%;
+  will-change: transform;
+  --ak-pos-digit: calc(74 * var(--u));
+  /* Room for the layered outline + drop shadow on every side of the glyphs.
+     `overflow` on the reel is what masks the parked cell, so this is the
+     budget that keeps the mask off the ink. */
+  --ak-pos-ink: calc(var(--ak-pos-digit) * 0.115);
+}
 .ak-pos__plate {
   position: relative;
-  width: calc(178 * var(--u));
-  height: calc(148 * var(--u));
-  border-radius: calc(26 * var(--u));
-  border: calc(4 * var(--u)) solid var(--ak-rim);
+  width: calc(var(--ak-pos-digit) * 2.28);
+  height: calc(var(--ak-pos-digit) * 1.52);
+  border-radius: calc(20 * var(--u));
+  border: calc(3.5 * var(--u)) solid var(--ak-rim);
   background: var(--ak-plate);
   box-shadow: var(--ak-shadow), inset 0 calc(3 * var(--u)) 0 rgba(255, 255, 255, 0.18),
     inset 0 calc(-16 * var(--u)) calc(26 * var(--u)) rgba(0, 0, 0, 0.42);
-  overflow: hidden;
+  /* NOT `hidden`. Clipping here is what sliced the numeral's outline and the
+     ordinal suffix; the reel below does the masking the roll actually needs. */
+  overflow: visible;
   backdrop-filter: blur(calc(6 * var(--u)));
   -webkit-backdrop-filter: blur(calc(6 * var(--u)));
   transition: border-color 240ms ease, box-shadow 240ms ease;
@@ -525,32 +597,39 @@
   box-shadow: var(--ak-shadow), 0 0 calc(30 * var(--u)) rgba(255, 190, 40, 0.55),
     inset 0 calc(3 * var(--u)) 0 rgba(255, 255, 255, 0.24);
 }
+/* The reel owns the mask. Because it clips, the plate's own scrollable overflow
+   stays zero even though one cell is always parked off the top or bottom. */
 .ak-pos__reel {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+  border-radius: calc(17 * var(--u));
   will-change: transform;
 }
 .ak-pos__cell {
   position: absolute;
   left: 0;
+  /* 100%, not the plate's outer height — the old fixed value was the border
+     box, so every cell hung 2x the border width below the mask. */
   width: 100%;
-  height: calc(148 * var(--u));
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: calc(2 * var(--u));
+  gap: calc(var(--ak-pos-digit) * 0.04);
+  padding: 0 var(--ak-pos-ink);
 }
-.ak-pos__digits { font-size: calc(108 * var(--u)); }
+.ak-pos__digits { font-size: var(--ak-pos-digit); }
 .ak-pos__suffix {
-  font-size: calc(38 * var(--u));
+  font-size: calc(var(--ak-pos-digit) * 0.38);
   align-self: flex-start;
-  margin-top: calc(26 * var(--u));
-  margin-left: calc(-2 * var(--u));
+  /* Sits on the digits' cap line. Derived from the digit size so it tracks it. */
+  margin-top: calc(var(--ak-pos-digit) * 0.145);
 }
 .ak-pos__flash {
   position: absolute;
   inset: 0;
-  border-radius: calc(22 * var(--u));
+  border-radius: calc(17 * var(--u));
   opacity: 0;
   pointer-events: none;
   mix-blend-mode: screen;
@@ -592,44 +671,78 @@
    Speedometer
    ========================================================================= */
 
+/* -------------------------------------------------------------------------
+   This used to be a 232u analogue dial with a tick scale, numbered majors, a
+   red zone and a needle — which is a flight-sim instrument, not a kart HUD.
+   MK8 ships no speedometer at all. What survives is the part a PC player
+   actually reads (the number) plus a boost bar, at ~1/4 the footprint and with
+   no per-frame canvas.
+   ------------------------------------------------------------------------- */
 .ak-speed {
   position: relative;
-  width: calc(232 * var(--u));
-  height: calc(232 * var(--u));
-  transform-origin: 82% 78%;
-}
-.ak-speed__canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.ak-speed__readout {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(48 * var(--u));
+  width: calc(118 * var(--u));
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: calc(-2 * var(--u));
-  pointer-events: none;
+  align-items: flex-end;
+  transform-origin: 90% 80%;
 }
-.ak-speed__num { font-size: calc(50 * var(--u)); --ak-stroke-w: 0.075em; }
+.ak-speed__readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: calc(5 * var(--u));
+}
+.ak-speed__num {
+  font-size: calc(52 * var(--u));
+  --ak-stroke-w: 0.07em;
+  /* Reserve three digits so the block never resizes as the speed changes. */
+  min-width: calc(52 * var(--u) * 1.82);
+  text-align: right;
+}
 .ak-speed__unit {
   font-size: calc(13 * var(--u));
   font-weight: 900;
-  letter-spacing: 0.24em;
+  letter-spacing: 0.16em;
   color: rgba(180, 212, 250, 0.85);
   text-shadow: 0 calc(2 * var(--u)) calc(3 * var(--u)) rgba(0, 0, 0, 0.9);
-  margin-top: calc(2 * var(--u));
+}
+/* Boost meter — one transform per frame, no layout, no repaint of the track. */
+.ak-speed__boost {
+  position: relative;
+  width: 100%;
+  height: calc(9 * var(--u));
+  border-radius: calc(5 * var(--u));
+  background: rgba(6, 10, 24, 0.62);
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(180, 210, 250, 0.28);
+  overflow: hidden;
+}
+.ak-speed__boost > i {
+  position: absolute;
+  inset: 0;
+  transform-origin: right center;
+  transform: scaleX(0);
+  border-radius: calc(5 * var(--u));
+  background: linear-gradient(90deg, #ffe9a8, #ffb347);
+  box-shadow: 0 0 calc(10 * var(--u)) rgba(255, 180, 60, 0.8);
+  will-change: transform;
 }
 .ak-speed--boost .ak-speed__num { --ak-fill-a: #fff4d6; --ak-fill-b: #ffb347; --ak-fill-c: #ff5b00; --ak-glow: rgba(255, 140, 20, 0.85); }
+.ak-speed--boost .ak-speed__boost > i { background: linear-gradient(90deg, #fff0c2, #ff5b00); }
 
 /* =========================================================================
    Drift charge
    ========================================================================= */
 
 .ak-drift {
+  /* Was static, so `.ak-drift__label` (absolute, top:-17u) resolved against the
+     corner wrapper and floated near the top of the screen instead of sitting on
+     the bar. */
+  position: relative;
   display: flex;
-  gap: calc(7 * var(--u));
-  padding: calc(6 * var(--u)) calc(10 * var(--u));
-  border-radius: calc(16 * var(--u));
+  gap: calc(6 * var(--u));
+  padding: calc(6 * var(--u)) calc(9 * var(--u));
+  border-radius: calc(14 * var(--u));
+  margin-top: calc(14 * var(--u));
   background: rgba(6, 10, 24, 0.55);
   box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(180, 210, 250, 0.25);
   backdrop-filter: blur(calc(4 * var(--u)));
@@ -641,8 +754,8 @@
 .ak-drift--on { opacity: 1; transform: none; }
 .ak-drift__seg {
   position: relative;
-  width: calc(84 * var(--u));
-  height: calc(11 * var(--u));
+  width: calc(62 * var(--u));
+  height: calc(10 * var(--u));
   border-radius: calc(6 * var(--u));
   background: rgba(255, 255, 255, 0.12);
   overflow: hidden;
@@ -895,9 +1008,16 @@
   position: absolute;
   left: 0;
   top: 0;
+  /* Bottom-centre, so `scale()` pins the anchor point and HUD.ts can reason
+     about the plate's exact footprint when de-colliding overlapping labels. */
+  transform-origin: 50% 100%;
   display: flex;
   align-items: center;
   gap: calc(6 * var(--u));
+  /* Fixed width, so every tag is the same size whatever the name length. Uniform
+     tags read better AND make the footprint a single known number, which is what
+     the de-collision pass in HUD.ts measures once per resize. */
+  width: calc(116 * var(--u));
   padding: calc(2 * var(--u)) calc(9 * var(--u)) calc(3 * var(--u)) calc(3 * var(--u));
   border-radius: calc(20 * var(--u));
   background: rgba(6, 11, 26, 0.72);
@@ -919,12 +1039,17 @@
   background: linear-gradient(180deg, #ffffff, #9dc0e8);
 }
 .ak-plate3d__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: calc(14 * var(--u));
   font-weight: 850;
   letter-spacing: 0.07em;
   color: #e8f2ff;
   text-shadow: 0 calc(2 * var(--u)) calc(3 * var(--u)) rgba(0, 0, 0, 0.9);
 }
+.ak-plate3d__pos { flex: 0 0 auto; }
 
 /* =========================================================================
    Debug overlay
@@ -1518,10 +1643,17 @@
    Responsive: compact layout on short/narrow viewports so nothing collides
    ========================================================================= */
 
+/* NOTE — no HUD rules here, deliberately.
+   There used to be three (`.ak-hud__tc` offset, `.ak-timer` min-width and
+   `.ak-rivals { display: none }`), and they were the exact failure mode this
+   stylesheet's scaling model exists to avoid. They keyed off the WINDOW while
+   the HUD is sized from the render CONTAINER, so in an embedded or letterboxed
+   canvas — including the preview pane at 689px — the rival tracker vanished
+   from an otherwise full-size HUD. The single scale factor already keeps every
+   HUD element proportionate at every viewport; nothing needs a breakpoint.
+   Menu and results reflow below is different in kind: those are column-count
+   decisions on full-window screens, which is what media queries are for. */
 @media (max-width: 820px), (max-height: 520px) {
-  .ak-hud__tc { top: calc(10 * var(--u)); }
-  .ak-timer { min-width: calc(150 * var(--u)); }
-  .ak-rivals { display: none; }
   .ak-grid--chars { grid-template-columns: repeat(4, calc(120 * var(--u))); }
   .ak-grid--tracks { grid-template-columns: repeat(3, calc(190 * var(--u))); }
   .ak-hints { flex-wrap: wrap; justify-content: center; gap: calc(12 * var(--u)); }

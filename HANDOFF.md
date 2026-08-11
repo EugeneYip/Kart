@@ -10,12 +10,12 @@ has failed. Do these first.
 
 | # | Defect | Owner |
 |---|---|---|
-| P0-1 | Start-line audience seating is mispositioned and **visually extends onto the road**. | `src/world/Props.ts` |
-| P0-2 | The **start/finish gate** and sometimes a **balloon arch** sit **parallel to the road, running down its middle**, instead of spanning across it. Yaw ~90° out. | `src/world/Props.ts` |
-| P0-3 | An **item box is stuck in the middle of the road** at the start. | `src/track/*` (`getItemBoxSpawns`) |
-| P0-4 | The **position/ranking plate clips its own text** — the plate edge cuts into the numeral. | `src/ui/*` |
+| ~~P0-1~~ | Start-line audience seating is mispositioned and **visually extends onto the road**. **DONE** — `Track.getDecorationHints()` applied the *gate* yaw formula to every authored prop. Clearance violations: coastal 19→0, neon 5→0, volcano 5→0. | `src/world/Props.ts` |
+| ~~P0-2~~ | The **start/finish gate** and sometimes a **balloon arch** sit **parallel to the road, running down its middle**, instead of spanning across it. Yaw ~90° out. **DONE** — two opposite conventions, each path using the wrong one. Gate angle off the binormal 90.0°→0.0°. | `src/world/Props.ts` |
+| ~~P0-3~~ | An **item box is stuck in the middle of the road** at the start. **DONE** — it was *height*, not lateral position. A tumbling+bobbing 1.72 m box reaches 1.47 m below centre; authored at 1.50 m left 3 cm over the road crown. Now 1.70 m. Spawns also now publish `normal` (was `undefined`, so boxes ignored bank). | `src/track/*` (`getItemBoxSpawns`) |
+| ~~P0-4~~ | ~~The **position/ranking plate clips its own text** — the plate edge cuts into the numeral.~~ **DONE** — see item 6. Measured before: at 1080p `11TH`/`12TH` lost **9.1 px of glyph and 35.1 px of outline off each side**; even `1ST` lost 10.8 px below. After: zero clipped ink across 340 configurations. | `src/ui/*` |
 | P0-5 | **"Touching the edge equals a crash" is far too harsh** — makes the game too difficult. Walls must SLIDE. | `src/physics/KartCollision.ts` |
-| P0-6 | A road section **containing a boost pad is incomplete and nearly impassable**. | `src/track/*` |
+| ~~P0-6~~ | A road section **containing a boost pad is incomplete and nearly impassable**. **DONE** — three causes, incl. `surfaceAt()` returning `Void` for `TF.Gap` before testing `TF.Glider`, so **no kart on any circuit had ever deployed a glider**. Crossings 0/12 → 8/8 at 22/28/34/40 m/s on all three tracks. | `src/track/*` |
 | P0-7 | **Steering is too sensitive / over-reacts**, making the kart hard to control. | `src/physics/*` (+ `Input.ts` by request) |
 
 ### Likely shared root cause for P0-1 / P0-2 (and possibly the sign mirroring)
@@ -71,7 +71,31 @@ stacks.
    ~10-line test: sum the signed volume of the triangle fan and confirm it is
    positive, and confirm face normals agree with winding.
 
-## 0b. The `v` axis — RESOLVED. The `u` axis on old signs — STILL OPEN.
+## 0b. CLOSED — both axes confirmed correct by screenshot
+
+**Confirmed on screen at the repro coordinates below:** the road decal reads
+**"FINISH"** left-to-right and the trackside boards read **"VOLT"** correctly, in
+the same frame, from a driver's viewpoint. Both `u` and `v` are now right.
+
+**The integrator's earlier `u` swap was WRONG and has been correctly reverted.**
+Recording why, so nobody re-applies it: a viewer at an object's local +z looking
+down −z sees that object's local **+x on their RIGHT** (that is the default
+three.js camera basis — a camera at +z looking at the origin puts world +x at
+screen-right). Text therefore reads left-to-right only when `u` increases along
+local +x, i.e. `-hw → uMin` — the *ascending* range. The integrator reasoned +x
+appeared on the viewer's left, which inverted the conclusion.
+
+The "runtime `u` mirror made the boards read TORQUE/AXP/EMBER" experiment that
+motivated the bad fix predates the current sponsor list (APEX/NITRO/TURBO/GRIP/
+VOLT/SLIP/DRIFT/KART), so it was run against a different revision. Corroborating
+evidence for the ascending range: `flapAcross` in the same function always used
+it and the mast cloths were never reported mirrored.
+
+**Lesson for this codebase:** an empirical UV test is only valid against the
+revision it was run on, and "I flipped it and it looked better" is weaker
+evidence than deriving the camera basis. Prefer the derivation, then confirm.
+
+<details><summary>Original investigation (kept for the reasoning trail)</summary>
 
 **Owner: `src/world/Props.ts` (world agent)**
 
@@ -94,22 +118,35 @@ CHAMPIONSHIP" caption rendered at the **top** of the board; it is drawn at
 the bottom. Vertical layout is now correct. `atlasRect()` was already right —
 new signage built through it needs no change.
 
-**STILL OPEN — `u` on `sponsorBoard` specifically.** Its glyphs still read
-horizontally mirrored after the `v` fix. Note this is *not* a general `plate()`
-`u` bug: the `u` swap in `plate()` was verified earlier by a runtime `u` mirror
-that made the trackside boards read "TORQUE"/"AXP"/"EMBER" correctly, and
-`banner()` already carries the corrected mapping. So suspect **the instance
-anchor's yaw for `sponsorBoard` being 180° out** — i.e. we are looking at the
-plate's back face and reading its (correctly) mirrored reverse — rather than a
-UV bug. Two checks that will settle it:
-1. Emit the board with `single: true` temporarily. If it then disappears when
-   viewed from the track, the anchor yaw is backwards.
-2. Compare against `Prop:grandstandSign:46x6`, which goes through `atlasRect`
-   and should read correctly from the track — if that one is fine and only
-   `sponsorBoard` is mirrored, it is placement, not UV.
+**`u` — FIXED in the placement pass, WANTS ONE SCREENSHOT to confirm.**
 
-Reproduce at: camera `(-6, 2.2, 2.3)` looking at `(-17, 1.5, 2.3)`, fov 32,
+It was **not** the anchor yaw. `roadside()` computes
+`yaw = atan2(-bx*side, -bz*side)`, which sends the prop's local **+Z at the
+road**; a driver therefore looks at `plate()`'s **front** (+z) face, not its back.
+Checked numerically over every trackside anchor on all three circuits.
+
+It was the front face's `u` range. A viewer standing at an object's local +z
+looking down −z sees that object's local **+x on their RIGHT** — that is the
+default three.js camera basis (camera at +z looking at the origin puts world +x
+at screen-right). Text reads left-to-right only when `u` increases along local
++x, i.e. `-hw -> uMin`. `plate()`'s front quad was carrying the *back* face's
+descending range (and `banner()` the same), which is exactly the reported
+symptom. Front and back ranges are now swapped back; `flapAcross` in the same
+function always used the ascending mapping, and the mast cloths were never
+reported mirrored — that is the corroborating evidence. `flipY` affects `v`
+only, so it does not enter into the `u` argument.
+
+The "runtime `u` mirror made the boards read TORQUE/AXP/EMBER correctly"
+experiment cited above predates the current sponsor list (APEX/NITRO/TURBO/GRIP/
+VOLT/SLIP/DRIFT/KART), so it was run against a different revision — treat it as
+stale rather than as evidence for the descending range.
+
+Confirm at: camera `(-6, 2.2, 2.3)` looking at `(-17, 1.5, 2.3)`, fov 32,
 `day` sky, HUD off. `sponsorBoard` instance 0 sits at `(-17, -0.2, 2.3)`.
+`Prop:gantryBanner` and `Prop:standBanner` go through `banner()` and changed with
+it, so check one of those in the same frame.
+
+</details>
 
 ---
 
@@ -219,21 +256,49 @@ currently the weakest large object in frame.
 
 ---
 
-## 6. HUD does not scale down for small viewports
+## 6. ~~HUD does not scale down for small viewports~~ — DONE (with P0-4)
 
 **Owner: `src/ui/ui.css`, `src/ui/HUD.ts` (ui agent)**
 
-At the preview pane's native size (**560 × 322**) the HUD is enormous: the
-position plate, speedometer and timer each occupy roughly a quarter of the
-frame and overlap the play area, leaving the kart barely visible. It was
-reported as tested at 1280×720 / 1920×1080 / mobile, but this in-between
-small-desktop size is clearly not covered.
+Same root cause as **P0-4**, fixed together. `ui.css` already derived every size
+from one unit (`--u`), but its fallback was `calc(1px * var(--ak-scale, 1))` — so
+any frame before `HUD.resize()` had run drew a 1920×1080-sized HUD at 1:1
+whatever the viewport (position plate **22.3 %** of an 800×450 frame, speedometer
+**29 % × 52 %**, top-right stack **84 % of frame height**). `--u` now falls back
+to a pure-CSS viewport `clamp()`, so it is right with no JS at all; JS still
+refines it from the *container* size for the embedded/letterboxed case.
 
-Prefer scaling the whole HUD with a single root-level `font-size` /
-`transform: scale()` driven by viewport size (or `clamp()` on a CSS custom
-property that all element sizes derive from), rather than per-element media
-queries — there are ~14 HUD elements and they must stay mutually consistent.
-Verify at 560×322, 960×540, 1280×720 and 1920×1080.
+Three per-element media queries were deleted (`.ak-hud__tc`, `.ak-timer`,
+`.ak-rivals { display: none }`) — they keyed off the **window** while the HUD is
+sized from the **container**, so the rival tracker silently vanished from a
+full-size HUD in the preview pane. Don't reintroduce HUD breakpoints.
+
+Verified by DOM measurement, not screenshots: 340 configurations (7 race states ×
+4 viewports × 12 positions, plus the results board) with zero overflow, zero
+clipped ink, zero rect intersections and the plate at 8.79 % of frame width at
+every size. Harness kept at `src/dev/ui.{html,ts}` — `window.__UIQA__.summary()`.
+HUD frame cost 0.04–0.06 ms (budget 0.4 ms).
+
+### Two notes for the track owner (`src/track/*`)
+
+Neither is fixed in `src/track/*` — the HUD works around both, but the API is
+misleading and the next consumer will hit it too:
+
+1. **`Track.getMinimapPath()` returns bounding-box-normalised 0..1 coordinates**
+   (`TrackBuilder.ts` ~line 993), while its `TrackLike` doc comment says "the
+   centreline in world XZ". The minimap fitted its transform to a span of ~1 and
+   then plotted karts at ±200 m, which is why **the map showed no racer dots at
+   all**. `HUD.refreshTrackPath()` now builds its own world-space ribbon from
+   `sampleAtDistance()` and only falls back to the normalised path (ribbon only,
+   dots suppressed, one console warning). Either rename it or return metres.
+2. **`getItemBoxPositions()` does not exist** — the HUD had been probing for that
+   name; the real one is `getItemBoxSpawns()`, returning `{position: Vector3}[]`.
+   Item-box markers had therefore never appeared on the map. Now handled.
+
+Also worth knowing: `Game` awaits `hud.init()` **before** `engine.initAll()` runs
+`Track.init()`, so any subsystem that pulls track geometry during its own `init()`
+gets an empty result and must retry. The HUD now retries twice a second until the
+ribbon arrives.
 
 ---
 

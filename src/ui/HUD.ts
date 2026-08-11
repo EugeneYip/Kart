@@ -34,16 +34,22 @@ import {
 } from './Fonts';
 import { Minimap } from './Minimap';
 import {
-  ItemIcons, RadialGauge, Spring, applyUiScale, el, kartColor, probe, punch,
+  ItemIcons, applyUiScale, el, kartColor, probe, punch,
   restartAnim, setClass, setText, svgEl, tryCall,
 } from './Widgets';
 import type {
   AudioLike, EngineLike, ItemsLike, KartsLike, RaceLike, TrackLike,
 } from './Widgets';
 
-/** Full-scale reading on the dial. Boost tops out near 145 km/h. */
-const GAUGE_MAX_KMH = 180;
+/** Boost duration that reads as a full meter. */
+const BOOST_FULL_SECONDS = 1.8;
 const MAX_PLATES = 12;
+/** How many opponent nameplates may be on screen at once. */
+const MAX_VISIBLE_PLATES = 5;
+/** Centreline samples used to build the minimap ribbon. */
+const MINIMAP_SAMPLES = 220;
+/** Keep in step with `.ak-map`'s width in ui.css. */
+const MINIMAP_DESIGN_PX = 178;
 
 type ThreatKind = 'red' | 'blue' | 'none';
 
@@ -61,6 +67,9 @@ interface Roulette {
 }
 
 const tmpV = new THREE.Vector3();
+
+/** Module-level so the nameplate sort allocates no closure per frame. */
+function byDistance(a: { d: number }, b: { d: number }): number { return a.d - b.d; }
 
 export class HUD implements ISubsystem {
   // --- injected ------------------------------------------------------------
@@ -102,7 +111,6 @@ export class HUD implements ISubsystem {
   private itemBox!: HTMLDivElement;
   private itemIconEls: HTMLDivElement[] = [];
   private itemCount!: HTMLDivElement;
-  private itemHint!: HTMLDivElement;
   private icons = new ItemIcons(128);
   private roulette: Roulette = { active: false, t: 0, next: 0, index: 0, target: null, stopAt: 0.75 };
 
@@ -115,6 +123,10 @@ export class HUD implements ISubsystem {
 
   // minimap + rivals
   private minimap = new Minimap();
+  /** True once a usable centreline has been adopted. */
+  private pathReady = false;
+  private pathRetryAt = 0;
+  private warnedUnitPath = false;
   private rivalsBox!: HTMLDivElement;
   private rivalEls: { row: HTMLDivElement; pos: HTMLDivElement; name: HTMLDivElement; gap: HTMLDivElement; swatch: HTMLDivElement }[] = [];
 
@@ -129,10 +141,10 @@ export class HUD implements ISubsystem {
 
   // speed
   private speedBox!: HTMLDivElement;
-  private gauge = new RadialGauge(GAUGE_MAX_KMH);
   private speedNum!: HTMLElement;
-  private needle = new Spring(0, 190, 17);
+  private boostBar!: HTMLElement;
   private boostFill = 0;
+  private lastBoostStr = '';
 
   // centre stack
   private countdownBox!: HTMLDivElement;
@@ -158,6 +170,11 @@ export class HUD implements ISubsystem {
   // nameplates
   private platesBox!: HTMLDivElement;
   private plates: { el: HTMLDivElement; pos: HTMLDivElement; name: HTMLDivElement; shown: boolean }[] = [];
+  /** Scratch for nameplate de-collision — sized once, never reallocated. */
+  private plateSlots: Array<{ i: number; x: number; y: number; d: number; s: number; fade: number }> = [];
+  /** Nameplate footprint in CSS px, refreshed on resize (never per frame). */
+  private plateH = 30;
+  private plateW = 120;
 
   // debug
   private debugBox!: HTMLDivElement;
@@ -264,7 +281,6 @@ export class HUD implements ISubsystem {
     }
     el('div', 'ak-item__ring', item);
     this.itemCount = el('div', 'ak-item__count', item, '3');
-    this.itemHint = el('div', 'ak-item__hint', item, 'ITEM  ·  E');
 
     // --- top-right: timer / map / rivals ---------------------------------
     const tr = el('div', 'ak-hud__corner ak-hud__tr', root);
@@ -311,22 +327,24 @@ export class HUD implements ISubsystem {
     this.posFlash = el('div', 'ak-pos__flash', plate);
     this.posToast = el('div', 'ak-pos__toast', pos, '▲ 2ND');
 
-    // --- bottom-right: speedometer ---------------------------------------
+    // --- bottom-right: speed readout -------------------------------------
     const br = el('div', 'ak-hud__corner ak-hud__br', root);
     const speed = el('div', 'ak-speed', br);
     this.speedBox = speed;
-    speed.appendChild(this.gauge.canvas);
     const readout = el('div', 'ak-speed__readout', speed);
     this.speedNum = numeral('0', { tone: 'white', className: 'ak-speed__num' });
     readout.appendChild(this.speedNum);
     el('div', 'ak-speed__unit', readout, 'KM/H');
+    this.boostBar = el('i', undefined, el('div', 'ak-speed__boost', speed));
 
     // --- world-space nameplates ------------------------------------------
     this.platesBox = el('div', 'ak-plates', root);
     for (let i = 0; i < MAX_PLATES; i++) {
       const p = el('div', 'ak-plate3d', this.platesBox);
       const posEl = el('div', 'ak-plate3d__pos', p, '1');
-      const nameEl = el('div', 'ak-plate3d__name', p, '');
+      // Seeded with a representative name so `resize()` can measure the plate
+      // footprint before the first tick fills it in.
+      const nameEl = el('div', 'ak-plate3d__name', p, 'RACER');
       this.plates.push({ el: p, pos: posEl, name: nameEl, shown: false });
     }
 
@@ -399,6 +417,13 @@ export class HUD implements ISubsystem {
   get minimapRotate(): boolean { return this.minimap.rotating; }
 
   /**
+   * False when the track only offered a normalised centreline, so racer dots
+   * cannot be placed. Worth surfacing: it is the difference between a live
+   * minimap and a decorative one.
+   */
+  get minimapCanPlaceDots(): boolean { return this.minimap.canPlaceDots; }
+
+  /**
    * Request the HUD. This is what `MenuSystem` and the QA harness call, and it
    * is only ever *permission* to appear: the race phase and the menu state can
    * still keep it off screen. See `applyVisibility`.
@@ -435,13 +460,83 @@ export class HUD implements ISubsystem {
     if (this.built) setClass(this.root, 'ak-hud--hidden', !v);
   }
 
-  /** Pull the minimap geometry from the track (safe to call again later). */
+  /**
+   * Pull the minimap geometry from the track. Safe (and expected) to call again:
+   * `Game` awaits `hud.init()` *before* `engine.initAll()` runs `Track.init()`,
+   * so the first attempt always comes back empty and `tick()` retries.
+   *
+   * The ribbon must live in the same coordinate space as `kart.position`, or the
+   * racer dots plot thousands of pixels off-canvas — which is exactly why the
+   * map showed no dots at all. `Track.getMinimapPath()` returns a bounding-box
+   * *normalised* 0..1 loop, so prefer the world-space centreline sampler and
+   * treat the normalised path as a fallback that only draws the ribbon.
+   */
   refreshTrackPath(): void {
-    const path = tryCall<readonly { x: number; y: number }[]>(this.track, 'getMinimapPath');
-    if (path && path.length > 2) this.minimap.setPath(path);
-    const boxes = tryCall<readonly { x: number; y: number }[]>(this.track, 'getItemBoxPositions')
+    if (this.pathReady) return;
+
+    const sample = probe<(d: number) => { position: THREE.Vector3 }>(this.track, 'sampleAtDistance');
+    const lapLength = probe<number>(this.track, 'lapLength') ?? 0;
+    if (typeof sample === 'function' && lapLength > 1) {
+      const pts: { x: number; y: number }[] = [];
+      try {
+        for (let i = 0; i < MINIMAP_SAMPLES; i++) {
+          const s = sample.call(this.track, (i / MINIMAP_SAMPLES) * lapLength);
+          const q = s?.position;
+          if (!q || !Number.isFinite(q.x) || !Number.isFinite(q.z)) { pts.length = 0; break; }
+          pts.push({ x: q.x, y: q.z });
+        }
+      } catch { pts.length = 0; }
+      // A track that isn't built yet samples to a degenerate point; reject it.
+      if (pts.length > 2 && HUD.spread(pts) > 1) {
+        this.minimap.setPath(pts, 'world');
+        this.pathReady = true;
+      }
+    }
+
+    if (!this.pathReady) {
+      const path = tryCall<readonly { x: number; y: number }[]>(this.track, 'getMinimapPath');
+      if (path && path.length > 2) {
+        // Auto-detect the space so a track that later returns world metres just
+        // works. Normalised paths can draw the ribbon but not place karts.
+        const space = HUD.spread(path) > 4 ? 'world' : 'unit';
+        this.minimap.setPath(path, space);
+        this.pathReady = true;
+        if (space === 'unit' && !this.warnedUnitPath) {
+          this.warnedUnitPath = true;
+          console.warn(
+            '[HUD] track.getMinimapPath() is bounding-box normalised, not world '
+            + 'metres, and track.sampleAtDistance() was unavailable — the minimap '
+            + 'ribbon will draw but racer dots cannot be placed.',
+          );
+        }
+      }
+    }
+
+    if (!this.pathReady) return;
+
+    // Item boxes: `getItemBoxPositions` never existed on Track (it is
+    // `getItemBoxSpawns`, and it returns Vector3s in world space).
+    const flat = tryCall<readonly { x: number; y: number }[]>(this.track, 'getItemBoxPositions')
       ?? tryCall<readonly { x: number; y: number }[]>(this.items, 'getBoxPositions');
-    if (boxes && boxes.length) this.minimap.setItemBoxes(boxes);
+    if (flat && flat.length) { this.minimap.setItemBoxes(flat); return; }
+    const spawns = tryCall<readonly { position: THREE.Vector3 }[]>(this.track, 'getItemBoxSpawns');
+    if (spawns && spawns.length) {
+      const out: { x: number; y: number }[] = [];
+      for (const s of spawns) if (s?.position) out.push({ x: s.position.x, y: s.position.z });
+      if (out.length) this.minimap.setItemBoxes(out);
+    }
+  }
+
+  /** Largest bounding-box dimension of a 2-D loop. Distinguishes metres from 0..1. */
+  private static spread(pts: readonly { x: number; y: number }[]): number {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return Math.max(maxX - minX, maxY - minY);
   }
 
   // =======================================================================
@@ -469,6 +564,7 @@ export class HUD implements ISubsystem {
 
     own(bus.on('race:start', () => {
       this.showCountdown(0);
+      this.refreshTrackPath();
       this.raceTime = 0;
       this.lapStart = 0;
       this.bestLap = Infinity;
@@ -558,7 +654,7 @@ export class HUD implements ISubsystem {
 
     own(bus.on('kart:boost', ({ kartId, duration }) => {
       if (kartId !== this.playerId()) return;
-      this.boostFill = clamp01(duration / 1.8);
+      this.boostFill = clamp01(duration / BOOST_FULL_SECONDS);
       punch(this.speedBox, 0.5, 380);
     }));
 
@@ -654,6 +750,16 @@ export class HUD implements ISubsystem {
   private tick(ctx: FrameContext): void {
     const dt = ctx.dt;
     const p = this.player();
+
+    // The track finishes building after the HUD does, so keep asking — twice a
+    // second, and never again once we have a ribbon.
+    if (!this.pathReady) {
+      this.pathRetryAt -= dt;
+      if (this.pathRetryAt <= 0) {
+        this.pathRetryAt = 0.5;
+        this.refreshTrackPath();
+      }
+    }
 
     // --- visibility gate --------------------------------------------------
     // Driven from the race phase every frame rather than from events alone, so
@@ -763,11 +869,9 @@ export class HUD implements ISubsystem {
 
     // --- speed ------------------------------------------------------------
     const kmh = Math.abs(p.speed) * 3.6;
-    this.needle.target = clamp01(kmh / GAUGE_MAX_KMH);
-    this.needle.step(dt);
     const boosting = p.boostTime > 0;
     this.boostFill = boosting
-      ? Math.max(this.boostFill, clamp01(p.boostTime / 1.8))
+      ? Math.max(this.boostFill, clamp01(p.boostTime / BOOST_FULL_SECONDS))
       : damp(this.boostFill, 0, 0.18, dt);
     const shownKmh = Math.round(kmh);
     if (shownKmh !== this.lastKmh) {
@@ -778,13 +882,12 @@ export class HUD implements ISubsystem {
       this.lastBoosting = boosting;
       setClass(this.speedBox, 'ak-speed--boost', boosting);
     }
-    this.gauge.render({
-      needle: this.needle.value,
-      boost: this.boostFill,
-      boosting,
-      drift: p.drifting ? clamp01(p.driftCharge) : 0,
-      driftTier: p.driftStage,
-    });
+    // Quantised so a decaying meter doesn't write a new transform every frame.
+    const boostStr = this.boostFill.toFixed(2);
+    if (boostStr !== this.lastBoostStr) {
+      this.lastBoostStr = boostStr;
+      this.boostBar.style.transform = `scaleX(${boostStr})`;
+    }
 
     // --- drift charge -----------------------------------------------------
     const stage = p.driftStage;
@@ -931,7 +1034,6 @@ export class HUD implements ISubsystem {
     setClass(this.itemBox, 'ak-item--empty', false);
     setClass(this.itemBox, 'ak-item--triple', false);
     setClass(this.itemCount, 'ak-item__count--show', false);
-    setText(this.itemHint, 'ROULETTE');
     this.audio?.play?.('item_roulette');
   }
 
@@ -990,7 +1092,6 @@ export class HUD implements ISubsystem {
     const n = ItemIcons.isTriple(item ?? ItemType.Boost) ? Math.max(3, count) : count;
     setClass(this.itemCount, 'ak-item__count--show', item !== null && n > 1);
     setText(this.itemCount, String(Math.max(0, n)));
-    setText(this.itemHint, item === null ? 'ITEM  ·  E' : `${ItemIcons.label(item)}  ·  E`);
     if (item !== null && !fromRoulette) punch(this.itemBox, 0.6, 300);
   }
 
@@ -1086,37 +1187,87 @@ export class HUD implements ISubsystem {
   // World-space nameplates
   // ---------------------------------------------------------------------
 
+  /**
+   * Opponent nameplates.
+   *
+   * Two things were wrong: every visible rival got a plate (a 12-kart pack in one
+   * frame is a wall of labels straight across the racing line), and nothing
+   * stopped two plates landing on the same pixels. So: keep only the nearest
+   * `MAX_VISIBLE_PLATES`, then push overlapping plates apart vertically —
+   * nearest kart wins its position, the ones behind stack upward, away from the
+   * road surface rather than across it.
+   */
   private updatePlates(player: KartState): void {
     const cam = this.engine?.camera;
     const list = this.karts.karts;
     if (!cam || !list) return;
     const W = this.lastW;
     const H = this.lastH;
-    let slot = 0;
+
+    const slots = this.plateSlots;
+    slots.length = 0;
     for (const k of list) {
-      if (slot >= this.plates.length) break;
       if (k === player) continue;
-      const plate = this.plates[slot];
       tmpV.set(k.position.x, k.position.y + 2.15, k.position.z);
       const dist = cam.position.distanceTo(tmpV);
       tmpV.project(cam);
       const onScreen = tmpV.z > -1 && tmpV.z < 1
-        && tmpV.x > -1.25 && tmpV.x < 1.25 && tmpV.y > -1.25 && tmpV.y < 1.25;
+        && tmpV.x > -1.15 && tmpV.x < 1.15 && tmpV.y > -1.15 && tmpV.y < 1.15;
       const fade = 1 - smoothstep((dist - 40) / 45);
-      if (!onScreen || fade <= 0.02) {
-        if (plate.shown) {
-          plate.shown = false;
-          plate.el.style.visibility = 'hidden';
+      if (!onScreen || fade <= 0.02) continue;
+      slots.push({
+        i: k.id,
+        x: (tmpV.x * 0.5 + 0.5) * W,
+        y: (-tmpV.y * 0.5 + 0.5) * H,
+        d: dist,
+        s: clamp(1.2 - dist / 120, 0.62, 1.1),
+        fade,
+      });
+    }
+
+    // Nearest first — they are the ones that matter and they keep their anchor.
+    slots.sort(byDistance);
+    if (slots.length > MAX_VISIBLE_PLATES) slots.length = MAX_VISIBLE_PLATES;
+
+    // De-collide on Y. Plates are anchored bottom-centre, so one occupies
+    // [y - plateH, y]; two clash when their columns overlap as well.
+    //
+    // Nearest-first greedy with relaxation: each plate keeps its anchor unless a
+    // *closer* plate already owns that space, in which case it steps up above it
+    // and re-checks. Only ever upward, so every step strictly increases the
+    // separation and the loop terminates; one pass is not enough because
+    // stepping clear of one neighbour can move you into another.
+    // `transform-origin` is bottom-centre and the scale is applied last, so a
+    // plate occupies exactly [y - h*s, y] vertically and [x - w*s/2, x + w*s/2]
+    // horizontally — the gap must therefore be scaled too, or a near (large)
+    // plate is spaced as if it were a far (small) one.
+    for (let a = 1; a < slots.length; a++) {
+      for (let pass = 0; pass <= slots.length; pass++) {
+        let moved = false;
+        for (let b = 0; b < a; b++) {
+          const s = Math.max(slots[a].s, slots[b].s);
+          if (Math.abs(slots[a].x - slots[b].x) > this.plateW * s) continue;
+          const gap = this.plateH * s * 1.1;
+          const dy = slots[a].y - slots[b].y;
+          if (dy > -gap && dy < gap) {
+            slots[a].y = slots[b].y - gap;
+            moved = true;
+          }
         }
-        slot++;
-        continue;
+        if (!moved) break;
       }
-      const x = (tmpV.x * 0.5 + 0.5) * W;
-      const y = (-tmpV.y * 0.5 + 0.5) * H;
-      const scale = clamp(1.25 - dist / 110, 0.6, 1.15);
+    }
+
+    let slot = 0;
+    for (const s of slots) {
+      if (slot >= this.plates.length) break;
+      const k = this.findKart(s.i);
+      if (!k) continue;
+      const plate = this.plates[slot];
       plate.el.style.transform =
-        `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) scale(${scale.toFixed(3)})`;
-      plate.el.style.opacity = fade.toFixed(2);
+        `translate3d(${s.x.toFixed(1)}px, ${Math.max(this.plateH * s.s, s.y).toFixed(1)}px, 0) `
+        + `translate(-50%, -100%) scale(${s.s.toFixed(3)})`;
+      plate.el.style.opacity = s.fade.toFixed(2);
       if (!plate.shown) { plate.shown = true; plate.el.style.visibility = 'visible'; }
       setText(plate.pos, String(k.racePosition > 0 ? k.racePosition : '-'));
       setText(plate.name, this.kartName(k));
@@ -1173,9 +1324,21 @@ export class HUD implements ISubsystem {
     const scale = applyUiScale(width, height);
     if (scale !== this.lastScale) this.lastScale = scale;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // CSS sizes come from the stylesheet (design px * scale).
-    this.minimap.resize(228 * scale, dpr);
-    this.gauge.resize(232 * scale, dpr);
+    // Must track `.ak-map`'s width in ui.css — both derive from the same scale.
+    this.minimap.resize(MINIMAP_DESIGN_PX * scale, dpr);
+
+    // One layout read per resize so nameplate de-collision needs none per frame.
+    // Plate 0 is always in the DOM even while hidden, so this is measurable.
+    //
+    // `offsetWidth/Height`, NOT `getBoundingClientRect()`: the plates carry a
+    // per-frame `scale()`, and a rect measured through it reports whatever scale
+    // the previous frame happened to leave behind — which silently under- or
+    // over-sized the de-collision gap.
+    const probeEl = this.plates[0]?.el;
+    if (probeEl) {
+      if (probeEl.offsetHeight > 1) this.plateH = probeEl.offsetHeight;
+      if (probeEl.offsetWidth > 1) this.plateW = probeEl.offsetWidth;
+    }
   }
 
   dispose(): void {

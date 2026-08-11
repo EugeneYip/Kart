@@ -129,7 +129,7 @@ export async function scanRoad(ahead = 12, extra = 0, spread = 0.9): Promise<Any
     const h0 = hits[0];
     const want = cam.position.distanceTo(world);
     ident.push(
-      `${lat.toFixed(1)} ${h0 ? (h0.object.material?.name || h0.object.name || '?') : 'none'}` +
+      `${lat.toFixed(1)} ${h0 ? ((h0.object as Any).material?.name || h0.object.name || '?') : 'none'}` +
       ` d${h0 ? h0.distance.toFixed(1) : '-'}/${want.toFixed(1)}`,
     );
     rects.push([

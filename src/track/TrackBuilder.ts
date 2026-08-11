@@ -90,6 +90,37 @@ export const CROSS = {
   deckDepth: 1.35,
 } as const;
 
+/**
+ * Metres of lap behind the start line taken up by the twelve-kart grid. Must
+ * stay >= `Checkpoints.buildGrid`'s deepest row (8.5 + 5 * gridSpacing * 1.55
+ * + gridStagger); item rows are kept out of it.
+ */
+const START_GRID_LENGTH = 70;
+/**
+ * Item box CENTRE height above the road surface, metres.
+ *
+ * Not a taste value — derived. `ItemBox` draws a `BOX_SIZE = 1.72` cube that
+ * tumbles (euler YXZ, x = 0.38 +- 0.32, y free, z +- 0.22) and bobs +-0.10, and
+ * breathes to 1.022 scale. The lowest corner of that cube sits
+ *   0.86 * (cos x * (|sin z| + |cos z|) + |sin x|) * 1.022 + 0.10
+ * below the centre, which maximises at **1.47 m** (x = 0.70, z = 0.22). At the
+ * old 1.50 m that left 3 cm of clearance over the crown of the road, so the
+ * centre box of every row — the one on the racing line — visibly cut through the
+ * tarmac. 1.70 m leaves 0.23 m.
+ *
+ * Upper bound: `ItemBox.checkPickups` pre-filters on
+ * `dx^2 + dy^2 + dz^2 <= BOX_PICKUP_RADIUS^2 + 1.2`, so with a kart CoM ~0.45 m
+ * up this still leaves a 1.4 m horizontal catch radius — wider than a kart.
+ */
+const ITEM_BOX_HEIGHT = 1.7;
+/** Lateral clearance an item box keeps from the asphalt edge, metres. */
+const ITEM_BOX_EDGE = 2.2;
+
+/** Normalise a lap fraction into [0,1). */
+function wrap01(t: number): number {
+  return ((t % 1) + 1) % 1;
+}
+
 /** Rumble profile on the kerb top. Smooth, so physics can sample it. */
 function rumble(d: number): number {
   const p = (d / CROSS.rumblePeriod) * Math.PI * 2;
@@ -464,7 +495,7 @@ export interface BuiltTrack {
   rlStep: number;
   minimapPath: THREE.Vector2[];
   boostPads: Array<{ position: THREE.Vector3; quaternion: THREE.Quaternion; width: number }>;
-  itemBoxSpawns: Array<{ position: THREE.Vector3; quaternion: THREE.Quaternion }>;
+  itemBoxSpawns: Array<{ position: THREE.Vector3; quaternion: THREE.Quaternion; normal: THREE.Vector3 }>;
   stats: { rings: number; vertices: number; triangles: number; drawCalls: number; ms: number };
   dispose(): void;
 }
@@ -889,16 +920,49 @@ export function buildTrack(
   }
 
   // ---- boost pads ----------------------------------------------------------
+  /**
+   * Largest gap-free sub-range of [a, b], in metres of arc length, or null when
+   * the whole span is over a jump.
+   *
+   * Authoring guard. The coastal cove pad used to be authored 2 m past the jump
+   * lip: 13 m of an 18 m strip was extruded at a road height that does not exist
+   * there, so it hung in mid-air over the water and the boost that makes the jump
+   * clearable was uncollectable. Rather than trust the numbers, trim.
+   */
+  const gapFreeSpan = (a: number, b: number): [number, number] | null => {
+    const probe = makeAttribs();
+    let bestA = 0;
+    let bestB = -1;
+    let runA = NaN;
+    for (let d = a; d <= b + 1e-6; d += 0.5) {
+      spline.attribsAtDistance(d, probe);
+      if (probe.flags & TF.Gap) { runA = NaN; continue; }
+      if (Number.isNaN(runA)) runA = d;
+      if (d - runA > bestB - bestA) { bestA = runA; bestB = d; }
+    }
+    return bestB > bestA ? [bestA, bestB] : null;
+  };
+
   const boostPads: BuiltTrack['boostPads'] = [];
   const padStrip = new Strip();
   for (const pad of def.boostPads) {
-    const d0 = pad.t * L;
-    const hl = pad.length * 0.5;
-    const hwid = pad.width * 0.5;
+    const span = gapFreeSpan(pad.t * L - pad.length * 0.5, pad.t * L + pad.length * 0.5);
+    if (!span || span[1] - span[0] < pad.length * 0.4) {
+      console.warn(
+        `[Track] boost pad at t=${pad.t} on ${def.id} sits over a TF.Gap — skipped. ` +
+        'Move it onto the ramp.',
+      );
+      continue;
+    }
+    const d0 = (span[0] + span[1]) * 0.5;
+    const hl = (span[1] - span[0]) * 0.5;
+    spline.attribsAtDistance(d0, _at);
+    // Never wider than the asphalt: a pad overhanging the kerb reads as a bug.
+    const hwid = Math.min(pad.width * 0.5, Math.max(1.5, _at.halfWidth - Math.abs(pad.lat) - 0.4));
     const SEGS = 6;
     const rings: number[][] = [];
     for (let s2 = 0; s2 <= SEGS; s2++) {
-      const dd = d0 - hl + (pad.length * s2) / SEGS;
+      const dd = d0 - hl + (hl * 2 * s2) / SEGS;
       const r: number[] = [];
       for (const lt of [-1, -0.34, 0.34, 1]) {
         roadSurfacePoint(spline, dd, pad.lat + lt * hwid, _v, _n2);
@@ -918,26 +982,62 @@ export function buildTrack(
     boostPads.push({
       position: _v.clone(),
       quaternion: new THREE.Quaternion().setFromRotationMatrix(_m),
-      width: pad.width,
+      // The width actually drawn, not the authored one — VFX sizes its chevron
+      // glow off this and must match the strip after any clamping above.
+      width: hwid * 2,
     });
   }
   const padMesh = push(padStrip, mats.boost, 'boostPads', { order: 21 });
   if (padMesh) padMesh.receiveShadow = false;
 
   // ---- item box spawns ----------------------------------------------------
+  /**
+   * A tidy row straight across the road, every box at the same height above the
+   * surface, on the surface's own normal so a banked row leans with the road.
+   *
+   * Rules enforced here rather than trusted to the author:
+   *  - the row is nudged off any `TF.Gap` segment (a box floating over a jump is
+   *    uncollectable and reads as a bug),
+   *  - the row never starts inside the starting grid, which occupies the last
+   *    ~60 m of the lap: a box there sits among the karts on the grid,
+   *  - the spread is clamped to the asphalt so no box hangs over the kerb,
+   *  - a single-box row is offset off the centreline rather than dropped on the
+   *    racing line.
+   */
+  const gridStart = L - START_GRID_LENGTH;
   const itemBoxSpawns: BuiltTrack['itemBoxSpawns'] = [];
   for (const row of def.itemRows) {
-    const d0 = row.t * L;
+    let d0 = wrap01(row.t) * L;
+    // Keep clear of the grid (behind the line) and of the line itself: a row in
+    // either place stands among twelve stationary karts.
+    const legal = clamp(d0, 40, Math.max(40, gridStart - 10));
+    if (legal !== d0) {
+      console.warn(
+        `[Track] item row at t=${row.t} on ${def.id} lands in the starting grid — ` +
+        `moved to t=${(legal / L).toFixed(3)}.`,
+      );
+      d0 = legal;
+    }
+    const clear = gapFreeSpan(Math.max(0, d0 - 14), Math.min(L, d0 + 14));
+    if (clear) d0 = clamp(d0, clear[0] + 2, Math.max(clear[0] + 2, clear[1] - 2));
     spline.sampleAtDistance(d0, _s);
-    const spread = row.spread ?? Math.max(6, _s.halfWidth * 2 - 6);
+    spline.attribsAtDistance(_s.distance, _at);
+    const usable = Math.max(4, (_at.halfWidth - ITEM_BOX_EDGE) * 2);
+    const spread = Math.min(row.spread ?? usable, usable);
     for (let k = 0; k < row.count; k++) {
-      const lat = row.count === 1 ? 0 : ((k / (row.count - 1)) - 0.5) * spread;
+      const lat = row.count === 1
+        ? Math.min(2.5, _at.halfWidth * 0.25)
+        : ((k / (row.count - 1)) - 0.5) * spread;
       roadSurfacePoint(spline, d0, lat, _v, _n2);
-      _v.addScaledVector(_n2, 1.5);
+      _v.addScaledVector(_n2, ITEM_BOX_HEIGHT);
       _m.makeBasis(_s.binormal, _n2, _s.tangent.clone().negate());
       itemBoxSpawns.push({
         position: _v.clone(),
         quaternion: new THREE.Quaternion().setFromRotationMatrix(_m),
+        // ItemSystem reads `normal`/`up` off each spawn to stand the box on the
+        // road's own up axis; without it every box defaults to world +Y and
+        // leans wrongly on banked road and inside the anti-gravity sections.
+        normal: _n2.clone(),
       });
     }
   }

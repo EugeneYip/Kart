@@ -25,6 +25,13 @@
  *  on, NormalPass. Everything else is a full-screen quad. Nothing in the chain
  *  re-renders the scene a third time.
  *
+ *  Plus one thing that is NOT a scene render and NOT a full-screen pass: on
+ *  frames that will actually blur, `renderSubjectMask()` draws the player kart's
+ *  model — one object, 33 draw calls, unlit flat material — into a
+ *  quarter-resolution RGBA8 target, so motion blur can keep the subject sharp.
+ *  See SubjectMask.ts. It is deliberately outside the composer: the composer
+ *  only knows about full-screen passes, and this needs the scene graph.
+ *
  *  Why the split: postprocessing refuses to merge two convolution effects into
  *  one pass, and bloom/CA/SMAA each sample the *pass input*, so merging them
  *  would make bloom fringe green and CA ignore the grade. The merged pass is
@@ -412,6 +419,51 @@ export class RenderPipeline implements ISubsystem {
 
     this.builtTier = q.tier;
     this.composer.setSize(this.width, this.height);
+    this.verifyDepthBinds();
+  }
+
+  /**
+   * Assert that nothing in this chain binds a depth texture that a plain
+   * `sampler2D` may not read.
+   *
+   * There was a reported flood of
+   *   GL_INVALID_OPERATION: Mismatch between texture format and sampler type
+   * on *every* draw call in the frame, which Chrome eventually silences and
+   * which never appears in a JS console reader because the browser's command
+   * decoder emits it, not the page. Two review rounds argued about ownership
+   * from indirect evidence.
+   *
+   * There is exactly one way a depth texture becomes illegal to read through
+   * `sampler2D`, and it is worth naming so nobody has to rediscover it: setting
+   * `compareFunction` makes three set `TEXTURE_COMPARE_MODE =
+   * COMPARE_REF_TO_TEXTURE` on the texture object (WebGLTextures
+   * .setTextureParameters), that is texture state rather than sampler state so
+   * it is never cleared again, and from then on the texture *requires*
+   * `sampler2DShadow`. postprocessing declares `sampler2D`. Every pass that
+   * samples it then fails validation on every draw.
+   *
+   * Verified clean at the time of writing: all of this chain's depth textures
+   * are DepthFormat + FloatType (DEPTH_COMPONENT32F), NEAREST/NEAREST,
+   * compareFunction null. `__POST__.boundTextures()` prints the live values and
+   * `__POST__.glValidate()` counts real GL errors per draw.
+   */
+  private verifyDepthBinds(): void {
+    if (!import.meta.env.DEV) return;
+    const seen = new Set<THREE.Texture>();
+    for (const pass of this.composer.passes) {
+      const tex = (pass as unknown as { getDepthTexture?: () => THREE.Texture | null })
+        .getDepthTexture?.();
+      if (!tex || seen.has(tex)) continue;
+      seen.add(tex);
+      const cmp = (tex as THREE.DepthTexture).compareFunction;
+      if (cmp !== null && cmp !== undefined) {
+        console.error(
+          `[Render] ${tex.name || 'depth texture'} has compareFunction=${String(cmp)}. `
+          + 'It is bound to a plain sampler2D and WILL fail validation on every '
+          + 'draw of every pass that reads it. Clear compareFunction.',
+        );
+      }
+    }
   }
 
   private teardownPasses(): void {
@@ -607,6 +659,11 @@ export class RenderPipeline implements ISubsystem {
       this.motionPass.enabled = on;
       // Only pay for the silhouette on frames that will actually blur.
       if (on) this.renderSubjectMask();
+      else if (this.subjectMask) this.subjectMask.drawCalls = 0;
+    } else if (this.subjectMask) {
+      // Tier without motion blur: the mask is never rendered, so don't let
+      // getStats() keep reporting the last tier's cost.
+      this.subjectMask.drawCalls = 0;
     }
 
     this.composer.render(dt);

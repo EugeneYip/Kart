@@ -157,6 +157,229 @@ async function glValidate(engine: EngineLike, frames: number): Promise<GlValidat
   return { frames: counted, draws, errors, byCause, pendingBefore };
 }
 
+// ---------------------------------------------------------------------------
+//  Deterministic motion-blur A/B
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical framings, duplicated from the QA harness's shot list.
+ *
+ * Duplicated on purpose: `__QA__.shot()` settles the simulation for a few
+ * hundred milliseconds, and motion blur is a property of *one* camera step, so
+ * anything that lets frames elapse between placing the camera and reading the
+ * pixels measures a different thing each time. `mbFrame()` places the camera
+ * and renders in the same JavaScript turn.
+ */
+const MB_FRAMINGS: Record<string, Record<string, number>> = {
+  'chase-straight': { back: 7.5, up: 2.6, lookAhead: 14, fov: 62 },
+  'chase-boost': { back: 6.5, up: 2.3, lookAhead: 16, fov: 74 },
+  'driver-eye': { back: 3.5, up: 1.2, lookAhead: 30, lookUp: 0.4, fov: 66 },
+  'kart-hero': { back: -3.0, up: 1.35, right: 3.2, lookAhead: 0, lookUp: 0.55, fov: 40 },
+};
+
+/**
+ * Motion-blur constants, so one call can render the shipped look and the
+ * pre-fix look at the *same* frame of the *same* race and the difference is
+ * attributable to nothing else.
+ *
+ * `legacy` is what the critic reviewed: 0.035 max radius is 67 px of
+ * convolution at 1920, and because the shader clamps the velocity rather than
+ * scaling it, every pixel past the ceiling got the full 67 px.
+ */
+const MB_MODES = {
+  shipped: { camera: 0.3, radial: 0.006, maxRadius: 0.008, mask: true },
+  nomask: { camera: 0.3, radial: 0.006, maxRadius: 0.008, mask: false },
+  legacy: { camera: 0.8, radial: 0.028, maxRadius: 0.032, mask: false },
+  legacyMasked: { camera: 0.8, radial: 0.028, maxRadius: 0.032, mask: true },
+  off: { camera: 0, radial: 0, maxRadius: 0.008, mask: false },
+} as const;
+
+export type MbMode = keyof typeof MB_MODES;
+
+interface MbHarness {
+  harness?: {
+    takeCameraControl(): void;
+    releaseCameraControl(): void;
+    kartRelative(o: Record<string, number>): boolean;
+    subjectInFrame(id?: number): { inFrame: boolean; ndc: [number, number]; distance: number };
+  };
+}
+
+interface MbGame {
+  engine: {
+    camera: {
+      position: { copy(v: unknown): unknown; addScaledVector(v: unknown, s: number): unknown; clone(): unknown };
+      getWorldDirection(v: unknown): unknown;
+      updateMatrixWorld(force?: boolean): void;
+    };
+    renderer: { setPixelRatio(v: number): void };
+    adaptiveResolution: boolean;
+    setRenderCallback(fn: (dt: number) => void): void;
+  };
+  race?: { state?: string; pause?(): void; resume?(): void; skipIntro?(): void };
+  karts?: { player?: { position: { toArray(): number[] }; speed: number } };
+  startRace?(o: Record<string, unknown>): Promise<void> | void;
+  pipeline?: unknown;
+}
+
+interface MbFrameResult {
+  mode: MbMode;
+  shot: string;
+  /** False means the capture is invalid — the subject is not in frame. */
+  inFrame: boolean;
+  ndc: [number, number];
+  subjectDistanceM: number;
+  maskOn: boolean;
+  maskDrawCalls: number;
+  cameraStrength: number;
+  radialStrength: number;
+  maxRadiusPx: number;
+  /** Blur length in pixels of the current backing store, by view distance. */
+  blurPxByDepth: Record<string, number>;
+  kartPos: number[];
+}
+
+/**
+ * Render exactly one deterministic motion-blurred frame and leave it on screen
+ * to be screenshotted.
+ *
+ * The race is paused and the engine's render callback is replaced with a no-op,
+ * so nothing overwrites the frame while a screenshot is taken and repeated
+ * calls photograph the *same* moment of the *same* race — which is the only way
+ * to A/B a temporal effect through a screenshot pipeline. Call
+ * `__POST__.mbRelease()` afterwards to give the game back.
+ *
+ * The camera step is fabricated rather than observed: the camera is moved back
+ * by `speedMs / 60` metres, fed to the reprojection as the previous frame, then
+ * moved to where it belongs and fed again. The resulting blur is exactly what a
+ * 60 Hz frame at `speedMs` would produce, whatever the pane's real frame rate.
+ */
+function mbFrame(
+  pipeline: RenderPipeline,
+  shot: string,
+  speedMs: number,
+  boost: number,
+  mode: MbMode,
+): MbFrameResult | { error: string } {
+  const framing = MB_FRAMINGS[shot];
+  if (!framing) return { error: `unknown framing "${shot}" (${Object.keys(MB_FRAMINGS).join(', ')})` };
+  const qa = (globalThis as unknown as { __QA__?: MbHarness }).__QA__;
+  const h = qa?.harness;
+  const game = (globalThis as unknown as { __GAME__?: MbGame }).__GAME__;
+  if (!h || !game) return { error: '__QA__ / __GAME__ not installed' };
+
+  const p = pipeline as unknown as {
+    motionBlur: {
+      cameraStrength: number; radialStrength: number; speedIntensity: number;
+      hasSubjectMask: boolean;
+      uniforms: Map<string, { value: unknown }>;
+      setSubjectMask(t: unknown): void;
+      resetHistory(): void;
+      setMatrices(cam: unknown, dt: number): void;
+      reproject: { elements: number[] };
+    } | null;
+    motionPass: { enabled: boolean } | null;
+    subjectMask: { texture: unknown } | null;
+    renderSubjectMask(): boolean;
+    composer: { render(dt: number): void };
+    getStats(): { maskDrawCalls: number };
+  };
+  const mb = p.motionBlur;
+  if (!mb) return { error: 'motion blur is not built on this quality tier' };
+
+  const cfg = MB_MODES[mode];
+  const dt = 1 / 60;
+
+  game.race?.pause?.();
+
+  mb.cameraStrength = cfg.camera;
+  mb.radialStrength = cfg.radial;
+  const params = mb.uniforms.get('mbParams')!.value as { x: number; y: number; z: number };
+  params.z = cfg.maxRadius;
+  if (cfg.mask && !mb.hasSubjectMask && p.subjectMask) mb.setSubjectMask(p.subjectMask.texture);
+  if (!cfg.mask && mb.hasSubjectMask) mb.setSubjectMask(null);
+
+  h.takeCameraControl();
+  const cam = game.engine.camera;
+  const fwd = cam.position.clone() as { copy(v: unknown): unknown };
+  const home = cam.position.clone();
+
+  /**
+   * Draw the deterministic frame.
+   *
+   * Installed as the engine's render callback rather than drawn once, because a
+   * WebGL canvas is presented at the compositor's convenience: drawing once and
+   * then stubbing the render loop produced screenshots that were a capture
+   * behind, which silently swapped the two halves of an A/B. Re-drawing the
+   * identical frame every tick makes a stale screenshot impossible — the race is
+   * paused, so every tick genuinely is the same frame.
+   */
+  const paint = (): void => {
+    // Re-solve the framing every tick: it is the authoritative camera placement
+    // and the race is paused, so it resolves to the same transform each time.
+    h.kartRelative(framing);
+    cam.updateMatrixWorld(true);
+    (home as { copy(v: unknown): unknown }).copy(cam.position);
+    cam.getWorldDirection(fwd);
+    mb.resetHistory();
+    mb.speedIntensity = boost;
+    cam.position.addScaledVector(fwd, -speedMs * dt);
+    cam.updateMatrixWorld(true);
+    mb.setMatrices(cam, dt);
+    cam.position.copy(home);
+    cam.updateMatrixWorld(true);
+    mb.setMatrices(cam, dt);
+    if (p.motionPass) p.motionPass.enabled = true;
+    if (mb.hasSubjectMask) p.renderSubjectMask();
+    p.composer.render(dt);
+  };
+
+  paint();
+  const subject = h.subjectInFrame(0);
+  game.engine.setRenderCallback(paint);
+
+  const width = (pipeline as unknown as { width: number }).width;
+  const camAny = cam as unknown as { near: number; far: number };
+  const near = camAny.near;
+  const far = camAny.far;
+  const e = mb.reproject.elements;
+  const blur: Record<string, number> = {};
+  // Same maths as the fragment shader, on the CPU, at the kart's screen position.
+  for (const zn of [0.94, 0.985, 0.996, 1.0]) {
+    const x = 0;
+    const y = -0.26;
+    const px = e[0] * x + e[4] * y + e[8] * zn + e[12];
+    const py = e[1] * x + e[5] * y + e[9] * zn + e[13];
+    const pw0 = e[3] * x + e[7] * y + e[11] * zn + e[15];
+    const pw = Math.abs(pw0) < 1e-6 ? 1e-6 : pw0;
+    let vx = ((px / pw) * 0.5 + 0.5 - (x * 0.5 + 0.5)) * params.x;
+    let vy = ((py / pw) * 0.5 + 0.5 - (y * 0.5 + 0.5)) * params.x;
+    const r = Math.hypot(x * 0.5, y * 0.5);
+    const t = Math.max(0, Math.min(1, (r - 0.1) / 0.52));
+    const edge = t * t * (3 - 2 * t);
+    vx += x * 0.5 * params.y * edge;
+    vy += y * 0.5 * params.y * edge;
+    const len = Math.min(Math.hypot(vx, vy), params.z);
+    const dist = (2 * far * near) / (far + near - zn * (far - near));
+    blur[`${dist < 1000 ? dist.toFixed(0) : 'sky'}m`] = Math.round(len * width * 10) / 10;
+  }
+
+  return {
+    mode,
+    shot,
+    inFrame: subject.inFrame,
+    ndc: subject.ndc,
+    subjectDistanceM: subject.distance,
+    maskOn: mb.hasSubjectMask,
+    maskDrawCalls: p.getStats().maskDrawCalls,
+    cameraStrength: mb.cameraStrength,
+    radialStrength: mb.radialStrength,
+    maxRadiusPx: Math.round(params.z * width * 10) / 10,
+    blurPxByDepth: blur,
+    kartPos: game.karts?.player?.position.toArray().map((n) => Math.round(n * 10) / 10) ?? [],
+  };
+}
+
 /**
  * Everything the render chain binds into a sampler, with the properties that
  * decide whether the bind is legal. A depth texture with a comparison mode set
@@ -288,6 +511,87 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
 
     /** Every texture the post chain binds, with its sampler-compatibility fields. */
     boundTextures: () => describeBoundTextures(pipeline),
+
+    /**
+     * Get the game into a photographable state: adaptive resolution off (it
+     * desyncs the composer mid-measurement), a true 1920x1080 backing store (the
+     * preview pane is only 1:1 at 800x450 CSS px), a race running, and the kart
+     * up to speed. Idempotent.
+     */
+    async mbArm(pixelRatio = 2.4, driveFrames = 150): Promise<Record<string, unknown>> {
+      const game = (globalThis as unknown as { __GAME__?: MbGame }).__GAME__;
+      if (!game) return { error: '__GAME__ missing' };
+      // A previous mbFrame() leaves the race paused and the render callback
+      // stubbed. Without undoing that first, the drive loop below waits for a
+      // kart that can never move and burns the whole call budget.
+      this.mbRelease();
+      game.engine.adaptiveResolution = false;
+      game.engine.renderer.setPixelRatio(pixelRatio);
+      globalThis.dispatchEvent(new Event('resize'));
+      if (game.race?.state === 'idle' && game.startRace) {
+        await game.startRace({});
+        game.race.skipIntro?.();
+      }
+      globalThis.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowUp', bubbles: true }));
+      // Wall-clock bounded: the preview pane runs rAF at ~10 Hz, so a frame
+      // count alone would run for half a minute and get the call killed.
+      const deadline = performance.now() + 9000;
+      for (let i = 0; i < driveFrames; i++) {
+        if (performance.now() > deadline) break;
+        await new Promise<void>((r) => {
+          let done = false;
+          const fin = (): void => { if (!done) { done = true; r(); } };
+          requestAnimationFrame(fin);
+          setTimeout(fin, 60);
+        });
+        if ((game.karts?.player?.speed ?? 0) > 20 && i > 40) break;
+      }
+      return {
+        raceState: game.race?.state,
+        speedKmh: Math.round((game.karts?.player?.speed ?? 0) * 3.6),
+        kartPos: game.karts?.player?.position.toArray().map((n) => Math.round(n * 10) / 10),
+      };
+    },
+
+    /**
+     * Render one deterministic motion-blurred frame and freeze it for a
+     * screenshot. `mode` is one of shipped | nomask | legacy | legacyMasked | off.
+     * ALWAYS check the returned `inFrame` before judging the image.
+     */
+    mbFrame: (shot = 'chase-boost', speedMs = 38, boost = 1, mode: MbMode = 'shipped') =>
+      mbFrame(pipeline, shot, speedMs, boost, mode),
+
+    /**
+     * Arm a capture that survives a page reload.
+     *
+     * The dev server is shared by a dozen agents and every save triggers a Vite
+     * full reload, which throws away any state a reviewer set up by hand — long
+     * enough that a screenshot almost never lands on the frame it was set up
+     * for. Stashing the request in `sessionStorage` means the *game* re-arms
+     * itself on every boot: after this, any screenshot of the tab is the
+     * requested deterministic frame, no timing required. Result lands in
+     * `window.__MB__` and is logged.
+     */
+    mbAuto(shot = 'chase-boost', speedMs = 38, boost = 1, mode: MbMode = 'shipped', drive = 30): string {
+      sessionStorage.setItem('__POST_MB_AUTO__', JSON.stringify({ shot, speedMs, boost, mode, drive }));
+      return `armed: ${shot} @ ${speedMs} m/s, mode=${mode} (survives reload; __POST__.mbAutoOff() to stop)`;
+    },
+
+    mbAutoOff(): string {
+      sessionStorage.removeItem('__POST_MB_AUTO__');
+      return 'auto capture disarmed';
+    },
+
+    /** Hand the game back after mbFrame(). */
+    mbRelease(): string {
+      const game = (globalThis as unknown as { __GAME__?: MbGame }).__GAME__;
+      const qa = (globalThis as unknown as { __QA__?: MbHarness }).__QA__;
+      if (!game) return 'no game';
+      game.engine.setRenderCallback((dt: number) => pipeline.render(dt));
+      game.race?.resume?.();
+      qa?.harness?.releaseCameraControl();
+      return 'released';
+    },
 
     /**
      * Per-pass cost. Measures median frame time with every pass on, then with
@@ -806,7 +1110,7 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
   (globalThis as unknown as Record<string, unknown>).__POST__ = api;
   console.info(
     '[PostQA] window.__POST__ ready — probe() passCost() toneMap() exposure() passes() autoRun()'
-    + ' glValidate() boundTextures()',
+    + ' glValidate() boundTextures() mbArm() mbFrame(shot,speed,boost,mode) mbRelease()',
   );
 
   let auto = '';
@@ -861,6 +1165,26 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
         store('postqa.uv.status', 'done');
       } catch (err) {
         store('postqa.uv.status', 'error: ' + (err as Error).message);
+      }
+    })();
+  }
+
+  // Reload-surviving deterministic motion-blur capture. See api.mbAuto().
+  let mbAuto = '';
+  try { mbAuto = sessionStorage.getItem('__POST_MB_AUTO__') ?? ''; } catch { /* ignore */ }
+  if (mbAuto) {
+    void (async () => {
+      try {
+        const req = JSON.parse(mbAuto) as
+          { shot: string; speedMs: number; boost: number; mode: MbMode; drive: number };
+        await waitFor(() => (globalThis as unknown as Record<string, unknown>).__QA__, 90000);
+        await api.mbArm(2.4, req.drive);
+        const res = api.mbFrame(req.shot, req.speedMs, req.boost, req.mode);
+        (globalThis as unknown as Record<string, unknown>).__MB__ = res;
+        console.info('[PostQA] auto mbFrame ready:', JSON.stringify(res));
+      } catch (err) {
+        (globalThis as unknown as Record<string, unknown>).__MB__ = { error: (err as Error).message };
+        console.warn('[PostQA] auto mbFrame failed', err);
       }
     })();
   }

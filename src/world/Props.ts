@@ -436,19 +436,32 @@ class Builder {
       this.I.push(base, base + 1, base + 2, base, base + 2, base + 3);
       return;
     }
-    // The u range is swapped relative to the naive mapping, and this is not a
-    // typo. `pt()` lays the plate out along local +x with a +z face normal, so
-    // a viewer looking at the front face (from +z, down -z) sees +x running to
-    // their LEFT. Mapping uMin->-hw would therefore render all text mirrored.
-    // Verified empirically: trackside boards read "TORQUE"/"EMBER" correctly
-    // with this mapping and read reversed with the axes the other way round.
-    // The back face gets the un-swapped range so double-sided signs read
-    // correctly from behind too.
+    // ------------------------------------------------------------------------
+    // THE u AXIS. `pt()` lays the plate out along local +x with a +z face
+    // normal. The only viewer of that front face stands at local +z looking down
+    // -z, and in a right-handed frame with +y up that viewer sees local **+x on
+    // their RIGHT** (it is the default three.js camera basis: a camera at +z
+    // looking at the origin puts world +x to screen-right). Text therefore reads
+    // left-to-right only when u INCREASES along local +x, i.e. `-hw -> uMin`.
+    //
+    // A previous pass swapped these two ranges on the strength of a runtime
+    // u-mirror experiment and left `sponsorBoard` reading mirrored anyway, which
+    // is the symptom you get from exactly this: the front face carried the
+    // back face's range. They are back the right way round now. `flapAcross`
+    // above always used the correct mapping — and nobody ever reported the mast
+    // cloths as mirrored, which is the corroborating evidence.
+    //
+    // `flipY = true` on the canvas textures affects v only, never u, so it does
+    // not enter into this. Do not "re-fix" this without re-deriving it: one
+    // screenshot of `Prop:sponsorBoard` from the driving direction settles it.
+    // ------------------------------------------------------------------------
     this.quad(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2],
-      hex, shade, [uv[2], uv[3], uv[0], uv[1]]);
+      hex, shade, [uv[0], uv[3], uv[2], uv[1]]);
     if (!opts.single) {
+      // Seen from behind, local +x is on the viewer's LEFT, so the back face
+      // wants the mirrored range to read correctly from that side.
       this.quad(p1[0], p1[1], p1[2], p0[0], p0[1], p0[2], p3[0], p3[1], p3[2], p2[0], p2[1], p2[2],
-        hex, shade * 0.8, [uv[0], uv[3], uv[2], uv[1]]);
+        hex, shade * 0.8, [uv[2], uv[3], uv[0], uv[1]]);
     }
   }
 
@@ -469,13 +482,11 @@ class Builder {
         const fx = i / segs;
         const lx = (fx - 0.5) * w;
         const y = cy - fy * h;
-        // u runs uMax -> uMin as lx goes -w/2 -> +w/2, exactly as in `plate()`.
-        // The cloth is laid out along local +x with a +z face normal, so a viewer
-        // of the front face (standing at +z, looking down -z) sees +x running to
-        // their LEFT. The naive `uv[0] + range * fx` therefore renders every
-        // sponsor name on the gantry and stand banners mirrored.
+        // u runs uMin -> uMax as lx goes -w/2 -> +w/2, exactly as in `plate()`'s
+        // front face — see the long note on the u axis there. A viewer of this
+        // cloth's +z face sees local +x on their right, so u must grow with +x.
         this.vert(cx + lx * ca, y, cz + lx * sa, 0, 0, 1,
-          uv[2] - (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+          uv[0] + (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
       }
     }
     this.flap = 0;
@@ -706,19 +717,18 @@ const ATLAS_ROWS = 2;
  * The per-instance `aAtlas` remap can only pick **one** cell per instance, which
  * is fine for a trackside board but useless for a grandstand: the whole point of
  * a sponsor band is that it reads as six different names in a row. Emitting the
- * cell per quad instead needs the uv convention spelled out, and there are two
- * separate flips in play:
+ * cell per quad instead needs the uv convention spelled out:
  *
- *  1. `plate()` maps local **+x -> uMin** — see the long comment there. Already
- *     corrected and empirically verified; this helper just feeds it a normal
- *     `[uMin, vMin, uMax, vMax]` rect and lets it do the swap.
- *  2. `canvasTexture()` leaves three's default `flipY = true` alone, so **v = 1
- *     is the top of the drawn canvas** while `plate()` sends the geometry's top
- *     edge to the rect's *first* v. Upright text therefore needs the top v
- *     first, i.e. a descending v range — which is what `V_TOP_FIRST` does.
- *
- * If a later pass corrects `plate()`'s v range the way its u range was
- * corrected, flip `V_TOP_FIRST` and every sign built here follows.
+ *  1. **u** — `plate()`'s front face maps local `-hw -> uMin`, which is the plain
+ *     ascending range this helper emits. Nothing to compensate for; see the long
+ *     note on the u axis in `plate()` for why that is the correct direction.
+ *  2. **v** — `canvasTexture()` leaves three's default `flipY = true` alone, so
+ *     **v = 1 is the top of the drawn canvas** while `plate()` sends the
+ *     geometry's top edge to the rect's *second* v. Upright text therefore needs
+ *     the top v first in the rect, i.e. a descending v range — which is what
+ *     `V_TOP_FIRST` does, and it is verified on screen (the small
+ *     "APEX KART CHAMPIONSHIP" caption, drawn at 0.82 of the cell height, reads
+ *     at the bottom of the board).
  */
 const V_TOP_FIRST = true;
 
@@ -816,6 +826,71 @@ function shade(hex: string, mul: number): string {
 // ===========================================================================
 
 /**
+ * Perpendicular distance from an XZ point to the road centreline, plus the
+ * half width there.
+ *
+ * `ctx.stations` is the resampled centreline at ~7 m spacing, so a nearest-
+ * station search followed by a projection onto the two adjoining chords is
+ * accurate to a few centimetres. This is deliberately NOT `field.roadDistanceAt`:
+ * that is a baked texel grid (metres per texel), far too coarse to decide
+ * whether a grandstand corner is over the asphalt.
+ */
+function roadClearance(st: PathStation[], x: number, z: number): { lat: number; halfWidth: number } {
+  let bi = 0;
+  let bd = Infinity;
+  for (let i = 0; i < st.length; i++) {
+    const dx = st[i].px - x, dz = st[i].pz - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bd) { bd = d2; bi = i; }
+  }
+  let best = Math.sqrt(bd);
+  let hw = st[bi].halfWidth;
+  const n = st.length;
+  for (const j of [(bi - 1 + n) % n, bi]) {
+    const a = st[j], b = st[(j + 1) % n];
+    const ex = b.px - a.px, ez = b.pz - a.pz;
+    const len2 = ex * ex + ez * ez;
+    if (len2 < 1e-6) continue;
+    const t = clamp(((x - a.px) * ex + (z - a.pz) * ez) / len2, 0, 1);
+    const px = a.px + ex * t, pz = a.pz + ez * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < best) {
+      best = d;
+      hw = a.halfWidth + (b.halfWidth - a.halfWidth) * t;
+    }
+  }
+  return { lat: best, halfWidth: hw };
+}
+
+/**
+ * Lateral clearance a stand's structure must keep from the asphalt edge, metres.
+ * Kerb (1.55) plus enough shoulder that the terrace never reads as overhanging
+ * the racing surface. The anchor test alone is not enough: a 78 m stand anchored
+ * 27 m out still swings its ends across a corner.
+ */
+const STAND_ROAD_CLEARANCE = 4.6;
+/** Local +Z of the outermost road-facing structure (catch fence panels). */
+const STAND_FRONT_REACH = 4.75;
+
+/** True when every corner of the stand footprint clears the road. */
+function standClearsRoad(
+  st: PathStation[], x: number, z: number, yaw: number, width: number,
+): boolean {
+  const ca = Math.cos(yaw), sa = Math.sin(yaw);
+  const hw = width * 0.5;
+  for (const lx of [-hw, 0, hw]) {
+    for (const lz of [-1.5, STAND_FRONT_REACH]) {
+      // local +X -> (cos, 0, -sin); local +Z -> (sin, 0, cos)
+      const wx = x + lx * ca + lz * sa;
+      const wz = z - lx * sa + lz * ca;
+      const c = roadClearance(st, wx, wz);
+      if (c.lat < c.halfWidth + STAND_ROAD_CLEARANCE) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Pick grandstand sites: the start/finish straight first, then the outside of
  * the biggest corners, which is where a real circuit puts its seating.
  */
@@ -839,25 +914,35 @@ export function planStands(ctx: WorldContext, limit = 8): StandSpec[] {
 
   const place = (i: number, side: number, density: number, main: boolean): boolean => {
     const s = st[i];
-    const dist = s.halfWidth + 15;
-    const x = s.px + s.bx * dist * side;
-    const z = s.pz + s.bz * dist * side;
-    if (field.roadDistanceAt(x, z) < s.halfWidth + 8) return false;
-    const y = field.heightAt(x, z);
-    if (y < ctx.waterLevel + 0.6) return false;
-    if (field.slopeAt(x, z) > 0.55) return false;
-    for (const o of out) if (o.position.distanceTo(_v.set(x, y, z)) < 95) return false;
+    const width = main ? 78 : 46;
+    // Yaw: local +Z faces the road, local +-X runs along it (convention 1 — see
+    // the PROP ORIENTATION block in Track.ts).
     const yaw = Math.atan2(-s.bx * side, -s.bz * side);
-    out.push({
-      position: new THREE.Vector3(x, y, z),
-      yaw,
-      width: main ? 78 : 46,
-      rows: main ? 9 : 6,
-      density,
-      arc: s.s,
-      main,
-    });
-    return true;
+    // Walk the site outward until the whole footprint clears the road, rather
+    // than testing the anchor alone. A 78 m terrace anchored 27 m out still puts
+    // its far end over the asphalt wherever the centreline curves away.
+    for (let extra = 0; extra <= 24; extra += 4) {
+      const dist = s.halfWidth + 15 + extra;
+      const x = s.px + s.bx * dist * side;
+      const z = s.pz + s.bz * dist * side;
+      if (field.roadDistanceAt(x, z) < s.halfWidth + 8) continue;
+      const y = field.heightAt(x, z);
+      if (y < ctx.waterLevel + 0.6) continue;
+      if (field.slopeAt(x, z) > 0.55) continue;
+      if (!standClearsRoad(st, x, z, yaw, width)) continue;
+      for (const o of out) if (o.position.distanceTo(_v.set(x, y, z)) < 95) return false;
+      out.push({
+        position: new THREE.Vector3(x, y, z),
+        yaw,
+        width,
+        rows: main ? 9 : 6,
+        density,
+        arc: s.s,
+        main,
+      });
+      return true;
+    }
+    return false;
   };
 
   // Main stand on the left of the start line, a smaller one opposite.
@@ -1334,11 +1419,18 @@ export class Props implements ISubsystem {
     const rng = this.rng;
 
     // ---- start / finish gantry ------------------------------------------------
+    // ORIENTATION. This structure is built along local +-X and has to arch ACROSS
+    // the road, so its yaw must come from the **tangent** (local +X then lands on
+    // the binormal — see the PROP ORIENTATION block in Track.ts). It used to be
+    // derived from the binormal, which is exactly 90 degrees out: the deck ran
+    // lengthwise down the centre of the carriageway and both truss towers stood
+    // on the racing line, 14.7 m either side of the start line.
     const start = st[0];
     const hw = start.halfWidth;
     const gantryAnchor: Anchor[] = [{
-      x: start.px, y: this.field.heightAt(start.px, start.pz),
-      z: start.pz, yaw: Math.atan2(start.bx, start.bz),
+      // Road height, not terrain height: this thing straddles the carriageway.
+      x: start.px, y: start.py,
+      z: start.pz, yaw: Math.atan2(start.tx, start.tz),
       side: 0, arc: 0, scale: 1, seed: 0.5,
     }];
 
@@ -1577,10 +1669,30 @@ export class Props implements ISubsystem {
 
     // ---- balloon arch --------------------------------------------------------
     {
-      const st0 = st[Math.floor(st.length * 0.42)];
-      const arches: Anchor[] = [st0, st[Math.floor(st.length * 0.72)]].map((s) => ({
-        x: s.px, y: this.field.heightAt(s.px, s.pz), z: s.pz,
-        yaw: Math.atan2(s.bx, s.bz), side: 0, arc: s.s, scale: 1, seed: rng.next(),
+      /**
+       * An arch has to straddle the road, so — like the gantry — its yaw comes
+       * from the **tangent**, not the binormal (that was 90 degrees out: the arc
+       * of balloons ran down the middle of the carriageway, and edge-on it read
+       * as a bare torus floating beside the kart).
+       *
+       * Site choice also matters: sample forward from the nominal lap fraction
+       * until the terrain is close to the road height. That rejects the two
+       * places an arch must never go — over a jump gap (the coastal cove arch
+       * used to hang in mid-air above the water at d~1159) and over an elevated
+       * bridge or spiral deck.
+       */
+      const siteNear = (frac: number): PathStation => {
+        const n0 = st.length;
+        const i0 = Math.floor(n0 * frac);
+        for (let k = 0; k < 40; k++) {
+          const s = st[(i0 + k) % n0];
+          if (Math.abs(s.py - this.field.heightAt(s.px, s.pz)) < 2.5) return s;
+        }
+        return st[i0];
+      };
+      const arches: Anchor[] = [siteNear(0.42), siteNear(0.72)].map((s) => ({
+        x: s.px, y: s.py, z: s.pz,
+        yaw: Math.atan2(s.tx, s.tz), side: 0, arc: s.s, scale: 1, seed: rng.next(),
       }));
       const b = this.builder();
       const span = hw + 3;

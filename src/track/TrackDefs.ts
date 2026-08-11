@@ -202,13 +202,37 @@ const SUNSET_NODES: SplineNodeSpec[] = [
   { p: [226.1, 0.13, -2.8], hw: 10.5, bank: 6, shL: 4, shR: 4, shoulderSurface: S.Sand, wallL: 'fence', wallR: 'fence' },
 
   // ---- S8 the cove jump. The road blends up into a lip (no kerbs, no rails),
-  //      34 m of open water, glider on the way down onto a sand spit.
-  { p: [222.8, 2.50, 16.9], hw: 11, bank: 0, shL: 2, shR: 2, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Ramp, tag: 'cove ramp' },
-  { p: [219.5, 4.86, 36.7], hw: 11, bank: 0, shL: 2, shR: 2, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Ramp },
-  { p: [216.1, 7.23, 56.4], hw: 11, bank: 0, shL: 0, shR: 0, shoulderSurface: S.Water, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'GAP' },
-  { p: [210.5, 8.76, 89.9], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider, tag: 'landing' },
-  { p: [207.2, 6.12, 109.6], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider },
-  { p: [203.8, 3.48, 129.4], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider },
+  //      ~23 m of open water, glider on the way down onto a sand spit.
+  //
+  //  *** READ THIS BEFORE MOVING ANY OF THESE SEVEN NODES ***
+  //  This jump was unclearable at every speed from 22 to 40 m/s (measured, and
+  //  the playtester reported the section as impassable). Three things were wrong
+  //  and all three are load-bearing:
+  //
+  //  1. The LANDING was 1.54 m ABOVE the lip. Gravity here is 26 m/s^2, so a
+  //     kart leaving a lip at 40 m/s and 4.8 degrees rises 0.6 m at apex — it can
+  //     never regain height. The landing must sit ~7 m BELOW the lip.
+  //  2. The LAUNCH PITCH was 4.8 degrees, because with Catmull-Rom the tangent at
+  //     the lip is the chord from the node *before* it to the node *after* it,
+  //     and the node after it was 34 m away across the void. That is why there is
+  //     now a control point INSIDE the gap ('void arc'): it is what lets the lip
+  //     tangent (11 deg, from node 'cove ramp b' -> 'void arc') be steep while the
+  //     landing is still far below. Delete it and the launch goes flat again.
+  //  3. The boost pad was authored at t=0.712, which is 2 m PAST the lip: 11 m of
+  //     an 18 m pad hung in mid-air over the water and nobody ever got the boost.
+  //     It now sits wholly on the ramp — see `boostPads` below.
+  //
+  //  The void arc also keeps the centreline near the flight path, which matters:
+  //  `isOutOfBounds` respawns anything more than 7 m below the centreline while
+  //  over a `TF.Gap`, so a centreline that flies straight while the kart falls
+  //  triggers a respawn in mid-air.
+  { p: [222.8, 1.80, 16.9], hw: 11, bank: 0, shL: 2, shR: 2, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Ramp, tag: 'cove ramp' },
+  { p: [219.5, 4.40, 36.7], hw: 11, bank: 0, shL: 2, shR: 2, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Ramp, tag: 'cove ramp b' },
+  { p: [216.1, 9.20, 56.4], hw: 11, bank: 0, shL: 0, shR: 0, shoulderSurface: S.Water, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'GAP (lip)' },
+  { p: [214.3, 10.30, 66.8], hw: 11, bank: 0, shL: 0, shR: 0, shoulderSurface: S.Water, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'void arc' },
+  { p: [212.4, 2.20, 77.0], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider, tag: 'landing' },
+  { p: [209.4, 1.60, 100.0], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider },
+  { p: [205.6, 1.10, 126.0], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'none', wallR: 'none', flags: TF.Glider },
   { p: [200.5, 0.84, 149.1], hw: 11.5, bank: 0, shL: 6, shR: 6, shoulderSurface: S.Sand, wallL: 'guardrail', wallR: 'guardrail' },
 
   // ---- S9 sea-wall right-hander. 128 deg of turn at R 74 m with 11 deg of
@@ -317,12 +341,16 @@ const NEON_NODES: SplineNodeSpec[] = [
   { p: [283.7, 7.35, 3.4], hw: 11, bank: 12, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Wet },
   { p: [265.3, 9.05, 17.6], hw: 11, bank: 12, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Wet },
 
-  // ---- N10 flyover jump. Lip, 26 m gap over the plaza, glider, landing deck.
-  { p: [243.6, 10.75, 26.0], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'none', wallR: 'none', flags: TF.Bridge | TF.Ramp, tag: 'launch lip' },
-  { p: [224.0, 11.78, 30.4], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'none', wallR: 'none', flags: TF.Bridge | TF.Ramp },
-  { p: [204.5, 12.81, 34.8], hw: 11, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'GAP' },
-  { p: [179.2, 12.84, 40.5], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Glider, tag: 'landing deck' },
-  { p: [159.7, 11.36, 44.9], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Glider },
+  // ---- N10 flyover jump. Kicker, ~21 m gap over the plaza, glider, lower deck.
+  //      Same three defects as the coastal cove jump and the same fix — see the
+  //      long note on S8 in SUNSET_NODES. The landing deck used to sit 0.01 m
+  //      ABOVE the lip with a 1.6 degree launch: unclearable at any speed.
+  { p: [243.6, 9.90, 26.0], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'none', wallR: 'none', flags: TF.Bridge | TF.Ramp, tag: 'flyover kicker' },
+  { p: [224.0, 11.70, 30.4], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'none', wallR: 'none', flags: TF.Bridge | TF.Ramp },
+  { p: [204.5, 15.40, 34.8], hw: 11, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'GAP (lip)' },
+  { p: [194.2, 16.40, 37.1], hw: 11, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'void arc' },
+  { p: [183.6, 9.20, 39.5], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Glider, tag: 'landing deck' },
+  { p: [159.7, 8.60, 44.9], hw: 11, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge | TF.Glider },
 
   // ---- N11 monorail chicane. Left-right under the elevated line. The kerbs
   //      are the fast way through — the geometry rewards riding them.
@@ -375,12 +403,16 @@ const VOLCANO_NODES: SplineNodeSpec[] = [
   { p: [134.8, 36.50, -219.3], hw: 9, bank: -10, shL: 3, shR: 3, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'rock', tag: 'crest' },
 
   // ---- V4 the broken bridge. Old timber-and-basalt deck, no barriers, the
-  //      centre span is gone. 26 m of nothing with a lava river underneath.
-  { p: [150.1, 42.00, -234.0], hw: 10, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Ramp, tag: 'BROKEN BRIDGE' },
-  { p: [167.8, 43.50, -255.1], hw: 10, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Ramp },
-  { p: [187.6, 45.00, -274.2], hw: 10, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'COLLAPSED SPAN' },
-  { p: [207.2, 45.00, -291.2], hw: 10.5, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Glider, tag: 'far deck' },
-  { p: [226.8, 43.50, -306.8], hw: 10.5, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Glider },
+  //      centre span is gone. ~20 m of nothing with a lava river underneath.
+  //      The deck humps up into the break (that is what makes it clearable —
+  //      see the long note on S8 in SUNSET_NODES) and the far deck sits 6 m
+  //      lower, where the span dropped when it collapsed.
+  { p: [150.1, 41.00, -234.0], hw: 10, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Ramp, tag: 'BROKEN BRIDGE' },
+  { p: [167.8, 43.60, -255.1], hw: 10, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Ramp },
+  { p: [187.6, 49.20, -274.2], hw: 10, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'COLLAPSED SPAN (lip)' },
+  { p: [194.6, 50.10, -280.4], hw: 10, shL: 0, shR: 0, wallL: 'none', wallR: 'none', flags: TF.Gap | TF.Glider, tag: 'void arc' },
+  { p: [202.6, 42.40, -287.6], hw: 10.5, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Glider, tag: 'far deck' },
+  { p: [226.8, 42.20, -306.8], hw: 10.5, shL: 1.2, shR: 1.2, surface: S.Wood, shoulderSurface: S.Wood, wallL: 'wood', wallR: 'wood', flags: TF.Bridge | TF.Glider },
 
   // ---- V5 the crater rim. 167 deg of banked right at R 67 m along the lip.
   //      No wall on the outside — that side is the crater. 8 m shoulder is
@@ -491,9 +523,9 @@ export const TRACKS: Record<string, TrackDef> = {
     props: [
       // start/finish furniture
       { type: 'startGantry', t: 0.0, lat: 0, up: 0 },
-      { type: 'grandstand', t: 0.005, lat: -22, up: 0, scale: 1.15 },
-      { type: 'grandstand', t: 0.03, lat: -22, up: 0, scale: 1.0 },
-      { type: 'crowdStand', t: 0.018, lat: 20, up: 0 },
+      { type: 'grandstand', t: 0.005, lat: -27, up: 0, scale: 1.15 },
+      { type: 'grandstand', t: 0.03, lat: -27, up: 0, scale: 1.0 },
+      { type: 'crowdStand', t: 0.018, lat: 25, up: 0 },
       { type: 'balloonArch', t: 0.055, lat: 0, up: 9 },
       // beachfront palms + umbrellas along the straight
       { type: 'palm', t: 0.01, lat: -26, step: 0.012, end: 0.12, mirror: false, scale: 1.1 },
@@ -526,13 +558,18 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'seaWall', t: 0.80, lat: 17, step: 0.007, end: 0.885 },
       { type: 'flagPole', t: 0.815, lat: -18, step: 0.012, end: 0.88 },
       { type: 'palm', t: 0.90, lat: -27, step: 0.011, end: 0.99 },
-      { type: 'crowdStand', t: 0.955, lat: 21, step: 0.02, end: 0.995 },
+      { type: 'crowdStand', t: 0.955, lat: 25, step: 0.02, end: 0.995 },
     ],
     boostPads: [
       { t: 0.905, lat: 0, width: 8, length: 16 },
       { t: 0.945, lat: -3.5, width: 6, length: 14 },
       { t: 0.66, lat: 4, width: 6, length: 12 },
-      { t: 0.712, lat: 0, width: 12, length: 18 }, // just before the cove ramp
+      // ON the cove ramp, not past its lip. At t=0.712 (the old value) 13 m of
+      // this 18 m pad hung in mid-air over the water: the strip was drawn at a
+      // road height that does not exist there and no kart ever collected the
+      // boost it needs to clear the jump. The ramp runs d=1104..1145 on a
+      // ~1613 m lap, so the pad has to sit inside t=0.692..0.703.
+      { t: 0.698, lat: 0, width: 12, length: 16 },
     ],
     itemRows: [
       { t: 0.075, count: 5 },
@@ -578,7 +615,7 @@ export const TRACKS: Record<string, TrackDef> = {
     props: [
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'neonSign', t: 0.006, lat: 17, step: 0.01, end: 0.075, mirror: true },
-      { type: 'crowdStand', t: 0.02, lat: -19, step: 0.022, end: 0.07 },
+      { type: 'crowdStand', t: 0.02, lat: -23, step: 0.022, end: 0.07 },
       { type: 'towerBlock', t: 0.01, lat: 46, step: 0.018, end: 0.20, mirror: true, scale: 1.3 },
       { type: 'brakeBoard', t: 0.074, lat: -14 },
       { type: 'tyreStack', t: 0.086, lat: 12.5, step: 0.004, end: 0.105 },
@@ -606,7 +643,7 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'bridgePylon', t: 0.80, lat: 0, up: -12, step: 0.012, end: 0.835 },
       { type: 'monorailPylon', t: 0.885, lat: -15, step: 0.011, end: 0.945 },
       { type: 'trafficLight', t: 0.90, lat: 12 },
-      { type: 'crowdStand', t: 0.965, lat: -19, step: 0.018, end: 0.998 },
+      { type: 'crowdStand', t: 0.965, lat: -23, step: 0.018, end: 0.998 },
     ],
     boostPads: [
       { t: 0.715, lat: -5, width: 7, length: 18 },
@@ -659,7 +696,7 @@ export const TRACKS: Record<string, TrackDef> = {
     nodes: VOLCANO_NODES,
     props: [
       { type: 'startGantry', t: 0.0, lat: 0 },
-      { type: 'crowdStand', t: 0.015, lat: -21, step: 0.02, end: 0.06 },
+      { type: 'crowdStand', t: 0.015, lat: -26, step: 0.02, end: 0.06 },
       { type: 'basaltColumn', t: 0.01, lat: 24, step: 0.01, end: 0.10, mirror: true, scale: 1.2 },
       { type: 'brakeBoard', t: 0.075, lat: -15 },
       // ash rise + switchback
@@ -684,7 +721,7 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'tunnelPortal', t: 0.805, lat: 0 },
       { type: 'tunnelPortal', t: 0.865, lat: 0, yaw: Math.PI },
       { type: 'basaltColumn', t: 0.88, lat: 17, step: 0.01, end: 0.99, mirror: true },
-      { type: 'crowdStand', t: 0.965, lat: -22, step: 0.02, end: 0.998 },
+      { type: 'crowdStand', t: 0.965, lat: -26, step: 0.02, end: 0.998 },
     ],
     boostPads: [
       { t: 0.955, lat: 0, width: 9, length: 16 },
