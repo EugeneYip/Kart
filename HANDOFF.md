@@ -2,6 +2,162 @@
 
 ---
 
+## 🔴 P0d — THIRD HUMAN PLAYTEST + DESIGN DIRECTION (current priority)
+
+Owner's own words, translated into defects and scoped work. **Nothing in this
+section has been started.** Two agents were killed mid-task by a session limit
+immediately after this was filed.
+
+The through-line, again: **too punishing, too cluttered, too hard to read.** When
+in doubt, choose forgiving and legible. This is the third playtest to say so.
+
+### D1 — Obstacles are still too punishing. Owner: `src/items/Hazards.ts`
+
+> *"When two boulders move across the path simultaneously — firstly, the speed is
+> still relatively fast; secondly, if they overlap in the same location, the
+> player keeps getting hit and cannot move."*
+
+A stun-lock. Two hazards occupying the same span re-hit on every recovery, so the
+player is pinned with no input authority. Two acceptable fixes, and the owner
+would take either:
+
+1. **One boulder per span, not two** — and slower again. P0b-3 already cut speeds
+   ~35–50 %; that was not enough.
+2. **A post-hit forgiveness window.** The owner explicitly accepts being immune
+   to *both* obstacles and other players' items during it.
+
+**The machinery for (2) already exists** — `PhysicsWorld.setInvulnerable(kartId,
+seconds)` sets `b.invulnTime`, and `KartState.invulnerable` is already published.
+So this is wiring plus a duration, not new systems. Check every hazard and item
+damage path actually consults it before applying a stun.
+
+> *"I also do not like non-race vehicles suddenly appearing from behind; this type
+> can be removed."*
+
+**Remove the `traffic` hazard kind entirely**, not just slow it. It is authored on
+neon (`{ kind: 'traffic', t: 0.29, lat: 9, span: 30, speed: 8 }`) and is the one
+hazard that arrives from outside the player's field of view, which is why it feels
+unfair rather than hard.
+
+### D2 — The AI field is undifferentiated. Owner: `src/ai/*`
+
+> *"Opponents have too similar abilities and are not randomized, which causes a
+> player to lose many positions at once if overtaken, and it is too difficult to
+> overtake vehicles in front."*
+
+Both halves of that sentence are the same bug: if all twelve karts have near-equal
+pace they travel as one block, so a single mistake costs six places and there is
+no gap to overtake into. Wants per-racer variation in pace and mistake rate, and
+a rubber-band that opens up overtaking lanes rather than closing them.
+`src/ai/AIPersonality.ts` and `src/ai/Rubberband.ts` already exist — find out
+whether the personalities are actually *applied* or whether this is another
+authored-but-never-fires case. Given this project's history, check that first.
+
+### D3 — Item boxes at the start line, STILL reported buried. Owner: `src/items/*`
+
+> *"The item boxes partially embedded in the ground at the starting line still
+> appear unresolved."*
+
+**Treat this as unresolved and measure it directly.** Two prior fixes are NOT
+this:
+- `P0b-2` lifted the `ItemSystem` fallback spawn path to `ITEM_BOX_LIFT`.
+- The buried object found in `2e90c88` was `marshalPost`, a *different* object,
+  and the visual critic since measured `marshalPost gap = 0.00` on every instance
+  of all three circuits.
+
+So this is plausibly a **third** distinct object or path. Measure the real
+`getItemBoxSpawns()` positions against the road surface on all three circuits,
+including the authored `TrackBuilder` path and not just the fallback, and account
+for the box's tumble+bob animation reaching 1.47 m below centre.
+
+### D4 — Rain courses are unreadable. Owner: `src/world/Weather.ts`, `src/world/Lighting.ts`
+
+> *"The scene on rainy courses is difficult to view; it is overall too dark, and
+> simulating a wet screen also makes it inconvenient to see."*
+
+**Independently corroborated by the visual critic**, which flagged it unprompted:
+*"50+ large soft grey circles across the whole frame plus grey spiral artifacts
+near the bottom edge. It reads as a dirty lens, not weather."* So the droplet
+overlay is both too heavy and visually wrong.
+
+Note this interacts with the mood fix in `f350e37`: until that commit every
+circuit rendered under flat noon `'day'` light, so neon has only just started
+rendering at its authored `'night'` preset — **it may now be darker than when the
+owner played it.** Re-judge brightness after that change, not before.
+
+> *"Decorative buildings also need to be carefully designed to avoid obstructing
+> the track."*
+
+Distinct from the road-volume guard (which handles props *inside* tunnels and
+bridges). This is about props that clear the corridor geometrically but still
+block sightlines through a corner. Needs a camera-relative test, not a lateral one.
+
+### D5 — Item set: cut the duplication. Owner: `src/items/*`
+
+Deliberate content reduction, *"to facilitate smoother production"*. Collapse
+every tiered item to a single tier and re-skin:
+
+| Current | Becomes | Visual | Ability |
+|---|---|---|---|
+| Red Shell ×1/×3 | **single only** | **Rocket** | homes on the kart ahead |
+| Banana ×1/×3 | **single only** | **Plastic Bottle** | small obstacle |
+| Mushroom ×1/×3 | **single only** | **Battery** | speed boost |
+| Boo | retained | **Ninja** | steals an item from another racer |
+| Star | retained | — | **now ignores ALL item attacks and obstacles** |
+| Ink | **REMOVED** | — | — |
+| Lightning | **REMOVED** | — | — |
+
+Star's new behaviour is a genuine gameplay change, not a re-skin: it must grant
+immunity to hazards as well as items, which is the same immunity path D1 needs —
+**do D1 and Star together.**
+
+Removing Ink also removes the reason for the `squid`/ink VFX and audio; removing
+Lightning removes the `shock` stun kind's only source. Check `ItemRoulette`
+weights still sum sanely with four items instead of seven, and that `AIDriver`
+does not reference a removed `ItemType`.
+
+### D6 — The leaderboard clips off the top of the screen. Owner: `src/ui/*`
+
+> *"When the rankings are lower, the leaderboard is displayed incompletely, with
+> the top portion off the screen."*
+
+Reproduce at 11th/12th specifically — `P0-4` established that this HUD's bugs
+show at the *bottom* of the field, and the fix then was to test `11TH`/`12TH`
+rather than `1ST`. Likely the rival tracker growing upward from a bottom-anchored
+origin without clamping to the viewport.
+
+Related but separate, from the visual critic: menu supporting copy measures
+**4.17–5.42 px** at the pane's 1:1 800×450 viewport, because `uiScale()` has a
+0.34 floor making `--u = 0.4167px`. `.ak-stats__sub` is now *less* legible than
+before its rule was added. Wants a `max(11px, …)` floor on the text classes.
+
+### D7 — An item-free race mode
+
+> *"The gameplay mode could perhaps be set to a version without items."*
+
+`RaceDirector` already carries a `raceMode`; check whether a no-items value
+already exists before adding one. Needs a menu entry and must suppress item
+boxes, the roulette and AI item use — not merely hide the HUD slot.
+
+### D8 — Loading screen, redesigned around the two characters
+
+Owner supplied reference art for Foxy (fox: mustard beret, round glasses, blue
+knit sweater, bushy cream-tipped tail) and Capy (capybara: rust bucket hat,
+blue-grey scarf, heavy rounded silhouette) and wants the boot screen built around
+them. **Rule 3 still applies — no image files.** Draw it procedurally, or render
+the existing 3-D drivers to a canvas.
+
+### D9 — Real portraits for Foxy and Capy on racer select. Owner: `src/karts/*`
+
+Owner wants the select-screen portraits to match the reference art. This is
+already a known hard defect: **`KartManager.renderPortrait(id)` does not exist**,
+so `MenuSystem` falls through to `characterPortrait()` and the critic confirmed
+**all ten portraits are the same grey visor ellipse** with only the tint and a
+corner letter differing. Implementing `renderPortrait` fixes the whole roster,
+not just the two animals, and is the single highest-value UI change available.
+
+---
+
 ## 🔴 P0c — THE PHYSICS BATTERY IS NOT GREEN (9 failing assertions)
 
 `node src/dev/node-run.mjs src/dev/physics-run.ts` → **34 passed / 8 failed**.
