@@ -147,28 +147,36 @@ export interface GradePreset {
  *    frame to black. 1.10 is the most it can take on this scene.
  *  - `pivot 0.42` biases the S-curve towards deepening shadows rather than
  *    blowing highlights, since the sky is already the brightest thing in frame.
- *  - `exposure` is the ONE knob to retrim if world lighting changes, and it has
- *    already needed it once. After Lighting cut `environmentIntensity` to 0.40,
- *    thinned fog 2.5x, widened key:fill to 6.5:1 and luminance-compressed the
- *    sky, the *same* grade at exposure 1.3 measured:
+ *  - `exposure` is the ONE knob to retrim when world lighting changes, and it
+ *    has needed it twice. On this scene *lower* exposure buys both saturation
+ *    and contrast, because less of the image lands in the AgX shoulder where the
+ *    operator desaturates — so it is not simply a brightness control.
  *
- *      exposure  meanLuma  meanSat  stdLuma      p1    p50
- *        1.0       0.515    0.402    0.168    0.128  0.489
- *        1.3       0.571    0.353    0.166    0.165  0.550   <- too bright
- *        1.6       0.614    0.316    0.162    0.197  0.599
- *        2.6       0.709    0.237    0.147    0.284  0.702
+ *    Each preset is calibrated against its OWN sky/lighting preset (measuring
+ *    the `night` grade under a daylight sky tells you nothing). `chase-straight`,
+ *    camera locked, after Lighting settled:
  *
- *    Monotonic in every column: on this scene, *lower* exposure buys both
- *    saturation and contrast, because less of the image sits in the AgX shoulder
- *    where the operator desaturates. A black floor of p1 = 0.165 is the milky
- *    signature returning, so exposure came down to 0.85 and the toe went up.
- *    Retrim with `RenderPipeline.setExposure()` / `__POST__.exposure()`, and use
- *    `__POST__.autoExposure()` to re-measure the ladder.
+ *      preset  exposure  meanLuma  meanSat  stdLuma     p1    p95  crushed
+ *      day       0.70       ~0.44     0.58     0.13   0.16   0.65    0.2 %
+ *      sunset    1.70       ~0.40     0.57     0.20   0.11   0.70    0.0 %
+ *      night     3.10       ~0.28     0.76     0.13   0.06   0.58    0.4 %
+ *      storm     1.45        0.345    0.383    0.152  0.100  0.571   0.0 %
+ *
+ *    `night` was the bad one: at its old exposure it measured meanLuma 0.043
+ *    with 17.7 % of the frame crushed to pure black, because a 1.24 shadow toe
+ *    on an already-black frame is the wrong tool. Its toe is now 1.06 and
+ *    exposure carries the load.
+ *
+ *    Caveat worth keeping: `p1` is strongly framing-dependent (this framing is
+ *    an open, fully-lit straight with no deep shadow in it), so read meanLuma,
+ *    meanSat and stdLuma first and treat p1 as a crush alarm rather than a
+ *    target. Retrim with `RenderPipeline.setExposure()`; re-measure with
+ *    `__POST__.autoCalibrate()`.
  */
 export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
   // Bright, punchy, Nintendo-saturated. Warm sun, cool sky bounce in shadow.
   day: {
-    exposure: 0.85,
+    exposure: 0.7,
     lookSlope: 1.0,
     lookOffset: 0.0,
     lookPower: 1.2,
@@ -193,7 +201,7 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
   },
   // Golden hour: heavy orange highlights, violet shadows, lifted blacks.
   sunset: {
-    exposure: 0.88,
+    exposure: 1.7,
     lookSlope: 1.0,
     lookOffset: 0.0,
     lookPower: 1.16,
@@ -218,18 +226,18 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
   },
   // Night: mesopic desaturation, deep blue shadows, neon-friendly highlights.
   night: {
-    exposure: 0.75,
+    exposure: 3.1,
     lookSlope: 1.0,
     lookOffset: 0.0,
-    lookPower: 1.24,
+    lookPower: 1.06,
     lookSat: 1.32,
     blackPoint: 0.008,
     whitePoint: 1.0,
     lift: [0.0, 0.004, 0.016],
     gamma: [1.03, 1.015, 0.985],
     gain: [0.95, 0.975, 1.05],
-    contrast: 1.16,
-    pivot: 0.38,
+    contrast: 1.08,
+    pivot: 0.42,
     saturation: 1.0,
     vibrance: 0.16,
     shadowTint: [0.74, 0.85, 1.24],
@@ -243,10 +251,10 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
   },
   // Storm: silvery, low saturation, hard contrast, cool-green shadows.
   storm: {
-    exposure: 0.78,
+    exposure: 1.45,
     lookSlope: 1.0,
     lookOffset: 0.0,
-    lookPower: 1.2,
+    lookPower: 1.1,
     lookSat: 1.18,
     blackPoint: 0.014,
     whitePoint: 0.99,

@@ -8,15 +8,18 @@
  *
  *  Pass order (each line is one full-screen pass unless noted):
  *
- *    1  RenderPass                 scene -> HDR half-float buffer
- *    2  NormalPass                 view normals for SSAO            (not a swap)
- *    3  DepthDownsamplingPass      half-res normal+depth for SSAO   (not a swap)
- *    4  SSAO                       multiply, depth-aware upsampled
- *    5  Depth of field             boost only; inert (and skipped) below ~25 %
- *    6  Motion blur                depth reprojection + radial speed streak
- *    7  Bloom -> Look -> Vignette  (merged: one pass, three effects)
- *    8  Chromatic aberration       auto-disabled when the offset is ~0
- *    9  SMAA                       always last, always enabled
+ *    1  RenderPass                 scene -> HDR half-float buffer     14.2 ms
+ *    2  NormalPass                 half-res view normals for SSAO      4.6 ms
+ *    3  SSAO                       multiply, half-res                 3.1 ms
+ *    4  Depth of field             boost only; skipped below ~25 %     0
+ *    5  Motion blur                skipped when the camera is still    0
+ *    6  Bloom -> Look -> Vignette  (merged: one pass, three effects)   3.6 ms
+ *    7  Chromatic aberration       auto-disabled when the offset is ~0 0
+ *    8  SMAA                       always last, always enabled         5.4 ms
+ *
+ *  Milliseconds are medians measured with EXT_disjoint_timer_query_webgl2 at
+ *  1600x900 on the ultra tier — see `PostQA.gpuCost()`. Post-only total ~17 ms
+ *  after removing DepthDownsamplingPass (was ~22 ms).
  *
  *  Exactly TWO full-scene renders originate here: RenderPass and, when SSAO is
  *  on, NormalPass. Everything else is a full-screen quad. Nothing in the chain
@@ -41,7 +44,6 @@ import {
   BlendFunction,
   BloomEffect,
   ChromaticAberrationEffect,
-  DepthDownsamplingPass,
   DepthOfFieldEffect,
   EffectComposer,
   EffectPass,
@@ -103,7 +105,6 @@ export class RenderPipeline implements ISubsystem {
   // --- passes ---
   private renderPass!: RenderPass;
   private normalPass: NormalPass | null = null;
-  private depthDownPass: DepthDownsamplingPass | null = null;
   private ssaoPass: EffectPass | null = null;
   private dofPass: EffectPass | null = null;
   private motionPass: EffectPass | null = null;
@@ -212,20 +213,23 @@ export class RenderPipeline implements ISubsystem {
       this.normalPass = new NormalPass(scene, camera, { resolutionScale: 0.5 });
       composer.addPass(this.normalPass);
 
-      let normalDepthBuffer: THREE.Texture | undefined;
-      if (q.tier === 'high' || q.tier === 'ultra') {
-        try {
-          this.depthDownPass = new DepthDownsamplingPass({
-            normalBuffer: this.normalPass.texture,
-            resolutionScale: 0.5,
-          });
-          composer.addPass(this.depthDownPass);
-          normalDepthBuffer = this.depthDownPass.texture;
-        } catch (err) {
-          console.warn('[RenderPipeline] depth downsampling unavailable, SSAO falls back', err);
-          this.depthDownPass = null;
-        }
-      }
+      // DepthDownsamplingPass used to run here on high/ultra to feed SSAO's
+      // depth-aware upsampling. Removed after measuring it with
+      // EXT_disjoint_timer_query_webgl2 on a 1600x900 ultra frame:
+      //
+      //   RenderPass (whole scene)      14.22 ms
+      //   NormalPass                     4.58 ms
+      //   DepthDownsamplingPass          5.04 ms   <- this
+      //   SSAO resolve                   3.13 ms
+      //   Bloom+Grade+Vignette           3.57 ms
+      //   SMAA                           5.36 ms
+      //
+      // 5 ms — 15 % of a 33 ms frame, and a third of the whole SSAO group — to
+      // sharpen the edges of a half-resolution ambient occlusion term that is
+      // deliberately subtle. It bought less than it cost. SSAO now upsamples
+      // bilinearly, which softens AO silhouettes very slightly; re-enable this
+      // pass if AO edge quality ever becomes the complaint.
+      const normalDepthBuffer: THREE.Texture | undefined = undefined;
 
       // Tuned against dark haloing: world-space thresholds fade the effect out
       // over distance and reject samples that belong to a different surface, so
@@ -361,8 +365,11 @@ export class RenderPipeline implements ISubsystem {
     // 9 ----------------------------------------------------------------- SMAA
     // Always the terminal pass — postprocessing only flags the array's last
     // entry as renderToScreen, so this one must never be disabled.
+    // SMAA measured 5.36 ms/frame — the second most expensive thing in the
+    // chain after the scene itself. HIGH is reserved for ultra; MEDIUM is
+    // visually very close on a moving image and meaningfully cheaper.
     this.smaa = new SMAAEffect({
-      preset: q.tier === 'low' ? SMAAPreset.MEDIUM : SMAAPreset.HIGH,
+      preset: q.tier === 'ultra' ? SMAAPreset.HIGH : SMAAPreset.MEDIUM,
     });
     this.smaaPass = new EffectPass(camera, this.smaa);
     composer.addPass(this.smaaPass);
@@ -382,14 +389,13 @@ export class RenderPipeline implements ISubsystem {
     this.smaa?.dispose();
 
     for (const p of [
-      this.renderPass, this.normalPass, this.depthDownPass, this.ssaoPass,
+      this.renderPass, this.normalPass, this.ssaoPass,
       this.dofPass, this.motionPass, this.lookPass, this.caPass, this.smaaPass,
     ]) {
       p?.dispose();
     }
 
     this.normalPass = null;
-    this.depthDownPass = null;
     this.ssaoPass = null;
     this.dofPass = null;
     this.motionPass = null;

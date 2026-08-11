@@ -536,8 +536,13 @@ export function buildTrack(
   // ---- helper: ambient occlusion + dirt for a lateral position ------------
   const shadeRoad = (st: Station, lat: number, out: THREE.Color): void => {
     const u = Math.abs(lat) / Math.max(1e-3, st.hw);
-    // dirt washed toward the edges
-    const dirt = Math.pow(clamp01((u - 0.62) / 0.38), 1.7) * 0.5;
+    // Dirt washed toward the edges. `verge` is a *multiplier* on the asphalt
+    // albedo, so this must read as the road getting darker and dustier at the
+    // edge — never as a sand colour being painted onto the drivable ribbon.
+    // Keep the reach short (outer quarter only) and the amplitude low: over a
+    // 22 m road, 0.38 of the half width is 4 m of tinted asphalt per side,
+    // which at speed reads as the whole road having changed colour.
+    const dirt = Math.pow(clamp01((u - 0.74) / 0.26), 2) * 0.3;
     // contact occlusion where the road meets the kerb
     const ao = 1 - Math.pow(clamp01((u - 0.78) / 0.22), 2.2) * 0.28 * def.road.ao;
     out.setRGB(

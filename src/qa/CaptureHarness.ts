@@ -25,6 +25,9 @@ export interface Shot {
 
 const v = new THREE.Vector3();
 const v2 = new THREE.Vector3();
+const fwd = new THREE.Vector3();
+const rgt = new THREE.Vector3();
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
 export class CaptureHarness {
   private game: Game;
@@ -81,11 +84,88 @@ export class CaptureHarness {
     this.lookAt(v, v2, opts.fov ?? 58);
   }
 
-  /** Advance the simulation by `seconds` without waiting in real time. */
+  /**
+   * Place the camera relative to the PLAYER KART's own frame.
+   *
+   * This is what the shot list must use. Positioning off a track `t` value is
+   * how the original harness shipped, and it silently framed empty tarmac:
+   * the kart is wherever the race has carried it, which is almost never the
+   * hard-coded `t`. An earlier review found 5 of 8 framings contained no kart
+   * at all. Offsets here are in the kart's basis — back/up/right — so the
+   * subject is in frame by construction.
+   */
+  kartRelative(
+    opts: { back?: number; up?: number; right?: number; lookUp?: number; lookAhead?: number; fov?: number; kartId?: number } = {},
+  ): boolean {
+    const kart = this.game.karts?.karts?.[opts.kartId ?? 0];
+    if (!kart) return false;
+
+    const back = opts.back ?? 7.0;
+    const up = opts.up ?? 2.5;
+    const right = opts.right ?? 0;
+
+    // Kart basis. -Z is forward in local space (see AGENTS.md conventions).
+    fwd.set(0, 0, -1).applyQuaternion(kart.quaternion);
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+    fwd.y *= 0.35; // flatten so the camera doesn't dive on slopes
+    fwd.normalize();
+    rgt.crossVectors(UP_AXIS, fwd).normalize();
+
+    v.copy(kart.position)
+      .addScaledVector(fwd, -back)
+      .addScaledVector(UP_AXIS, up)
+      .addScaledVector(rgt, right);
+
+    // Never below ground.
+    const minY = kart.position.y + 0.5;
+    if (v.y < minY) v.y = minY;
+
+    v2.copy(kart.position)
+      .addScaledVector(fwd, opts.lookAhead ?? 6)
+      .addScaledVector(UP_AXIS, opts.lookUp ?? 0.6);
+
+    this.lookAt(v, v2, opts.fov ?? 60);
+    return true;
+  }
+
+  /**
+   * Is the subject actually inside the frame? Projects the kart's centre into
+   * NDC and reports coverage, so a shot can fail loudly instead of yielding a
+   * beautiful photograph of an empty road.
+   */
+  subjectInFrame(kartId = 0): { inFrame: boolean; ndc: [number, number]; behind: boolean; distance: number } {
+    const kart = this.game.karts?.karts?.[kartId];
+    const cam = this.game.engine.camera;
+    if (!kart) return { inFrame: false, ndc: [NaN, NaN], behind: true, distance: NaN };
+
+    cam.updateMatrixWorld();
+    v.copy(kart.position);
+    v.y += 0.5;
+    const dist = v.distanceTo(cam.position);
+    v.project(cam);
+    const behind = v.z > 1;
+    const inFrame = !behind && Math.abs(v.x) <= 0.95 && Math.abs(v.y) <= 0.95;
+    return { inFrame, ndc: [+v.x.toFixed(3), +v.y.toFixed(3)], behind, distance: +dist.toFixed(2) };
+  }
+
+  /**
+   * Advance the simulation by `seconds`.
+   *
+   * Races a rAF loop against a wall-clock fallback: rAF is throttled to a few
+   * Hz in a hidden tab and can stop entirely when the pane isn't compositing,
+   * which would otherwise hang a capture run indefinitely.
+   */
   async settle(seconds: number): Promise<void> {
     const frames = Math.max(1, Math.round(seconds * 60));
+    const deadline = performance.now() + Math.max(1000, seconds * 1000 * 3);
     for (let i = 0; i < frames; i++) {
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (performance.now() > deadline) break;
+      await new Promise<void>((r) => {
+        let done = false;
+        const finish = () => { if (!done) { done = true; r(); } };
+        requestAnimationFrame(finish);
+        setTimeout(finish, 60);
+      });
     }
   }
 
@@ -134,20 +214,32 @@ export class CaptureHarness {
  * against Mario Kart 8 Deluxe reference. Chosen to cover the framings a player
  * actually spends their time looking at.
  */
+/**
+ * The canonical shot list — the review contract.
+ *
+ * Every gameplay framing is positioned in the PLAYER KART's basis, so the
+ * subject cannot fall out of frame as the race progresses. `shot()` verifies
+ * this and reports `subject.inFrame`; treat a false there as a failed capture,
+ * not as a judgement about the game.
+ */
 export const SHOTS: Shot[] = [
   {
     name: 'chase-straight',
-    description: 'Default gameplay framing on a straight at speed — the single most-seen frame in the game.',
-    settle: 1.0,
-    apply: (g, h) => { h.releaseCameraControl(); h.onTrack(0.08, { back: 7.5, up: 2.6, lookAhead: 30 }); },
+    description: 'Default gameplay framing at speed — the single most-seen frame in the game.',
+    settle: 0.8,
+    apply: (g, h) => { h.takeCameraControl(); h.kartRelative({ back: 7.5, up: 2.6, lookAhead: 14, fov: 62 }); },
   },
   {
     name: 'chase-corner-drift',
-    description: 'Mid-drift through a corner with sparks at full charge.',
+    description: 'Mid-drift at full purple charge — judges drift sparks, body lean, camera drift-lead.',
     settle: 0.6,
     apply: (g, h) => {
-      h.forceState(0, { drifting: true, driftStage: 3, driftDirection: 1, driftCharge: 0.9, speed: 24 });
-      h.onTrack(0.22, { back: 8, up: 3.0, side: -3, lookAhead: 20 });
+      h.forceState(0, {
+        drifting: true, driftStage: 4, driftDirection: 1, driftCharge: 0.95,
+        speed: 24, speedRatio: 0.85,
+      });
+      h.takeCameraControl();
+      h.kartRelative({ back: 8, up: 2.8, right: -3.2, lookAhead: 10, fov: 62 });
     },
   },
   {
@@ -156,44 +248,59 @@ export const SHOTS: Shot[] = [
     settle: 0.4,
     apply: (g, h) => {
       h.forceState(0, { boostTime: 2, boostStrength: 1.4, speed: 38, speedRatio: 1.3 });
-      h.onTrack(0.35, { back: 6.5, up: 2.3, lookAhead: 40 });
+      h.takeCameraControl();
+      h.kartRelative({ back: 6.5, up: 2.3, lookAhead: 16, fov: 74 });
     },
   },
   {
     name: 'kart-hero',
-    description: 'Close 3/4 hero shot of the player kart — judges model, materials, clearcoat.',
+    description: 'Close 3/4 hero shot — judges model, chamfers, clearcoat, driver, tyres.',
     settle: 0.3,
     apply: (g, h) => {
       h.takeCameraControl();
-      const p = g.karts?.player;
-      if (!p) return;
-      v.copy(p.position).add(new THREE.Vector3(3.2, 1.5, 3.4));
-      h.lookAt(v, { x: p.position.x, y: p.position.y + 0.55, z: p.position.z }, 42);
+      // Kart-relative, NOT a world-axis offset: a fixed world offset swings
+      // around to the wrong side of the kart as it drives round the circuit.
+      h.kartRelative({ back: -3.0, up: 1.35, right: 3.2, lookAhead: 0, lookUp: 0.55, fov: 40 });
     },
   },
   {
     name: 'grid-wide',
-    description: 'Wide establishing shot of the start grid — judges environment, crowd, lighting.',
+    description: 'Wide establishing shot over the start line — judges environment, crowd, lighting.',
     settle: 0.5,
-    apply: (g, h) => { h.takeCameraControl(); h.onTrack(0.985, { back: -26, up: 13, lookAhead: 60, fov: 48 }); },
+    apply: (g, h) => {
+      h.takeCameraControl();
+      // High and behind, looking down the track. The old version used a
+      // negative `back` off the spline and ended up inside the pit wall.
+      h.kartRelative({ back: 30, up: 15, lookAhead: 40, lookUp: -2, fov: 50 });
+    },
   },
   {
     name: 'pack-battle',
-    description: 'Mid-pack with several karts in frame — judges the sense of a race.',
+    description: 'Several karts in frame — judges the sense of an actual race.',
     settle: 0.8,
-    apply: (g, h) => { h.releaseCameraControl(); h.onTrack(0.5, { back: 11, up: 4.2, lookAhead: 26 }); },
+    apply: (g, h) => { h.takeCameraControl(); h.kartRelative({ back: 13, up: 4.4, right: 4, lookAhead: 18, fov: 58 }); },
   },
   {
     name: 'scenery-vista',
-    description: 'The track\'s best view — judges sky, terrain, foliage, water, draw distance.',
+    description: 'Elevated view — judges sky, clouds, terrain, foliage, water, draw distance.',
     settle: 0.5,
-    apply: (g, h) => { h.takeCameraControl(); h.onTrack(0.62, { back: 4, up: 24, side: 40, lookAhead: 10, fov: 55 }); },
+    apply: (g, h) => { h.takeCameraControl(); h.kartRelative({ back: 46, up: 30, right: 34, lookAhead: 30, lookUp: -6, fov: 56 }); },
   },
   {
     name: 'hud-full',
     description: 'Gameplay frame with the complete HUD — judges UI quality and readability.',
     settle: 0.5,
-    apply: (g, h) => { h.setHudVisible(true); h.releaseCameraControl(); h.onTrack(0.15, { back: 7.5, up: 2.6, lookAhead: 30 }); },
+    apply: (g, h) => {
+      h.setHudVisible(true);
+      h.takeCameraControl();
+      h.kartRelative({ back: 7.5, up: 2.6, lookAhead: 14, fov: 62 });
+    },
+  },
+  {
+    name: 'driver-eye',
+    description: 'Low 1.2 m eye-height view down the road — the harshest test of surface detail.',
+    settle: 0.5,
+    apply: (g, h) => { h.takeCameraControl(); h.kartRelative({ back: 3.5, up: 1.2, lookAhead: 30, lookUp: 0.4, fov: 66 }); },
   },
 ];
 
@@ -204,13 +311,46 @@ export function installCaptureHarness(game: Game): void {
     harness,
     shots: SHOTS.map((s) => ({ name: s.name, description: s.description })),
 
-    /** Set up a named shot and settle. Returns stats once the frame is stable. */
+    /**
+     * Set up a named shot, settle, and VERIFY the subject is in frame.
+     *
+     * Check `subject.inFrame` before you judge the image. If it is false the
+     * capture failed and the picture tells you nothing about the game.
+     */
     async shot(name: string) {
       const s = SHOTS.find((x) => x.name === name);
       if (!s) throw new Error(`Unknown shot "${name}". Available: ${SHOTS.map((x) => x.name).join(', ')}`);
       await s.apply(game, harness);
       await harness.settle(s.settle ?? 0.5);
-      return harness.stats();
+      // Re-apply after settling: the chase camera or race sim may have moved
+      // things while we waited.
+      await s.apply(game, harness);
+      await harness.settle(0.1);
+
+      const subject = harness.subjectInFrame(0);
+      if (!subject.inFrame) {
+        console.warn(
+          `[QA] shot "${name}": SUBJECT NOT IN FRAME (ndc=${subject.ndc}, behind=${subject.behind}, ` +
+          `dist=${subject.distance}). The capture is invalid — do not judge the game from it.`,
+        );
+      }
+      return { shot: name, subject, ...harness.stats() };
+    },
+
+    /** Capture-validate every shot at once. Use this before a review run. */
+    async validateShots() {
+      const out: Array<Record<string, unknown>> = [];
+      for (const s of SHOTS) {
+        try {
+          const r = await (this as unknown as { shot(n: string): Promise<Record<string, unknown>> }).shot(s.name);
+          out.push({ name: s.name, inFrame: (r.subject as { inFrame: boolean }).inFrame, ndc: (r.subject as { ndc: number[] }).ndc });
+        } catch (err) {
+          out.push({ name: s.name, error: String(err) });
+        }
+      }
+      const bad = out.filter((o) => o.inFrame === false || o.error);
+      console.info(`[QA] validateShots: ${out.length - bad.length}/${out.length} framings contain the subject.`);
+      return { ok: bad.length === 0, results: out, failures: bad };
     },
 
     stats: () => harness.stats(),

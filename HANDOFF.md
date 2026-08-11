@@ -1,5 +1,50 @@
 # APEX KART — open items handoff
 
+---
+
+## ⚠️ 0. READ FIRST — every closed primitive in `Props.ts` was inside-out
+
+`Builder.box`, `prism`, `tube`, `sphere` and `torus` all emitted
+clockwise-from-outside triangles **with matching inward normals**. Against
+`FrontSide` materials every near face was back-face culled, so what actually
+rendered was the far interior wall. Proof by signed volume: `crate` **−1.654**,
+`pillar` **−17.1**, `arch` **−53.6**, at 100 % normal/winding agreement.
+All five now measure positive volume. `quad`/`plate`/`banner` were already
+correct.
+
+**This single bug plausibly explains several defects previously filed as
+unrelated art problems** — the grandstand reading as "a plain white box" despite
+already emitting nine tiers, the **black-void house roofs**, the **untextured
+flat-blue sponsor boards**, and the "grey untextured wedge". Every prop in the
+file is affected: gantry, floodlights, buildings, palms, rocks, boats, tyre
+stacks.
+
+**Consequences for everyone:**
+1. **Re-verify the whole prop set visually before fixing any individual prop.**
+   Several open items below may already be resolved. Do not "fix" a prop that is
+   now correct.
+2. Any other hand-built geometry in the project deserves the same check. It is a
+   ~10-line test: sum the signed volume of the triangle fan and confirm it is
+   positive, and confirm face normals agree with winding.
+
+## ⚠️ 0b. PENDING ONE SCREENSHOT — the `v` axis in `plate()`/`banner()`
+
+`banner()` has **no `u` inversion** (it already carries the corrected mapping).
+But **both `plate()` and `banner()` invert `v`**: they send the geometry's top
+edge to the rect's *first* `v`, while `canvasTexture()` leaves three's default
+`flipY = true`, so `v = 1` is the canvas top. Net effect: atlas text is **upside
+down**.
+
+The shared helpers were deliberately **left unchanged** pending one observation.
+New signage routes through a documented `atlasRect(cell)` that orders `v`
+top-first, so it is upright by construction. **The test:** if the grandstand's
+sponsor band reads upright while the trackside boards read upside down, then flip
+the `v` range in `plate()`/`banner()` and set `V_TOP_FIRST = false`.
+
+Resolve this with a single screenshot before anyone touches the helpers.
+
+---
+
 Written by the integrator. Each item names the file owner. Agents: read the
 section for **your** files, then delete that section when it's done.
 
@@ -33,14 +78,18 @@ trackside boards then read **"TORQUE" / "AXP" / "EMBER"** correctly.
 **Still to check — same class of bug is likely present in:**
 - `PropBuilder.banner()` — `Prop:gantryBanner` uses it and shares the atlas.
 - Any other `quad()` caller that draws atlas text.
-- **`src/track/Decals.ts`** — the road "FINISH" marking was mirrored too. That's
-  a separate file with separate code, so it needs its own check. Note the road
-  decal is projected in track space (U across width, V along arc length), so the
-  reasoning differs from `plate()` — work it out from first principles rather
-  than copying the swap above.
+- **`src/track/Decals.ts` — PROBABLY NOT A BUG. Verify before changing anything.**
+  Independently confirmed since: the road "FINISH" marking **reads correctly from
+  the driving direction** in a chase-camera screenshot. It reads reversed only
+  from the intro fly-over and from the `grid-wide` canonical shot — and
+  `grid-wide` deliberately frames the start line from the far end (`back: -26`),
+  i.e. looking back up the track against the racing direction. Painted road text
+  is directional by nature; reading it reversed from the wrong end is correct.
+  The original report was made from the fly-over frame, which was the wrong frame
+  to judge it from. Only fix what is reversed as a *driver* sees it.
 
-Verify with a screenshot in which trackside boards AND the road marking both
-read left-to-right.
+Verify with a chase-camera screenshot, in the racing direction, in which
+trackside boards AND the road markings both read left-to-right.
 
 ---
 
@@ -80,7 +129,7 @@ kart being off-track.
 
 ---
 
-## 4. Crowd figures are too blocky
+## 4. ~~Crowd figures are too blocky~~ — DONE
 
 **Owner: `src/world/Crowd.ts` (world agent)**
 
@@ -91,7 +140,7 @@ for a slightly better silhouette — chamfer the forms and vary the poses.
 
 ---
 
-## 5. Grandstand / architecture lacks detail
+## 5. ~~Grandstand / architecture lacks detail~~ — DONE
 
 **Owner: `src/world/Props.ts` (world agent)**
 

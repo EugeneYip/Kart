@@ -138,20 +138,25 @@ function paintAtlas(size: number): THREE.CanvasTexture {
     }
 
     // --- 2 / 3: warning chevrons -----------------------------------------
+    // The quads these land on map canvas -y to "further down the track", so the
+    // arrowhead must always point toward the canvas top. The two hands differ
+    // only in which way they lean laterally — mirroring the apex vertically
+    // instead (as this used to) makes the right-hand cell point back at the
+    // driver.
     for (const [idx, dir] of [[CELL.chevronL, -1], [CELL.chevronR, 1]] as const) {
       const s = at(idx);
       for (let i = 0; i < 3; i++) {
-        const y = s * (0.16 + i * 0.3);
+        const y = s * (0.22 + i * 0.3);
         ctx.fillStyle = i === 1 ? '#ffd23c' : '#f4f2ec';
         ctx.beginPath();
         const w = s * 0.42;
-        const cx = s * 0.5 - dir * s * 0.05;
+        const cx = s * 0.5 - dir * s * 0.08;
         ctx.moveTo(cx - w, y);
-        ctx.lineTo(cx, y + s * 0.14 * dir);
+        ctx.lineTo(cx, y - s * 0.14);
         ctx.lineTo(cx + w, y);
-        ctx.lineTo(cx + w, y + s * 0.09);
-        ctx.lineTo(cx, y + s * 0.23 * dir);
-        ctx.lineTo(cx - w, y + s * 0.09);
+        ctx.lineTo(cx + w, y - s * 0.05);
+        ctx.lineTo(cx, y - s * 0.19);
+        ctx.lineTo(cx - w, y - s * 0.05);
         ctx.closePath();
         ctx.fill();
       }
@@ -386,6 +391,30 @@ function paintStains(
 
   return TX.canvasTexture(w, h, (ctx) => {
     ctx.clearRect(0, 0, w, h);
+
+    // ---- THE V AXIS -------------------------------------------------------
+    // This layer is sampled by the road shader through UV1, whose v is
+    // arcLength / lapLength and therefore grows *forward* along the lap.
+    // `canvasTexture` leaves `flipY = true` (three's default), which means
+    // texture v = 1 is the canvas' TOP row — so writing lap distance d at
+    // canvas y = (d / L) * h puts it at texture v = 1 - d / L, i.e. every
+    // feature lands at the mirror-image lap position: braking marks on corner
+    // exits, apex rubber on the entries.
+    //
+    // Measured on the live 512x4096 strip before this flip existed: the row
+    // whose alpha peaks sat at canvas y/h = 0.363, where the authored
+    // curvature is 0.0181 (the hairpin) but the shader was fetching lap
+    // position 0.637, curvature 0.0009 — a straight.
+    //
+    // The crisp quads below already carry the equivalent correction in their
+    // uv range (`v0 = 1 - (cellY + cw)`), which is why the painted markings
+    // read correctly and only this layer was inverted. Rather than negate ~40
+    // individual y coordinates, flip the whole drawing space once: everything
+    // below can keep thinking in "+y is further along the lap".
+    ctx.save();
+    ctx.translate(0, h);
+    ctx.scale(1, -1);
+
     const vOf = (d: number) => (d / L) * h;
     const uOf = (lat: number, hw: number) => (0.5 + lat / (hw * 2)) * w;
 
@@ -492,13 +521,17 @@ function paintStains(
     }
 
     // --- dirt washed in from the verges ------------------------------------
+    // Deliberately dark and barely chromatic: this is grit *on* asphalt, and
+    // anything warm here compounds with the sunset key into a gold ribbon.
     for (const side of [0, 1]) {
-      const g = ctx.createLinearGradient(side === 0 ? 0 : w, 0, side === 0 ? w * 0.16 : w * 0.84, 0);
-      g.addColorStop(0, 'rgba(96,82,58,0.34)');
-      g.addColorStop(1, 'rgba(96,82,58,0)');
+      const g = ctx.createLinearGradient(side === 0 ? 0 : w, 0, side === 0 ? w * 0.12 : w * 0.88, 0);
+      g.addColorStop(0, 'rgba(58,53,45,0.4)');
+      g.addColorStop(1, 'rgba(58,53,45,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(side === 0 ? 0 : w * 0.84, 0, w * 0.16, h);
+      ctx.fillRect(side === 0 ? 0 : w * 0.88, 0, w * 0.12, h);
     }
+
+    ctx.restore();
   }, { srgb: true, repeat: 1 });
 }
 

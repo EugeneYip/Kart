@@ -104,6 +104,24 @@ npx tsc --noEmit          # must be clean for YOUR files
 Note: `npx tsc --noEmit` reports errors across the whole project, including
 other agents' in-progress files. **Only fix errors in files you own.**
 
+### ⚠️ THE BROWSER PANE IS A SINGLE SHARED RESOURCE
+
+There is **one** Browser pane for the whole session, shared by every agent. If
+two agents drive it at once they fight over tabs — one navigates away, the other
+finds the game tab gone, and both stall waiting on a pane that no longer shows
+what they expect. This has already deadlocked four agents simultaneously.
+
+Rules:
+- **Only one agent does visual verification at a time.** The integrator
+  serialises this. If you were dispatched alongside other agents, assume you may
+  NOT have the pane unless your task says you have exclusive access.
+- If you need reference images, open them in a **new tab** (`tabs_create`) and
+  **close it when done** (`tabs_close`). Never navigate the game tab away.
+- Always re-assert your tab with `tabs_select` and confirm with `tabs_context`
+  before screenshotting — another agent may have fronted something else.
+- If the pane is not showing what you expect, **do not retry in a loop.** Report
+  that the pane was contended and move on to work that doesn't need it.
+
 ### Running the real game — EXACT SEQUENCE
 
 **⚠️ THE 0×0 VIEWPORT TRAP.** The preview tab opens at a 0×0 viewport, and
@@ -111,8 +129,15 @@ other agents' in-progress files. **Only fix errors in files you own.**
 will hang forever and the boot screen sits at "Initializing". This is *not* a
 broken build — it is a sized-viewport problem. Always resize first:
 
+**⚠️ RESOLUTION TRAP — read this before you set a viewport.** The pane renders
+the page 1:1 **only at 800×450**. Ask for 1600×900 or 960×540 and it renders
+into a ~560×315 sub-region of an 800×450 screenshot — a 0.28–0.44× downscale
+that destroys exactly the fine surface detail you are trying to judge. Either
+capture at 800×450, or force a larger backing store yourself:
+`renderer.setPixelRatio(2.4)` gives a true 1920×1080 buffer.
+
 1. `mcp__Claude_Browser__preview_start` → `{ "name": "kart" }`
-2. `mcp__Claude_Browser__resize_window` → `{ "width": 1600, "height": 900 }`
+2. `mcp__Claude_Browser__resize_window` → `{ "width": 800, "height": 450 }`
 3. Wait for the boot overlay to reach "Ready" (~20 s on a cold shader cache).
 4. Start a race via `mcp__Claude_Browser__javascript_tool`:
    `window.__GAME__.startRace({})`
@@ -128,9 +153,17 @@ zero-size tab cannot deadlock startup.
 `window.__GAME__` exposes the whole game. `window.__QA__` (dev builds only,
 see `src/qa/CaptureHarness.ts`) gives you reproducible measurement:
 
-- `__QA__.shot(name)` — jump to a canonical framing and settle. Names:
-  `chase-straight`, `chase-corner-drift`, `chase-boost`, `kart-hero`,
-  `grid-wide`, `pack-battle`, `scenery-vista`, `hud-full`.
+- `__QA__.shot(name)` — jump to a canonical framing, settle, and **verify the
+  subject is in frame**. Names: `chase-straight`, `chase-corner-drift`,
+  `chase-boost`, `kart-hero`, `grid-wide`, `pack-battle`, `scenery-vista`,
+  `hud-full`, `driver-eye`.
+  **Always check the returned `subject.inFrame`.** If it is `false` the capture
+  failed and the image says nothing about the game — re-run, don't judge it.
+  (Framings are positioned in the kart's own basis for exactly this reason; an
+  earlier revision positioned off a track `t` value and 5 of 8 shots contained
+  no kart at all.)
+- `__QA__.validateShots()` — run every framing and report which contain the
+  subject. **Do this once at the start of any review run.**
 - `__QA__.benchmark(5)` — medianFps, p95Ms, 1 % low, draw calls, triangles.
 - `__QA__.stats()`, `__QA__.setSky(preset)`, `__QA__.setQuality(tier)`.
 

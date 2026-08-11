@@ -56,6 +56,62 @@ export interface StandSpec {
   main: boolean;
 }
 
+/**
+ * Grandstand geometry contract, shared with `Crowd`.
+ *
+ * Props builds the terrace and Crowd seats people on it, from two different
+ * files, so every number that has to agree between the two lives here and
+ * nowhere else. Local space for a stand: **+Z faces the road**, +X runs along
+ * it, and y = 0 is the terrain height at the anchor.
+ *
+ *      y
+ *      |            ______ rear wall
+ *      |        ___|                     row r tread top  = ROW0 + r*ROW_H
+ *      |    ___|  <- bench (BENCH_H above its tread)      + DECK_LIFT
+ *      |   |____________ row 0 tread  (y = LIFT + ROW0)
+ *      |   | barrier      (sponsor band on its front face, at +Z = FRONT_Z)
+ *      |   :  ...... shaded void, columns + bracing ......
+ *      +---:------------------------------------------------ z
+ */
+/** Row rise, metres. */
+export const STAND_ROW_H = 0.78;
+/** Row depth (tread + bench), metres. */
+export const STAND_ROW_D = 1.15;
+/**
+ * Height of the seating deck above the terrain. This is what turns the stand
+ * from a box sitting on the grass into a structure: everything below it is the
+ * shaded void with the columns and cross-bracing in it.
+ */
+export const STAND_DECK_LIFT = 2.6;
+/** Row 0's tread top, above the lift. */
+export const STAND_ROW0 = 0.44;
+/** Bench top above its own tread — a seated spectator's hips land here. */
+export const STAND_BENCH_H = 0.3;
+/** +Z of the barrier's front face, which carries the sponsor band. */
+export const STAND_FRONT_Z = 1.35;
+/** +Z of row 0's tread front edge (i.e. the back of the barrier). */
+export const STAND_TREAD_F = 0.725;
+/** Local Z of a spectator's feet in row `r`. */
+export function standSeatZ(r: number): number { return -r * STAND_ROW_D + 0.15; }
+/** Local Y of a spectator's feet in row `r`. */
+export function standSeatY(r: number): number {
+  return STAND_DECK_LIFT + STAND_ROW0 + r * STAND_ROW_H;
+}
+/** Stair aisles cut into the terrace. Main stands get more blocks. */
+export function standAisleCount(main: boolean): number { return main ? 2 : 1; }
+/**
+ * Local X centres of those aisles. Props cuts steps here and Crowd seats nobody
+ * here, so the two must agree exactly — hence one function, not two constants.
+ */
+export function standAisleXs(width: number, aisles: number): number[] {
+  const n = Math.max(0, Math.min(5, Math.round(aisles)));
+  const out: number[] = [];
+  for (let a = 0; a < n; a++) out.push(((a + 1) / (n + 1) - 0.5) * (width - 6));
+  return out;
+}
+/** Aisle half-width including its kerb cheeks. */
+export const STAND_AISLE_HW = 0.95;
+
 interface Anchor {
   x: number; y: number; z: number;
   /** Radians: 0 = facing -Z. Props face the road unless noted. */
@@ -80,6 +136,18 @@ const _euler = new THREE.Euler();
 const _axisY = new THREE.Vector3(0, 1, 0);
 
 type Shade = { top?: number; side?: number; bottom?: number };
+
+/**
+ * One point of a swept cross-section, in the local **ZY** plane. `hex`/`shade`
+ * describe the face that *starts* at this point, so a single profile carries its
+ * own material breakdown — concrete tread, coloured bench, dark soffit.
+ */
+interface ProfilePt {
+  z: number;
+  y: number;
+  hex?: number;
+  shade?: number;
+}
 
 /**
  * Accumulates flat-shaded, vertex-coloured geometry.
@@ -179,14 +247,24 @@ class Builder {
     const b0 = pt(-bx, -hy, -bz), b1 = pt(bx, -hy, -bz), b2 = pt(bx, -hy, bz), b3 = pt(-bx, -hy, bz);
     const t0 = pt(-tx, hy, -tz), t1 = pt(tx, hy, -tz), t2 = pt(tx, hy, tz), t3 = pt(-tx, hy, tz);
     const uvR = opts.uvRect;
+    // WINDING. `quad()` derives its normal from the corner order, so the order
+    // below is what decides whether a box faces out or in. It used to run the
+    // other way round: every one of these six faces pointed *into* the box, so
+    // with the default FrontSide material every box in this file was back-face
+    // culled and what you actually saw was the far inside wall. That is why the
+    // grandstand read as a plain white mass despite emitting nine tiers, and why
+    // props generally read flat — all their near surfaces were being discarded.
+    // Proven numerically: the signed volume of every closed primitive here was
+    // negative. Do not "tidy" these orders without re-checking that.
+    //
     // sides (darker toward the ground reads as contact shadow)
-    this.quad(b0[0], b0[1], b0[2], b1[0], b1[1], b1[2], t1[0], t1[1], t1[2], t0[0], t0[1], t0[2], hex, ss, uvR);
-    this.quad(b1[0], b1[1], b1[2], b2[0], b2[1], b2[2], t2[0], t2[1], t2[2], t1[0], t1[1], t1[2], hex, ss * 0.9, uvR);
-    this.quad(b2[0], b2[1], b2[2], b3[0], b3[1], b3[2], t3[0], t3[1], t3[2], t2[0], t2[1], t2[2], hex, ss * 0.96, uvR);
-    this.quad(b3[0], b3[1], b3[2], b0[0], b0[1], b0[2], t0[0], t0[1], t0[2], t3[0], t3[1], t3[2], hex, ss * 0.86, uvR);
-    this.quad(t0[0], t0[1], t0[2], t1[0], t1[1], t1[2], t2[0], t2[1], t2[2], t3[0], t3[1], t3[2], hex, st, uvR);
+    this.quad(b0[0], b0[1], b0[2], t0[0], t0[1], t0[2], t1[0], t1[1], t1[2], b1[0], b1[1], b1[2], hex, ss, uvR);
+    this.quad(b1[0], b1[1], b1[2], t1[0], t1[1], t1[2], t2[0], t2[1], t2[2], b2[0], b2[1], b2[2], hex, ss * 0.9, uvR);
+    this.quad(b2[0], b2[1], b2[2], t2[0], t2[1], t2[2], t3[0], t3[1], t3[2], b3[0], b3[1], b3[2], hex, ss * 0.96, uvR);
+    this.quad(b3[0], b3[1], b3[2], t3[0], t3[1], t3[2], t0[0], t0[1], t0[2], b0[0], b0[1], b0[2], hex, ss * 0.86, uvR);
+    this.quad(t0[0], t0[1], t0[2], t3[0], t3[1], t3[2], t2[0], t2[1], t2[2], t1[0], t1[1], t1[2], hex, st, uvR);
     if (!opts.noBottom) {
-      this.quad(b3[0], b3[1], b3[2], b2[0], b2[1], b2[2], b1[0], b1[1], b1[2], b0[0], b0[1], b0[2], hex, sb, uvR);
+      this.quad(b3[0], b3[1], b3[2], b0[0], b0[1], b0[2], b1[0], b1[1], b1[2], b2[0], b2[1], b2[2], hex, sb, uvR);
     }
   }
 
@@ -213,9 +291,10 @@ class Builder {
       this.vert(cx + ca * r, cy, cz + sa * r, ca, bulge * 0.4, sa, u, 0, hex, facet * 0.82);
       this.vert(cx + ca * rt, cy + h, cz + sa * rt, ca, bulge * 0.4, sa, u, h * this.uvScale, hex, facet);
     }
+    // Winding, as in `box()`: outward-facing means CCW seen from outside.
     for (let i = 0; i < sides; i++) {
       const a = base + i * 2;
-      this.I.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      this.I.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
     if (opts.capTop !== false && rt > 1e-4) {
       const cbase = this.vertexCount;
@@ -225,7 +304,7 @@ class Builder {
         this.vert(cx + Math.cos(a) * rt, cy + h, cz + Math.sin(a) * rt, 0, 1, 0,
           Math.cos(a) * rt * this.uvScale, Math.sin(a) * rt * this.uvScale, hex, st);
       }
-      for (let i = 0; i < sides; i++) this.I.push(cbase, cbase + i + 1, cbase + i + 2);
+      for (let i = 0; i < sides; i++) this.I.push(cbase, cbase + i + 2, cbase + i + 1);
     }
     if (opts.capBottom) {
       const cbase = this.vertexCount;
@@ -234,7 +313,7 @@ class Builder {
         const a = yaw + (i / sides) * Math.PI * 2;
         this.vert(cx + Math.cos(a) * r, cy, cz + Math.sin(a) * r, 0, -1, 0, 0, 0, hex, (sh.bottom ?? 0.6));
       }
-      for (let i = 0; i < sides; i++) this.I.push(cbase, cbase + i + 2, cbase + i + 1);
+      for (let i = 0; i < sides; i++) this.I.push(cbase, cbase + i + 1, cbase + i + 2);
     }
   }
 
@@ -264,7 +343,7 @@ class Builder {
     }
     for (let i = 0; i < sides; i++) {
       const a = base + i * 2;
-      this.I.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      this.I.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
   }
 
@@ -293,7 +372,7 @@ class Builder {
     for (let j = 0; j < rings; j++) {
       for (let i = 0; i < seg; i++) {
         const a = base + j * stride + i;
-        this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+        this.I.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
       }
     }
   }
@@ -319,7 +398,7 @@ class Builder {
     for (let i = 0; i < segs; i++) {
       for (let j = 0; j < sides; j++) {
         const a = base + i * stride + j;
-        this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+        this.I.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
       }
     }
   }
@@ -390,8 +469,13 @@ class Builder {
         const fx = i / segs;
         const lx = (fx - 0.5) * w;
         const y = cy - fy * h;
+        // u runs uMax -> uMin as lx goes -w/2 -> +w/2, exactly as in `plate()`.
+        // The cloth is laid out along local +x with a +z face normal, so a viewer
+        // of the front face (standing at +z, looking down -z) sees +x running to
+        // their LEFT. The naive `uv[0] + range * fx` therefore renders every
+        // sponsor name on the gantry and stand banners mirrored.
         this.vert(cx + lx * ca, y, cz + lx * sa, 0, 0, 1,
-          uv[0] + (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+          uv[2] - (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
       }
     }
     this.flap = 0;
@@ -399,6 +483,62 @@ class Builder {
       for (let i = 0; i < segs; i++) {
         const a = base + j * stride + i;
         this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+      }
+    }
+  }
+
+  /**
+   * Sweep a cross-section along X between `x0` and `x1`.
+   *
+   * Segment `i` (`pts[i]` -> `pts[i+1]`) becomes one flat-shaded quad whose
+   * outward normal works out to `(0, -dz, dy)`. In practice: walk the outline
+   * **up** the road-facing faces, **backwards** (-z) along the up-facing ones,
+   * **down** the rear faces and **forwards** along the undersides, and every
+   * face points out of the solid. Reversing the walk inverts the whole part.
+   *
+   * This is the workhorse for the grandstand. A nine-row terrace with a
+   * chamfered nosing on every step, a coloured bench per row and a dark soffit
+   * underneath is ~66 quads as one profile; the same thing as boxes is ~30
+   * boxes, 360 triangles, and has a hard 90° edge everywhere a step meets a
+   * riser — which is exactly the tell that reads as amateur at 40 m.
+   *
+   * `caps` closes both ends with a fan from the profile's mean point, so it is
+   * only valid for **convex** profiles (parapets, fascias, side walls). Never
+   * for the terrace itself — a staircase outline fans into spaghetti.
+   */
+  extrudeX(
+    pts: ProfilePt[],
+    x0: number, x1: number,
+    hex: number,
+    opts: { shade?: number; caps?: boolean } = {},
+  ): void {
+    const gs = opts.shade ?? 1;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      this.quad(
+        x0, a.y, a.z, x1, a.y, a.z, x1, b.y, b.z, x0, b.y, b.z,
+        a.hex ?? hex, (a.shade ?? 1) * gs,
+      );
+    }
+    if (!opts.caps || pts.length < 3) return;
+    let mz = 0, my = 0;
+    for (const p of pts) { mz += p.z; my += p.y; }
+    mz /= pts.length; my /= pts.length;
+    for (let e = 0; e < 2; e++) {
+      const x = e === 0 ? x0 : x1;
+      const nx = e === 0 ? -1 : 1;
+      // Ends of a swept part are almost always turned away from the key light.
+      const es = gs * (e === 0 ? 0.88 : 0.94);
+      const base = this.vertexCount;
+      this.vert(x, my, mz, nx, 0, 0, mz * this.uvScale, my * this.uvScale, hex, es);
+      for (const p of pts) {
+        this.vert(x, p.y, p.z, nx, 0, 0, p.z * this.uvScale, p.y * this.uvScale,
+          p.hex ?? hex, (p.shade ?? 1) * es);
+      }
+      for (let i = 0; i + 1 < pts.length; i++) {
+        // The -x cap keeps the profile's winding; +x reverses it.
+        if (e === 0) this.I.push(base, base + 1 + i, base + 2 + i);
+        else this.I.push(base, base + 2 + i, base + 1 + i);
       }
     }
   }
@@ -556,6 +696,43 @@ const SPONSORS: Array<[string, string, string]> = [
   ['DRIFT', '#0d1b2a', '#4fd6ff'],
   ['KART', '#f4f1e6', '#c2192a'],
 ];
+
+const ATLAS_COLS = 4;
+const ATLAS_ROWS = 2;
+
+/**
+ * Bake one sponsor cell straight into a plate's uvs.
+ *
+ * The per-instance `aAtlas` remap can only pick **one** cell per instance, which
+ * is fine for a trackside board but useless for a grandstand: the whole point of
+ * a sponsor band is that it reads as six different names in a row. Emitting the
+ * cell per quad instead needs the uv convention spelled out, and there are two
+ * separate flips in play:
+ *
+ *  1. `plate()` maps local **+x -> uMin** — see the long comment there. Already
+ *     corrected and empirically verified; this helper just feeds it a normal
+ *     `[uMin, vMin, uMax, vMax]` rect and lets it do the swap.
+ *  2. `canvasTexture()` leaves three's default `flipY = true` alone, so **v = 1
+ *     is the top of the drawn canvas** while `plate()` sends the geometry's top
+ *     edge to the rect's *first* v. Upright text therefore needs the top v
+ *     first, i.e. a descending v range — which is what `V_TOP_FIRST` does.
+ *
+ * If a later pass corrects `plate()`'s v range the way its u range was
+ * corrected, flip `V_TOP_FIRST` and every sign built here follows.
+ */
+const V_TOP_FIRST = true;
+
+function atlasRect(cell: number, inset = 0.006): [number, number, number, number] {
+  const n = ATLAS_COLS * ATLAS_ROWS;
+  const i = ((Math.floor(cell) % n) + n) % n;
+  const cx = i % ATLAS_COLS, cy = Math.floor(i / ATLAS_COLS);
+  const u0 = cx / ATLAS_COLS + inset;
+  const u1 = (cx + 1) / ATLAS_COLS - inset;
+  // Canvas row `cy` (drawn top-down) lands in v = 1 - cy/rows downwards.
+  const vTop = 1 - cy / ATLAS_ROWS - inset * 2;
+  const vBot = 1 - (cy + 1) / ATLAS_ROWS + inset * 2;
+  return V_TOP_FIRST ? [u0, vTop, u1, vBot] : [u0, vBot, u1, vTop];
+}
 
 /** 4x2 atlas of sponsor boards, 2:1 cells to match a real trackside board. */
 function makeSponsorAtlas(): THREE.CanvasTexture {
@@ -830,8 +1007,33 @@ interface AuthoredSpec {
   /** Use the dimmer `glowSoft` for the glow part (windows, buoy lamps). */
   softGlow?: boolean;
   cloth?: THREE.BufferGeometry;
+  /** Companion pass on the metal material — trusses, bracing, railings. */
+  metal?: THREE.BufferGeometry;
+  /** Companion pass on the sponsor atlas, with cells baked into the uvs. */
+  sign?: THREE.BufferGeometry;
   cull?: number;
   shadow?: boolean;
+}
+
+/** Dimensions and dressing level for one grandstand geometry. */
+interface StandBuild {
+  width: number;
+  rows: number;
+  /** Cantilever roof on exposed trusses. Main stands only. */
+  roofed: boolean;
+  /** Stair aisles splitting the terrace into blocks. */
+  aisles: number;
+  /** Seat/trim palette and sponsor-cell offset, so stands aren't clones. */
+  variant: number;
+}
+
+/** One grandstand, split by material. Three draw calls per distinct size. */
+interface StandParts {
+  body: THREE.BufferGeometry;
+  steel: THREE.BufferGeometry;
+  sign: THREE.BufferGeometry;
+  /** Highest point, metres above the anchor. */
+  top: number;
 }
 
 const CULL_NEAR = 320;
@@ -1010,6 +1212,12 @@ export class Props implements ISubsystem {
       bloom?: boolean;
       shadow?: boolean;
       atlasCells?: number;
+      /**
+       * For atlas geometry that picks its own cells per quad (`atlasRect()`):
+       * writes an identity sub-rect so the shader's remap passes baked uvs
+       * through untouched. Mutually exclusive with `atlasCells`.
+       */
+      atlasBaked?: boolean;
       place?: (a: Anchor, i: number, m: THREE.Matrix4) => boolean;
       motion?: 'gull' | 'tram';
     } = {},
@@ -1038,7 +1246,7 @@ export class Props implements ISubsystem {
     const cull = o.cull ?? CULL_NEAR;
     const phase = new Float32Array(anchors.length);
     const cullAttr = new Float32Array(anchors.length);
-    const atlasAttr = o.atlasCells ? new Float32Array(anchors.length * 4) : null;
+    const atlasAttr = (o.atlasCells || o.atlasBaked) ? new Float32Array(anchors.length * 4) : null;
     const placed: Array<{ x: number; y: number; z: number }> = [];
 
     let n = 0;
@@ -1056,13 +1264,18 @@ export class Props implements ISubsystem {
       phase[n] = a.seed;
       cullAttr[n] = cull;
       if (atlasAttr) {
-        const cells = o.atlasCells as number;
-        const cell = Math.floor(a.seed * cells) % cells;
-        const cols = 4, rows = Math.max(1, Math.ceil(cells / cols));
-        atlasAttr[n * 4] = (cell % cols) / cols;
-        atlasAttr[n * 4 + 1] = Math.floor(cell / cols) / rows;
-        atlasAttr[n * 4 + 2] = 1 / cols;
-        atlasAttr[n * 4 + 3] = 1 / rows;
+        if (o.atlasCells) {
+          const cells = o.atlasCells;
+          const cell = Math.floor(a.seed * cells) % cells;
+          const cols = 4, rows = Math.max(1, Math.ceil(cells / cols));
+          atlasAttr[n * 4] = (cell % cols) / cols;
+          atlasAttr[n * 4 + 1] = Math.floor(cell / cols) / rows;
+          atlasAttr[n * 4 + 2] = 1 / cols;
+          atlasAttr[n * 4 + 3] = 1 / rows;
+        } else {
+          atlasAttr[n * 4 + 2] = 1;
+          atlasAttr[n * 4 + 3] = 1;
+        }
       }
       bounds.expandByPoint(_v.setFromMatrixPosition(_m));
       placed.push({ x: _v.x, y: _v.y, z: _v.z });
@@ -1246,57 +1459,49 @@ export class Props implements ISubsystem {
     }
 
     // ---- grandstands ---------------------------------------------------------
+    // Stands of the same size share one geometry, so `planStands`' main +
+    // secondary sizes cost six draws total however many corners get a stand.
     if (this.stands.length) {
-      const standAnchors: Anchor[] = this.stands.map((s, i) => ({
-        x: s.position.x, y: s.position.y, z: s.position.z, yaw: s.yaw,
-        side: 0, arc: s.arc, scale: 1, seed: (i * 0.37) % 1,
-      }));
-      const b = this.builder();
-      // Terraced seating: each row a step deeper and higher.
-      const rows = 9, rowH = 0.78, rowD = 1.15, width = 78;
-      for (let r = 0; r < rows; r++) {
-        const y = r * rowH;
-        const z = -r * rowD;
-        b.box(0, y + 0.18, z, width * 0.5, 0.18, rowD * 0.5, r % 2 ? 0x8b9199 : 0x7d838b,
-          { shade: { top: 1.12, side: 0.86 } });
-        b.box(0, y + 0.52, z - rowD * 0.42, width * 0.5, 0.34, 0.1,
-          [0x2f6fd0, 0xd93b2f, 0xf0c542, 0x2fa363][r % 4], { shade: { top: 1.1 } });
+      const groups = new Map<string, { spec: StandSpec; anchors: Anchor[] }>();
+      for (let i = 0; i < this.stands.length; i++) {
+        const st2 = this.stands[i];
+        const key = `${Math.round(st2.width)}x${st2.rows}${st2.main ? 'm' : ''}`;
+        let grp = groups.get(key);
+        if (!grp) { grp = { spec: st2, anchors: [] }; groups.set(key, grp); }
+        grp.anchors.push({
+          x: st2.position.x, y: st2.position.y, z: st2.position.z, yaw: st2.yaw,
+          side: 0, arc: st2.arc, scale: 1, seed: (i * 0.37) % 1,
+        });
       }
-      // Side walls + back.
-      for (const sx of [-1, 1]) {
-        b.box(sx * width * 0.5, rows * rowH * 0.5, -rows * rowD * 0.5,
-          0.3, rows * rowH * 0.5, rows * rowD * 0.5, 0x5c6169, { shade: { side: 0.92 } });
-      }
-      b.box(0, rows * rowH * 0.5 + 0.4, -rows * rowD - 0.4,
-        width * 0.5 + 0.3, rows * rowH * 0.5 + 0.4, 0.35, 0x494e55);
-      // Stair aisles.
-      for (const ax of [-0.55, 0, 0.55]) {
-        for (let r = 0; r < rows; r++) {
-          b.box(ax * width * 0.5, r * rowH + 0.38, -r * rowD, 1.1, 0.06, rowD * 0.5, 0xb9bec6,
-            { shade: { top: 1.16 } });
-        }
-      }
-      this.emit('grandstand', b.build('grandstand'), this.matte, standAnchors, { cull: CULL_MID });
 
-      // Cantilever roof + banner on the main stand only.
-      const mainAnchors = standAnchors.filter((_, i) => this.stands[i].main);
-      if (mainAnchors.length) {
-        const r = this.builder();
-        const rows2 = 9, width2 = 78;
-        const topY = rows2 * 0.78 + 3.4;
-        for (let k = -4; k <= 4; k++) {
-          const x = (k / 4) * width2 * 0.48;
-          r.tube(x, rows2 * 0.78, -rows2 * 1.15, x, topY, -rows2 * 1.15, 0.16, 6, 0x6a7079);
-          r.tube(x, topY, -rows2 * 1.15, x, topY - 0.9, 2.2, 0.13, 6, 0x6a7079);
-        }
-        r.box(0, topY - 0.35, -rows2 * 1.15 * 0.5 + 1.0, width2 * 0.5 + 1.2, 0.16, rows2 * 1.15 * 0.5 + 1.6,
-          0xc9ced6, { shade: { top: 1.2, bottom: 0.5 } });
-        this.emit('standRoof', r.build('standRoof'), this.metal, mainAnchors, { cull: CULL_MID });
+      let vi = 0;
+      for (const [key, grp] of groups) {
+        const spec = grp.spec;
+        const parts = this.standParts({
+          width: spec.width,
+          rows: spec.rows,
+          roofed: spec.main,
+          aisles: standAisleCount(spec.main),
+          variant: spec.main ? 0 : 1 + (vi++ % 2),
+        });
+        this.emit(`grandstand:${key}`, parts.body, this.matte, grp.anchors, { cull: CULL_FAR });
+        this.emit(`grandstandSteel:${key}`, parts.steel, this.metal, grp.anchors, { cull: CULL_MID });
+        this.emit(`grandstandSign:${key}`, parts.sign, this.atlas, grp.anchors,
+          { cull: CULL_MID, atlasBaked: true, shadow: false });
 
-        const bn = this.builder();
-        bn.banner(0, topY - 0.6, 2.0, 26, 2.4, 0, 0xffffff, 5, [0, 0, 1, 1]);
-        this.emit('standBanner', bn.build('standBanner'), this.atlasSway, mainAnchors,
-          { cull: CULL_MID, atlasCells: 8, shadow: false });
+        // Cloth sponsor banners slung from the front truss, hanging into the
+        // roof void above the back rows. Three separate cloths with baked cells
+        // rather than one wide one: a 1:1 atlas cell stretched 30 m is mush.
+        if (spec.main) {
+          const bn = this.builder();
+          const bwd = Math.min(9, spec.width * 0.13);
+          for (let k = -1; k <= 1; k++) {
+            bn.banner(k * bwd * 1.6, parts.top - 2.4, STAND_FRONT_Z - 1.1,
+              bwd, 2.4, 0, 0xffffff, 3, atlasRect(k + 5));
+          }
+          this.emit('standBanner', bn.build('standBanner'), this.atlasSway, grp.anchors,
+            { cull: CULL_MID, atlasBaked: true, shadow: false });
+        }
       }
     }
 
@@ -2013,6 +2218,14 @@ export class Props implements ISubsystem {
     for (const p of props) {
       const key = normaliseType(p.type);
       if (!key) { unknown.add(p.type); continue; }
+      // A track that authors its own stands on the start straight was, until
+      // now, stacking 34 m authored stands inside the 78 m one `planStands`
+      // places there — three intersecting stands in the most-photographed
+      // frame in the game. The procedural one wins: it is the only one Crowd
+      // seats people in.
+      if ((key === 'grandstand' || key === 'crowdstand') && this.clashesWithStand(p.position)) {
+        continue;
+      }
       let list = byType.get(key);
       if (!list) { list = []; byType.set(key, list); }
       let yaw = 0;
@@ -2051,7 +2264,23 @@ export class Props implements ISubsystem {
         this.emit(`authored:${key}:cloth`, spec.cloth, this.matteSway, anchors,
           { cull: spec.cull ?? CULL_MID, shadow: false });
       }
+      if (spec.metal) {
+        this.emit(`authored:${key}:metal`, spec.metal, this.metal, anchors,
+          { cull: spec.cull ?? CULL_MID });
+      }
+      if (spec.sign) {
+        this.emit(`authored:${key}:sign`, spec.sign, this.atlas, anchors,
+          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false });
+      }
     }
+  }
+
+  /** True if `p` lands inside a planned stand's footprint. */
+  private clashesWithStand(p: { x: number; z: number }): boolean {
+    for (const s of this.stands) {
+      if (Math.hypot(s.position.x - p.x, s.position.z - p.z) < s.width * 0.6 + 12) return true;
+    }
+    return false;
   }
 
   /**
@@ -2100,8 +2329,20 @@ export class Props implements ISubsystem {
           cloth: cloth.build('startGantryCloth'), cull: CULL_FAR };
       }
 
-      case 'grandstand': return { geo: this.standGeometry(true), cull: CULL_FAR };
-      case 'crowdstand': return { geo: this.standGeometry(false), cull: CULL_MID };
+      case 'grandstand': case 'crowdstand': {
+        const main = key === 'grandstand';
+        const parts = this.standParts({
+          width: main ? 34 : 22,
+          rows: main ? 8 : 5,
+          roofed: main,
+          aisles: 1,
+          variant: main ? 2 : 1,
+        });
+        return {
+          geo: parts.body, metal: parts.steel, sign: parts.sign,
+          cull: main ? CULL_FAR : CULL_MID,
+        };
+      }
 
       case 'balloonarch': {
         const b = this.builder();
@@ -2341,52 +2582,321 @@ export class Props implements ISubsystem {
     }
   }
 
-  /** Tiered seating, with or without a roof and a back wall. */
-  private standGeometry(roofed: boolean): THREE.BufferGeometry {
-    const b = this.builder();
-    const w = roofed ? 26 : 17;
-    const rows = roofed ? 9 : 6;
+  /**
+   * The grandstand. This is the largest man-made silhouette on the start
+   * straight, so it gets the most geometry of anything in this file.
+   *
+   * Three merged geometries come out, one per material, which is three draw
+   * calls however many stands share the same dimensions:
+   *
+   *   `body`  — concrete: plinth, columns, terrace, side walls, aisles, towers
+   *   `steel` — bracing, railings, roof trusses, purlins, roof panel
+   *   `sign`  — sponsor band on the barrier + fascia panels, on the atlas
+   *
+   * Everything horizontal is swept with `extrudeX`, which means every step
+   * nosing, every parapet top and the roof's leading edge carry a real chamfer
+   * for two extra triangles each. Nothing here has a raw 90° edge on a face you
+   * can see, and the soffit over the whole footprint is baked down to a quarter
+   * brightness — the void under the deck is free depth.
+   */
+  private standParts(o: StandBuild): StandParts {
+    const R = clamp(Math.round(o.rows), 3, 16);
+    const W = clamp(o.width, 14, 140);
+    const hw = W * 0.5;
+    const rowH = STAND_ROW_H, rowD = STAND_ROW_D;
+    const y0 = STAND_DECK_LIFT + STAND_ROW0;
+    const bz = STAND_FRONT_Z, zF = STAND_TREAD_F;
+    const yRow = (r: number): number => y0 + r * rowH;
+    const zRowBack = (r: number): number => -r * rowD - 0.425;
+    const yTop = yRow(R - 1);
+    /** Barrier capping height: low enough that row 0's heads clear it. */
+    const barrier = y0 + 0.9;
+    const yWalk = yTop + rowH;
+    const zWalk = zRowBack(R - 1) - 1.05;
+    const yWall = yWalk + 1.45;
+    const zWallB = zWalk - 0.78;
+    const soffitF = STAND_DECK_LIFT - 0.05;
+    const soffitB = yWalk - 0.62;
+    const plinth = 0.25;
+    // Roof geometry, hoisted so the fascia signage can find it.
+    const zMast = zWalk - 0.34;
+    const yMast = yWall + 0.16;
+    const yRidge = yMast + 3.7;
+    const zEave = bz - 0.2;
+    const yEave = yRidge - 1.15;
+
     // Warm off-white concrete, not neutral grey: under the current darker-blue
     // fog and 6.5:1 key/fill a neutral grey stand reads as flat blue plastic.
     const CONCRETE = 0xe4dccc;
-    const RISER = 0xb2a696;
-    const SEAT = [0xe8332a, 0xf2b52a, 0x1b7fd4];
-    // Terraces: each row a step back and up, with a darker riser face and a
-    // coloured seat block band — MK8 stands are never one material.
-    for (let r = 0; r < rows; r++) {
-      const y = 0.55 + r * 0.62;
-      const z = -r * 0.92;
-      b.box(0, y - 0.31, z, w * 0.5, 0.31, 0.46, CONCRETE, { shade: { top: 1.12 } });
-      b.box(0, y + 0.1, z - 0.46, w * 0.5, 0.2, 0.46, RISER);
-      // Seat colour blocked in thirds along the row, offset per tier so the whole
-      // bank reads as a pattern rather than stripes.
-      for (let k = -1; k <= 1; k++) {
-        b.box(k * (w / 3), y + 0.06, z + 0.02, w / 6.6, 0.06, 0.4,
-          SEAT[(r + k + 3) % 3], { shade: { top: 1.2 } });
+    const DECK = 0xd9d0be;
+    const RISER = 0xb9ad9c;
+    // Soffit colour x shade lands at ~0.15 linear against ~0.39 for the lit
+    // treads: a 2.6:1 AO step, which reads as deep shade without going to black.
+    // Measured, not guessed — pushing it further just made the void a hole.
+    const SOFFIT = 0x8a8074;
+    const PLINTH = 0x9a9284;
+    const STEEL = 0xc3c9d1;
+    const STEEL_D = 0x767d88;
+    const TRIM = [0xd6402f, 0x2f6fd0, 0x2b3038][o.variant % 3];
+    const SEATS = [
+      [0x2f6fd0, 0xd93b2f, 0xf0eade],
+      [0xd93b2f, 0xf2c53d, 0x2b3038],
+      [0x2fa363, 0xf0eade, 0x2f6fd0],
+    ][o.variant % 3];
+
+    const b = this.builder();
+    const s = this.builder();
+    const g = this.builder();
+    b.uvScale = 0.5;
+    s.uvScale = 0.8;
+
+    // ---- terrace ------------------------------------------------------------
+    // One profile: barrier, then per row a tread, a chamfered bench and the
+    // seat-back riser, then the rear walkway, the back wall and the soffit.
+    const prof: ProfilePt[] = [
+      { z: bz, y: soffitF, hex: CONCRETE, shade: 0.97 },
+      { z: bz, y: barrier - 0.12, hex: CONCRETE, shade: 1.08 },
+      { z: bz - 0.13, y: barrier, hex: DECK, shade: 1.2 },
+      { z: zF + 0.13, y: barrier, hex: CONCRETE, shade: 0.9 },
+      { z: zF, y: barrier - 0.12, hex: RISER, shade: 0.66 },
+      { z: zF, y: y0, hex: DECK, shade: 1.0 },
+    ];
+    for (let r = 0; r < R; r++) {
+      const yr = yRow(r);
+      const zb = zRowBack(r);
+      const seat = SEATS[(r + o.variant) % SEATS.length];
+      const next = r < R - 1 ? yRow(r + 1) : yWalk;
+      prof.push({ z: zb + 0.34, y: yr, hex: seat, shade: 0.98 });
+      prof.push({ z: zb + 0.34, y: yr + STAND_BENCH_H - 0.1, hex: seat, shade: 1.16 });
+      prof.push({ z: zb + 0.24, y: yr + STAND_BENCH_H, hex: seat, shade: 1.3 });
+      prof.push({ z: zb, y: yr + STAND_BENCH_H, hex: RISER, shade: 0.76 });
+      prof.push({ z: zb, y: next - 0.1, hex: CONCRETE, shade: 1.12 });
+      prof.push({ z: zb - 0.1, y: next, hex: DECK, shade: r < R - 1 ? 1.0 : 1.06 });
+    }
+    prof.push({ z: zWalk, y: yWalk, hex: CONCRETE, shade: 0.95 });
+    prof.push({ z: zWalk, y: yWall, hex: CONCRETE, shade: 1.1 });
+    prof.push({ z: zWalk - 0.16, y: yWall + 0.16, hex: DECK, shade: 1.22 });
+    prof.push({ z: zWallB + 0.16, y: yWall + 0.16, hex: CONCRETE, shade: 0.86 });
+    prof.push({ z: zWallB, y: yWall, hex: RISER, shade: 0.7 });
+    prof.push({ z: zWallB, y: soffitB, hex: SOFFIT, shade: 0.58 });
+    prof.push({ z: bz, y: soffitF });
+    b.extrudeX(prof, -hw, hw, CONCRETE);
+
+    // ---- side walls ---------------------------------------------------------
+    // A straight rake from the barrier top to the back wall top, which sits
+    // above the seating and closes the terrace's open ends.
+    const wall: ProfilePt[] = [
+      { z: bz, y: soffitF, hex: CONCRETE, shade: 1.02 },
+      // Chamfer the front-top corner: on the near side wall this is the corner
+      // closest to the camera on the whole stand, and a razor edge there is the
+      // single most obvious tell at 25 m.
+      { z: bz, y: barrier - 0.14, hex: CONCRETE, shade: 1.06 },
+      { z: bz - 0.16, y: barrier, hex: DECK, shade: 1.22 },
+      { z: zWallB, y: yWall + 0.16, hex: CONCRETE, shade: 0.92 },
+      { z: zWallB, y: soffitB, hex: SOFFIT, shade: 0.55 },
+      { z: bz, y: soffitF, hex: CONCRETE, shade: 1.02 },
+    ];
+    b.extrudeX(wall, -hw - 0.44, -hw, CONCRETE, { caps: true, shade: 0.98 });
+    b.extrudeX(wall, hw, hw + 0.44, CONCRETE, { caps: true, shade: 0.98 });
+
+    // ---- plinth -------------------------------------------------------------
+    // Also the slope skirt: `planStands` accepts sites up to ~30°, so a 78 m
+    // footprint can be a metre out at the corners. Running well below grade is
+    // cheaper than pretending the terrain is flat.
+    b.extrudeX([
+      { z: bz + 0.55, y: -3.2, hex: PLINTH, shade: 0.9 },
+      { z: bz + 0.55, y: plinth - 0.16, hex: PLINTH, shade: 1.02 },
+      { z: bz + 0.4, y: plinth, hex: PLINTH, shade: 0.5 },
+      { z: zWallB - 0.6, y: plinth, hex: PLINTH, shade: 0.72 },
+      { z: zWallB - 0.75, y: plinth - 0.16, hex: PLINTH, shade: 0.66 },
+      { z: zWallB - 0.75, y: -3.2, hex: PLINTH, shade: 0.58 },
+    ], -hw - 0.95, hw + 0.95, PLINTH, { caps: true });
+
+    // ---- columns + cross-bracing under the deck -----------------------------
+    const soffitAt = (z: number): number =>
+      soffitF + (soffitB - soffitF) * clamp01((bz - z) / Math.max(0.01, bz - zWallB));
+    const nCol = clamp(Math.round(W / 11) + 1, 3, 9);
+    const colX = (i: number): number => (i / (nCol - 1) - 0.5) * (W - 2.2);
+    const lines = o.roofed ? [0.06, 0.44, 0.82] : [0.1, 0.62];
+    const lineZ = lines.map((f) => bz - f * (bz - zWallB));
+    for (let l = 0; l < lineZ.length; l++) {
+      const cz = lineZ[l];
+      const top = soffitAt(cz);
+      for (let i = 0; i < nCol; i++) {
+        b.prism(colX(i), plinth, cz, 0.38, top - plinth, 6, PLINTH,
+          { capTop: false, yaw: 0.26, shade: { side: 0.6 } });
+      }
+      // Full X-bracing on the front line where you can see it; a single
+      // alternating diagonal deeper in, where it only has to read as depth.
+      for (let i = 0; i + 1 < nCol; i++) {
+        const xa = colX(i), xb = colX(i + 1);
+        const yb = plinth + (top - plinth) * 0.92;
+        s.tube(xa, plinth + 0.18, cz, xb, yb, cz, 0.075, 4, STEEL_D, 0.62);
+        if (l === 0 || i % 2 === 0) {
+          s.tube(xb, plinth + 0.18, cz, xa, yb, cz, 0.075, 4, STEEL_D, 0.58);
+        }
       }
     }
-    // Side walls close the silhouette.
+    for (let i = 0; i < nCol; i += 2) {
+      for (let l = 0; l + 1 < lineZ.length; l++) {
+        const ya = soffitAt(lineZ[l]) - 0.5, yb = soffitAt(lineZ[l + 1]) - 0.5;
+        s.tube(colX(i), ya, lineZ[l], colX(i), yb, lineZ[l + 1], 0.065, 4, STEEL_D, 0.55);
+      }
+    }
+
+    // ---- aisles: stepped, with kerb cheeks and a handrail -------------------
+    for (const ax of standAisleXs(W, o.aisles)) {
+      const aw = STAND_AISLE_HW - 0.17;
+      const ap: ProfilePt[] = [{ z: zF, y: y0 + 0.03, hex: DECK, shade: 1.1 }];
+      for (let r = 1; r <= R; r++) {
+        const zb = zRowBack(r - 1);
+        const yn = r < R ? yRow(r) : yWalk;
+        // The riser sits 3 cm in front of the bench it steps over, so the two
+        // are never coplanar; the aisle tread clears the bench top by 0.5 m.
+        ap.push({ z: zb + 0.37, y: yRow(r - 1) + 0.03, hex: RISER, shade: 0.84 });
+        ap.push({ z: zb + 0.37, y: yn - 0.07, hex: CONCRETE, shade: 1.14 });
+        ap.push({ z: zb + 0.27, y: yn + 0.03, hex: DECK, shade: 1.1 });
+      }
+      ap.push({ z: zWalk, y: yWalk + 0.03, hex: DECK, shade: 1.06 });
+      b.extrudeX(ap, ax - aw, ax + aw, DECK);
+
+      const cheek: ProfilePt[] = [
+        { z: zF, y: y0 - 1.05, hex: RISER, shade: 0.78 },
+        { z: zF, y: y0 + 0.37, hex: DECK, shade: 1.18 },
+        { z: zWalk, y: yWalk + 0.37, hex: CONCRETE, shade: 0.96 },
+        { z: zWalk, y: yWalk - 1.05, hex: SOFFIT, shade: 0.6 },
+        { z: zF, y: y0 - 1.05, hex: RISER, shade: 0.78 },
+      ];
+      b.extrudeX(cheek, ax - aw - 0.14, ax - aw, RISER, { caps: true, shade: 0.96 });
+      b.extrudeX(cheek, ax + aw, ax + aw + 0.14, RISER, { caps: true, shade: 0.96 });
+      this.rakeRail(s, ax + aw + 0.07, zF, y0 + 0.37, zWalk, yWalk + 0.37, 0.72, 5, STEEL);
+    }
+
+    // ---- railings -----------------------------------------------------------
+    this.railX(s, -hw + 0.5, hw - 0.5, barrier, (bz - 0.13 + zF + 0.13) * 0.5,
+      0.52, 6.2, STEEL);
+    // Rear walkway rail sits at the walkway's front edge, i.e. behind the last
+    // bench, which is where a real stand stops people stepping off the top row.
+    this.railX(s, -hw + 0.5, hw - 0.5, yWalk + 0.03, zWalk + 0.95, 0.62, 7.5, STEEL);
+
+    // ---- stair towers -------------------------------------------------------
     for (const sx of [-1, 1]) {
-      b.box(sx * w * 0.5, rows * 0.31, -rows * 0.46, 0.32, rows * 0.31, rows * 0.46, 0xf0e8d8);
-    }
-    b.box(0, 0.22, 0.6, w * 0.5 + 0.4, 0.22, 1.0, 0x9b9384, { shade: { top: 1.06 } });
-    if (roofed) {
-      const top = rows * 0.62 + 3.6;
-      for (let i = -3; i <= 3; i++) {
-        b.prism(i * (w / 7), rows * 0.62, -rows * 0.92, 0.22, 3.6, 5, 0xd8d0c0);
-        b.tube(i * (w / 7), top - 0.2, -rows * 0.92, i * (w / 7), top - 1.1, 1.4, 0.11, 4, 0xc4baa8);
+      const tx = sx * (hw + 1.62);
+      const tz = (bz + zWalk) * 0.5 + 1.4;
+      b.prism(tx, plinth - 0.1, tz, 1.55, yWalk - plinth + 0.3, 8, CONCRETE,
+        { capTop: false, yaw: Math.PI / 8, taper: 0.94, shade: { side: 0.94 } });
+      b.extrudeX([
+        { z: tz + 1.62, y: yWalk + 0.2, hex: DECK, shade: 1.0 },
+        { z: tz + 1.62, y: yWalk + 0.46, hex: DECK, shade: 1.12 },
+        { z: tz + 1.44, y: yWalk + 0.62, hex: TRIM, shade: 1.24 },
+        { z: tz - 1.44, y: yWalk + 0.62, hex: TRIM, shade: 1.16 },
+        { z: tz - 1.62, y: yWalk + 0.46, hex: DECK, shade: 0.92 },
+        { z: tz - 1.62, y: yWalk + 0.2, hex: DECK, shade: 0.86 },
+        // Closed: you look up at this slab from the track, so it needs a soffit.
+        { z: tz + 1.62, y: yWalk + 0.2, hex: SOFFIT, shade: 0.5 },
+      ], tx - 1.74, tx + 1.74, DECK, { caps: true });
+      // Doorway, and a stair band climbing the road-facing face.
+      b.plate(tx, plinth + 1.1, tz + 1.58, 1.25, 2.2, 0, 0x2b3038, { single: true });
+      for (let k = 0; k < 5; k++) {
+        b.box(tx, plinth + 0.6 + k * 1.5, tz + 1.6, 1.3, 0.09, 0.12, DECK,
+          { shade: { top: 1.24 } });
       }
-      // Roof: warm underside, brighter top, plus a red fascia so the leading edge
-      // catches the key light the way MK8's stand roofs do.
-      b.box(0, top, -rows * 0.46, w * 0.52, 0.18, rows * 0.5 + 1.2, 0xf4eee0,
-        { shade: { top: 1.18, bottom: 0.62 } });
-      b.box(0, top - 0.22, rows * 0.04 + 1.2, w * 0.52, 0.24, 0.16, 0xe8332a,
-        { shade: { top: 1.2 } });
-      b.box(0, top + 0.42, -rows * 0.92 - 0.2, w * 0.46, 0.42, 0.16, 0x232833);
-    } else {
-      for (const sx of [-1, 1]) b.box(sx * w * 0.5, rows * 0.62 + 0.5, -rows * 0.92, 0.16, 0.5, 0.16, 0xd8d0c0);
     }
-    return b.build(roofed ? 'grandstand' : 'crowdStand');
+
+    // ---- roof ---------------------------------------------------------------
+    if (o.roofed) {
+      const nT = clamp(Math.round(W / 18) + 1, 3, 6);
+      const topY = (t: number): number => yRidge + (yEave - yRidge) * t;
+      const botY = (t: number): number => (yRidge - 1.45) + ((yEave - 0.55) - (yRidge - 1.45)) * t;
+      const chordZ = (t: number): number => zMast + (zEave - zMast) * t;
+      for (let i = 0; i < nT; i++) {
+        const x = (i / (nT - 1) - 0.5) * (W - 3.0);
+        s.prism(x, yMast, zMast, 0.32, yRidge - yMast, 6, STEEL,
+          { capTop: true, shade: { side: 0.96 } });
+        s.tube(x, yRidge, zMast, x, yEave, zEave, 0.15, 5, STEEL, 1.04);
+        s.tube(x, yRidge - 1.45, zMast, x, yEave - 0.55, zEave, 0.12, 5, STEEL, 0.86);
+        // Warren web: alternating diagonals plus two verticals. This is the
+        // detail that says "structure" rather than "slab on sticks".
+        for (let k = 0; k < 5; k++) {
+          const t0 = k / 5, t1 = (k + 1) / 5;
+          const ya = k % 2 === 0 ? topY(t0) : botY(t0);
+          const yb = k % 2 === 0 ? botY(t1) : topY(t1);
+          s.tube(x, ya, chordZ(t0), x, yb, chordZ(t1), 0.07, 4, STEEL_D, 0.84);
+        }
+        for (const t of [0.4, 0.8]) {
+          s.tube(x, topY(t), chordZ(t), x, botY(t), chordZ(t), 0.06, 4, STEEL_D, 0.76);
+        }
+      }
+      // Purlins: the underside is what you see from the track, so it gets ribs.
+      for (let k = 0; k <= 5; k++) {
+        const t = k / 5;
+        s.tube(-hw - 0.6, topY(t) - 0.17, chordZ(t), hw + 0.6, topY(t) - 0.17, chordZ(t),
+          0.09, 4, STEEL, 0.92);
+      }
+      s.extrudeX([
+        { z: zEave, y: yEave - 0.62, hex: TRIM, shade: 1.0 },
+        { z: zEave, y: yEave - 0.14, hex: TRIM, shade: 1.14 },
+        { z: zEave - 0.16, y: yEave, hex: 0xf4eee0, shade: 1.22 },
+        { z: zMast - 0.5, y: yRidge, hex: 0xe8e2d4, shade: 1.02 },
+        { z: zMast - 0.5, y: yRidge - 0.34, hex: SOFFIT, shade: 0.44 },
+        { z: zEave, y: yEave - 0.62, hex: TRIM, shade: 1.0 },
+      ], -hw - 0.7, hw + 0.7, 0xf4eee0, { caps: true });
+    }
+
+    // ---- signage ------------------------------------------------------------
+    // Sponsor band across the barrier's outer face, one atlas cell per board so
+    // the run reads as different names instead of one logo stretched 78 m.
+    const bandTop = barrier - 0.16, bandBot = soffitF + 0.1;
+    const boards = clamp(Math.round(W / 4.2), 3, 24);
+    for (let i = 0; i < boards; i++) {
+      const bwd = W / boards;
+      g.plate(-hw + (i + 0.5) * bwd, (bandTop + bandBot) * 0.5, bz + 0.03,
+        bwd * 0.94, bandTop - bandBot, 0, 0xffffff,
+        { single: true, uvRect: atlasRect(i * 3 + o.variant) });
+    }
+    if (o.roofed) {
+      const nF = clamp(Math.round(W / 9), 2, 9);
+      for (let i = 0; i < nF; i++) {
+        g.plate(((i + 0.5) / nF - 0.5) * (W - 2.4), yEave - 0.38, zEave + 0.04,
+          1.15, 0.5, 0, 0xffffff, { single: true, uvRect: atlasRect(i * 5 + 1) });
+      }
+    }
+
+    const tag = `${R}x${Math.round(W)}${o.roofed ? 'r' : ''}`;
+    return {
+      body: b.build(`stand:${tag}`),
+      steel: s.build(`standSteel:${tag}`),
+      sign: g.build(`standSign:${tag}`),
+      top: o.roofed ? yRidge : yWall + 0.16,
+    };
+  }
+
+  /** Straight railing along X: two rails plus posts every `every` metres. */
+  private railX(
+    s: Builder, x0: number, x1: number, y: number, z: number,
+    h: number, every: number, hex: number,
+  ): void {
+    const n = Math.max(2, Math.round((x1 - x0) / every) + 1);
+    for (let i = 0; i < n; i++) {
+      s.prism(x0 + (x1 - x0) * (i / (n - 1)), y, z, 0.05, h, 4, hex,
+        { capTop: false, yaw: 0.7 });
+    }
+    s.tube(x0, y + h, z, x1, y + h, z, 0.05, 5, hex, 1.06);
+    s.tube(x0, y + h * 0.55, z, x1, y + h * 0.55, z, 0.036, 4, hex, 0.92);
+  }
+
+  /** Railing following an aisle rake, in the plane x = const. */
+  private rakeRail(
+    s: Builder, x: number, za: number, ya: number, zb: number, yb: number,
+    h: number, posts: number, hex: number,
+  ): void {
+    for (let i = 0; i <= posts; i++) {
+      const t = i / posts;
+      s.prism(x, ya + (yb - ya) * t, za + (zb - za) * t, 0.05, h, 4, hex,
+        { capTop: false, yaw: 0.7 });
+    }
+    s.tube(x, ya + h, za, x, yb + h, zb, 0.05, 5, hex, 1.06);
+    s.tube(x, ya + h * 0.55, za, x, yb + h * 0.55, zb, 0.036, 4, hex, 0.92);
   }
 
   /** A single palm, at the origin. */

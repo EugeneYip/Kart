@@ -61,16 +61,44 @@ uniform sampler2D apxMacroMap;
 /** x: decal opacity  y: macro contrast  z: polish strength  w: wet strength */
 uniform vec4 apxRoadParams;
 uniform vec3 apxPolishTint;
+/** x: albedo chroma keep  y: highlight knee (linear)  z: knee strength */
+uniform vec3 apxRoadTone;
 `;
 
 /**
- * Runs right after three's albedo/roughness are established.
+ * Runs right after three's albedo/roughness are established, so `diffuseColor`
+ * already carries material.color * albedoMap * vertexColour.
+ *
+ * TWO GUARDS COME FIRST, and they are the reason this road reads as asphalt
+ * rather than as sand:
+ *
+ *  1. **Highlight knee.** `makeAsphalt`'s aggregate runs from sRGB 37 to 189 —
+ *     a 5x spread in linear — because it stacks quartz sparkle on top of three
+ *     stone scales. Un-tamed, those sparkles survive mip filtering as a bright
+ *     speckle that reads as coarse grit at 50 m. The knee compresses only the
+ *     top of the range, so the dark aggregate structure (the part that reads as
+ *     asphalt) is untouched.
+ *
+ *  2. **Chroma clamp.** The track's key light is a low sunset sun and the env
+ *     is an orange sky; every multiplier in the chain (texture hue drift, style
+ *     tint, verge dust in the vertex colours, the stain layer) is warm, and
+ *     they compound. Asphalt is a near-neutral dielectric, so pull the albedo's
+ *     chroma in *after* everything has had its say. The warmth then comes from
+ *     the light, which is where it belongs.
+ *
+ * Then the usual passes:
  *  - macro field kills the tiling repeat
  *  - baked racing line darkens + polishes
  *  - the track-space decal atlas paints over the top
  */
 const ROAD_FRAG = /* glsl */ `
 {
+  // --- highlight knee on the aggregate -------------------------------------
+  float aLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  float over = max(aLum - apxRoadTone.y, 0.0);
+  float lumK = min(aLum, apxRoadTone.y) + over / (1.0 + over * apxRoadTone.z);
+  diffuseColor.rgb *= lumK / max(aLum, 1e-4);
+
   // --- macro discolouration (track space, very low frequency) --------------
   vec3 macro = texture2D(apxMacroMap, vApxUv2 * vec2(1.0, 9.0)).rgb;
   float md = (macro.r - 0.5) * apxRoadParams.y;
@@ -94,6 +122,10 @@ const ROAD_FRAG = /* glsl */ `
   // fresh paint is smoother than aggregate, skid rubber is rougher; the
   // decal's green channel biases between the two.
   roughnessFactor = mix(roughnessFactor, mix(0.78, 0.34, dc.g), da * 0.85);
+
+  // --- chroma clamp, last word on the albedo -------------------------------
+  float outLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  diffuseColor.rgb = mix(vec3(outLum), diffuseColor.rgb, apxRoadTone.x);
 }
 `;
 
@@ -102,6 +134,7 @@ interface RoadUniforms {
   apxMacroMap: { value: THREE.Texture };
   apxRoadParams: { value: THREE.Vector4 };
   apxPolishTint: { value: THREE.Color };
+  apxRoadTone: { value: THREE.Vector3 };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +296,10 @@ export interface RoadMaterials {
 
   setDecalTexture(tex: THREE.Texture): void;
   /** Live tweak from the dev harness. */
-  setRoadParams(p: { decal?: number; macro?: number; polish?: number; wet?: number }): void;
+  setRoadParams(p: {
+    decal?: number; macro?: number; polish?: number; wet?: number;
+    chroma?: number; knee?: number; kneeK?: number;
+  }): void;
   dispose(): void;
 }
 
@@ -278,7 +314,15 @@ function makeRoadShader(
     apxDecalMap: { value: decal },
     apxMacroMap: { value: macro },
     apxRoadParams: { value: new THREE.Vector4(1, 0.14, style.racingLine, 1) },
-    apxPolishTint: { value: new THREE.Color(0.62, 0.6, 0.6) },
+    // Rubber laid on asphalt is a *cool* dark grey, not a warm one.
+    apxPolishTint: { value: new THREE.Color(0.55, 0.575, 0.61) },
+    // chroma keep / highlight knee / knee strength. Wet roads are darker to
+    // begin with and their sheen is specular, so they need less taming.
+    apxRoadTone: {
+      value: style.asphalt === 'wet'
+        ? new THREE.Vector3(0.72, 0.13, 5.0)
+        : new THREE.Vector3(0.5, 0.115, 7.0),
+    },
   };
 
   const prev = mat.onBeforeCompile;
@@ -288,6 +332,7 @@ function makeRoadShader(
     shader.uniforms.apxMacroMap = uni.apxMacroMap;
     shader.uniforms.apxRoadParams = uni.apxRoadParams;
     shader.uniforms.apxPolishTint = uni.apxPolishTint;
+    shader.uniforms.apxRoadTone = uni.apxRoadTone;
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${ROAD_PARS}`)
@@ -337,9 +382,13 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     aoIntensity: 1,
     vertexColors: true,
     normalScale: 1.05,
-    envMapIntensity: style.asphalt === 'wet' ? 1.15 : 0.85,
+    // Dry asphalt is a rough dielectric: it barely picks up the environment.
+    // At 0.85 an orange sunset sky washes a warm sheen over the whole ribbon.
+    envMapIntensity: style.asphalt === 'wet' ? 1.15 : 0.42,
     anisotropy: quality.anisotropy,
-    detail: { scale: 4.5, strength: 0.6 },
+    // 6 m per albedo tile, so scale 9 puts the fine aggregate normal at ~0.67 m
+    // — small enough to read as grit at 5 m and to mip away cleanly at 50 m.
+    detail: { scale: 9, strength: 0.55 },
   });
   owned.push(road);
   // placeholder until Decals hands us the atlas
@@ -542,6 +591,10 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
       if (p.macro !== undefined) v.y = p.macro;
       if (p.polish !== undefined) v.z = p.polish;
       if (p.wet !== undefined) v.w = p.wet;
+      const t = uni.apxRoadTone.value;
+      if (p.chroma !== undefined) t.x = p.chroma;
+      if (p.knee !== undefined) t.y = p.knee;
+      if (p.kneeK !== undefined) t.z = p.kneeK;
     },
     dispose() {
       for (const m of owned) m.dispose();

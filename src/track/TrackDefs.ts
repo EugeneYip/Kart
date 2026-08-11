@@ -468,12 +468,19 @@ export const TRACKS: Record<string, TrackDef> = {
     fogColor: 0xffb989,
     fogDensity: 0.0016,
     road: {
-      asphalt: 'worn',
-      tint: 0xf4ece2,
+      // The key light on this track is a low sunset sun (#fff1d6, r/b 1.49 in
+      // linear) and the env is an orange sky, so ANY warmth in the road's own
+      // albedo compounds into gold. 'worn' is both the lightest and the warmest
+      // asphalt recipe (base 0.372/0.366/0.352 + a full crack field); 'clean'
+      // is darker and very slightly cool (0.286/0.288/0.302). Tint and verge
+      // dust are held neutral-to-cool for the same reason — see the block
+      // comment on ROAD_FRAG in RoadMaterial.ts.
+      asphalt: 'clean',
+      tint: 0xe4e8ec,
       kerbA: 0xd8402f,
       kerbB: 0xf2efe6,
       line: 0xf6f2e6,
-      verge: 0xc9b98d,
+      verge: 0x8a7f6c,
       rail: 0xb9c3cc,
       energy: 0x53d8ff,
       racingLine: 0.85,

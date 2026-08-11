@@ -23,7 +23,7 @@
  */
 
 import type { RenderPipeline } from './RenderPipeline';
-import type { ToneMapName } from './effects/GradeEffect';
+import type { GradePresetName, ToneMapName } from './effects/GradeEffect';
 
 interface ProbeResult {
   meanLuma: number;
@@ -157,7 +157,10 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
      * or backgrounded tab has requestAnimationFrame throttled to a few Hz, which
      * makes every wall-clock frame-time measurement meaningless.
      */
-    async gpuCost(framesPerPass = 6): Promise<Record<string, number | string>> {
+    async gpuCost(
+      framesPerPass = 5,
+      onPartial?: (label: string, ms: number | string) => void,
+    ): Promise<Record<string, number | string>> {
       const gl = engine.renderer.getContext();
       const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as
         { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
@@ -193,12 +196,21 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
           }
           gl.deleteQuery(q);
         }
-        if (disjoint || times.length === 0) { out[label] = 'no sample'; continue; }
-        times.sort((a, b) => a - b);
-        out[label] = +times[Math.floor(times.length / 2)].toFixed(3);
+        if (disjoint || times.length === 0) {
+          out[label] = 'no sample';
+        } else {
+          times.sort((a, b) => a - b);
+          out[label] = +times[Math.floor(times.length / 2)].toFixed(3);
+          // Spread tells us whether the number is trustworthy: a shared dev
+          // machine with five other agents on it produces very torn samples.
+          out[label + ' (min..max)'] = `${times[0].toFixed(3)}..${times[times.length - 1].toFixed(3)} n=${times.length}`;
+        }
+        onPartial?.(label, out[label]);
       }
       let total = 0;
-      for (const v of Object.values(out)) if (typeof v === 'number') total += v;
+      for (const [k, v] of Object.entries(out)) {
+        if (typeof v === 'number' && !k.endsWith(')')) total += v;
+      }
       out['TOTAL_post_ms'] = +total.toFixed(3);
       return out;
     },
@@ -206,6 +218,66 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
     toneMap(name: ToneMapName): string {
       pipeline.setToneMap(name);
       return name;
+    },
+
+    /**
+     * Calibrate all four grade presets against the *matching* sky/lighting
+     * preset, which is the only way the numbers mean anything — measuring the
+     * `night` grade under a daylight sky tells you nothing.
+     *
+     * Writes to sessionStorage after every preset, so a run torn apart by a dev
+     * server reload still leaves usable data behind.
+     */
+    async autoCalibrate(shot = 'chase-straight'): Promise<unknown> {
+      const store = (k: string, v: unknown): void => {
+        try { sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v)); } catch { /* ignore */ }
+      };
+      store('postqa.calib.status', 'running');
+      const out: Record<string, unknown> = {};
+      try {
+        const { qa } = await bringUp(shot);
+        const look = pipeline.gradeEffect.uniforms.get('gkLook')!.value as { x: number };
+        // Overridable so a follow-up run can focus on one preset, or widen the
+        // ladder, without another source edit and reload.
+        const presets = readList('postqa.calib.presets', ['day', 'sunset', 'night', 'storm']) as GradePresetName[];
+        const muls = readList('postqa.calib.muls', ['0.7', '0.85', '1.2', '1.45']).map(Number);
+        out['sweep'] = { presets, muls };
+
+        for (const preset of presets) {
+          qa.setSky?.(preset);
+          pipeline.setGradePreset(preset, 0);
+          // Lighting presets cross-fade, so give them wall-clock time to land.
+          await settleWall(1600);
+          await applyShot(qa, shot);
+          await settleWall(400);
+
+          const base = look.x;
+          const row: Record<string, unknown> = { presetExposure: base };
+          row['at_shipped'] = await probe(engine);
+          for (const mul of muls) {
+            look.x = +(base * mul).toFixed(4);
+            await settleFrames(2);
+            row['exposure_' + look.x] = await probe(engine);
+          }
+          look.x = base;
+          await settleFrames(2);
+          out[preset] = row;
+          store('postqa.calib.result', out);
+          store('postqa.calib.status', 'partial:' + Object.keys(out).join(','));
+        }
+
+        qa.setSky?.('day');
+        pipeline.setGradePreset('day', 0);
+        await settleWall(600);
+        out['stats'] = qa.stats?.() ?? null;
+        store('postqa.calib.result', out);
+        store('postqa.calib.status', 'done');
+        return out;
+      } catch (err) {
+        store('postqa.calib.result', out);
+        store('postqa.calib.status', 'error: ' + (err as Error).message);
+        return { error: (err as Error).message, partial: out };
+      }
     },
 
     /**
@@ -565,6 +637,35 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
   else if (auto === 'sweep') void api.autoSweep(shot);
   else if (auto === 'report') void api.autoReport(shot);
   else if (auto === 'exposure') void api.autoExposure(shot);
+  else if (auto === 'calib') void api.autoCalibrate(shot);
+  else if (auto === 'gpu') {
+    void (async () => {
+      const store = (k: string, v: unknown): void => {
+        try { sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v)); } catch { /* ignore */ }
+      };
+      store('postqa.gpu.status', 'running');
+      const partial: Record<string, unknown> = {};
+      try {
+        const { qa } = await bringUp(shot);
+        const gl = engine.renderer.getContext();
+        partial['timerAvailable'] = gl.getExtension('EXT_disjoint_timer_query_webgl2') !== null;
+        partial['visibility'] = document.visibilityState;
+        store('postqa.gpu.result', partial);
+        const res = await api.gpuCost(5, (label, ms) => {
+          partial[label] = ms;
+          store('postqa.gpu.result', partial);
+        });
+        Object.assign(partial, res);
+        partial['stats'] = qa.stats?.() ?? null;
+        partial['visibilityAtEnd'] = document.visibilityState;
+        store('postqa.gpu.result', partial);
+        store('postqa.gpu.status', 'done');
+      } catch (err) {
+        store('postqa.gpu.result', partial);
+        store('postqa.gpu.status', 'error: ' + (err as Error).message);
+      }
+    })();
+  }
   else if (auto === 'uv') {
     void (async () => {
       const store = (k: string, v: unknown): void => {
@@ -589,6 +690,41 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
 /** Wait n presented frames. */
 async function settleFrames(n: number): Promise<void> {
   for (let i = 0; i < n; i++) await new Promise<void>((r) => requestAnimationFrame(() => r()));
+}
+
+/**
+ * Settle for a wall-clock duration, but cap the frame count so a tab whose
+ * requestAnimationFrame is throttled to ~0.5 Hz (which is what a hidden or
+ * non-compositing pane gives you) cannot stall the run indefinitely.
+ */
+async function settleWall(ms: number, maxFrames = 90): Promise<void> {
+  const end = Date.now() + ms;
+  let frames = 0;
+  while (Date.now() < end && frames < maxFrames) {
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    frames++;
+  }
+}
+
+/**
+ * Get the game to a stable, camera-locked gameplay frame: start the race, skip
+ * the cinematic (it is rAF-throttled and can take minutes in a hidden tab),
+ * hide the menus, and place the camera.
+ */
+async function bringUp(shot: string): Promise<{ qa: QaLike; game: GameLike }> {
+  const qa = await waitFor(
+    () => (globalThis as unknown as Record<string, QaLike | undefined>).__QA__,
+    60000,
+  );
+  const game = (globalThis as unknown as Record<string, GameLike | undefined>).__GAME__;
+  if (!qa || !game) throw new Error('no __QA__/__GAME__');
+  if (game.race?.state === 'idle') game.startRace?.({});
+  game.menus?.hideAll?.();
+  game.race?.skipIntro?.();
+  await waitFor(() => (game.race?.state === 'racing' ? true : undefined), 30000);
+  game.menus?.hideAll?.();
+  await applyShot(qa, shot);
+  return { qa, game };
 }
 
 /**
@@ -707,6 +843,9 @@ interface QaLike {
   shot(name: string): Promise<Record<string, number | string>>;
   harness?: HarnessLike;
   stats?: () => Record<string, number | string>;
+  /** Switches Sky *and* Lighting to a named preset. */
+  setSky?: (preset: string) => void;
+  gpuTimingAvailable?: () => boolean;
 }
 
 /** The camera framings we care about, without CaptureHarness's frame-count settle. */
@@ -739,9 +878,19 @@ async function applyShot(qa: QaLike, name: string): Promise<void> {
   } while (Date.now() < end);
 }
 interface GameLike {
-  race?: { state?: string };
+  race?: { state?: string; skipIntro?: () => void };
   menus?: { hideAll?: () => void };
   startRace?: (opts: Record<string, unknown>) => void;
+}
+
+/** Comma-separated sessionStorage override, falling back to a default list. */
+function readList(key: string, fallback: string[]): string[] {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return fallback;
+    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    return parts.length > 0 ? parts : fallback;
+  } catch { return fallback; }
 }
 
 /** Poll `fn` until it returns something truthy, or give up after `ms`. */
