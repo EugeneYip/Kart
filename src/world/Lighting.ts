@@ -227,6 +227,69 @@ export const SHADOW_LAYER = {
   MID_ONLY: 12,
 } as const;
 
+/**
+ * ---------------------------------------------------------------------------
+ *  ARTIFICIAL LIGHT AT NIGHT
+ * ---------------------------------------------------------------------------
+ *  Floodlight masts, streetlights, neon and traffic signals are all authored in
+ *  Props.ts as InstancedMeshes with emissive materials. They *glow* — they show
+ *  up in bloom — but before this they put no light onto the world: `PointLight`
+ *  appeared nowhere in the project, so the only lights at night were the moon
+ *  key and the hemisphere fill, and the night preset read as "the day rig with
+ *  the exposure pulled down".
+ *
+ *  Props.ts cannot simply create a light per lamp: a circuit carries ~14 masts
+ *  plus dozens of streetlights and signs, and every point light in the scene is
+ *  a BRDF evaluation for every lit fragment in the frame. So Lighting keeps a
+ *  small pool and re-points it at the nearest emitters each frame. The emitter
+ *  positions are read straight off the instance matrices, which means no other
+ *  subsystem has to publish anything and props that stream in are picked up by
+ *  the periodic rescan that the shadow mask already runs.
+ *
+ *  `intensity` is candela: three's point lights are physical, irradiance =
+ *  intensity / d². The values below are chosen so the pool of light under a
+ *  source lands near 1.0 irradiance, i.e. comparable to the 1.05 moon key —
+ *  visible pools of warm light, not blown-out white discs. `range` is the
+ *  falloff window so one lamp cannot leak across the whole circuit.
+ */
+interface EmitterClass {
+  /**
+   * Matched against `InstancedMesh.name`. A pattern, not an exact name: the same
+   * fitting is emitted under two naming conventions — the trackside pass makes
+   * `Prop:streetlightLamp` while the authored-scatter pass makes
+   * `Prop:authored:streetlamp:glow` — and an exact-name table matched neither on
+   * the coastal circuit, whose scene actually carries 3 flood heads, 1
+   * lighthouse lamp, 8 streetlamps and 26 lit shopfronts.
+   */
+  readonly match: RegExp;
+  readonly color: number;
+  readonly intensity: number;
+  readonly range: number;
+}
+
+const NIGHT_EMITTERS: readonly EmitterClass[] = [
+  { match: /floodhead|floodlight/i, color: 0xfff3d8, intensity: 1100, range: 90 },
+  { match: /lighthouselamp/i, color: 0xfff1cf, intensity: 500, range: 80 },
+  { match: /neon/i, color: 0xff62c8, intensity: 90, range: 26 },
+  { match: /gantrylights|gantry:glow/i, color: 0xffe6b0, intensity: 120, range: 32 },
+  { match: /streetlamp|streetlight/i, color: 0xffcf94, intensity: 70, range: 28 },
+  { match: /trafficlight/i, color: 0xffd06a, intensity: 30, range: 16 },
+  // Lit shopfronts and windows. Weak on purpose: there are 26 of them on one
+  // circuit, and their job is to make the town read as inhabited rather than to
+  // light the road.
+  { match: /townhouse:glow|building:glow|window/i, color: 0xffc98a, intensity: 34, range: 20 },
+] as const;
+
+/** Beyond this the 1/d² contribution of even a mast is below a bit of output. */
+const EMITTER_CULL = 150;
+
+interface Emitter {
+  x: number;
+  y: number;
+  z: number;
+  cls: number;
+}
+
 interface Cascade {
   light: THREE.DirectionalLight;
   /** view-space near/far of this slice, metres */
@@ -259,6 +322,8 @@ const _up = new THREE.Vector3();
 const _rimDir = new THREE.Vector3();
 const _camRight = new THREE.Vector3();
 const _tmpColor = new THREE.Color();
+const _m4 = new THREE.Matrix4();
+const _local = new THREE.Vector3();
 
 export class Lighting implements ISubsystem {
   /** Cascade 0's light — the canonical "sun" for anything that needs it. */
@@ -297,6 +362,11 @@ export class Lighting implements ISubsystem {
   private maskScanTimer = 1e9;
   private maskActive = false;
   private lastCameraShape = -1;
+
+  // --- artificial light at night ---
+  private lampPool: THREE.PointLight[] = [];
+  private emitters: Emitter[] = [];
+  private lampsWanted = false;
 
   constructor(
     scene: THREE.Scene,
@@ -531,12 +601,114 @@ export class Lighting implements ISubsystem {
   private rescanShadowMask(): void {
     this.nearOnly.length = 0;
     this.midOnly.length = 0;
+    if (this.lampsWanted) this.emitters.length = 0;
     this.scene.traverse((o) => {
       if (o.layers.isEnabled(SHADOW_LAYER.NEAR_ONLY)) this.nearOnly.push(o);
       else if (o.layers.isEnabled(SHADOW_LAYER.MID_ONLY)) this.midOnly.push(o);
+      if (this.lampsWanted) this.collectEmitters(o);
     });
     const total = this.nearOnly.length + this.midOnly.length;
     if (this.maskedWasVisible.length < total) this.maskedWasVisible.length = total;
+  }
+
+  // -------------------------------------------------------------------------
+  //  Artificial light at night
+  // -------------------------------------------------------------------------
+
+  /**
+   * Harvest one prop mesh's instances as light-source positions. The lamp head
+   * is not at the instance origin (a floodlight mast anchors at its base, 22 m
+   * below its heads), so the geometry's own bounding-sphere centre is used as
+   * the local offset — that is where the emissive part actually sits, because
+   * these meshes contain nothing but the glowing element.
+   */
+  private collectEmitters(o: THREE.Object3D): void {
+    const mesh = o as THREE.InstancedMesh;
+    if (!mesh.isInstancedMesh || mesh.count <= 0) return;
+    let cls = -1;
+    for (let i = 0; i < NIGHT_EMITTERS.length; i++) {
+      if (NIGHT_EMITTERS[i].match.test(mesh.name)) { cls = i; break; }
+    }
+    if (cls < 0) return;
+    const geo = mesh.geometry;
+    if (!geo.boundingSphere) geo.computeBoundingSphere();
+    const centre = geo.boundingSphere ? geo.boundingSphere.center : _local.set(0, 0, 0);
+    // Bounded so a pathological prop set cannot make the per-frame nearest
+    // search unbounded. 240 emitters is far more than any circuit authors.
+    for (let i = 0; i < mesh.count && this.emitters.length < 240; i++) {
+      mesh.getMatrixAt(i, _m4);
+      _local.copy(centre).applyMatrix4(_m4).applyMatrix4(mesh.matrixWorld);
+      this.emitters.push({ x: _local.x, y: _local.y, z: _local.z, cls });
+    }
+  }
+
+  /** Build the pool on the first night preset. Never for `low`. */
+  private ensureLampPool(): void {
+    if (this.lampPool.length > 0) return;
+    const n = this.quality.tier === 'low' ? 0
+      : this.quality.tier === 'medium' ? 3
+        : this.quality.tier === 'high' ? 5 : 6;
+    if (n === 0) return;
+    // Adding a light changes NUM_POINT_LIGHTS, which recompiles every material
+    // in the scene. So the pool is built once, on the first night preset, and
+    // then *kept* — daylight presets zero its intensity rather than removing it,
+    // because a second recompile mid-session is a visible hitch.
+    for (let i = 0; i < n; i++) {
+      const l = new THREE.PointLight(0xffffff, 0, 40, 2);
+      l.name = `NightLamp${i}`;
+      l.castShadow = false;
+      this.group.add(l);
+      this.lampPool.push(l);
+    }
+    this.markShadowMaskDirty();
+  }
+
+  /**
+   * Point the pool at the nearest emitters. O(emitters x pool) with both small,
+   * and allocation-free.
+   */
+  private updateLamps(): void {
+    const pool = this.lampPool;
+    if (pool.length === 0) return;
+    if (!this.lampsWanted || this.emitters.length === 0) {
+      for (const l of pool) l.intensity = 0;
+      return;
+    }
+    const cam = this.camera.position;
+    for (let k = 0; k < pool.length; k++) {
+      let best = -1;
+      let bestScore = 0;
+      let bestD = 0;
+      for (let e = 0; e < this.emitters.length; e++) {
+        const em = this.emitters[e];
+        if (em.cls < 0) continue;
+        const dx = em.x - cam.x;
+        const dy = em.y - cam.y;
+        const dz = em.z - cam.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > EMITTER_CULL * EMITTER_CULL) continue;
+        // Rank by the irradiance the source actually delivers here, not by
+        // distance: a mast at 60 m matters more than a shopfront at 20 m, and a
+        // nearest-first pool would spend all six slots on the shopfronts.
+        const score = NIGHT_EMITTERS[em.cls].intensity / Math.max(d2, 1);
+        if (score > bestScore) { bestScore = score; bestD = d2; best = e; }
+      }
+      const l = pool[k];
+      if (best < 0) { l.intensity = 0; continue; }
+      const em = this.emitters[best];
+      const c = NIGHT_EMITTERS[em.cls];
+      l.position.set(em.x, em.y, em.z);
+      l.color.setHex(c.color);
+      l.distance = c.range;
+      // Fade the last 30 m of the cull radius so a lamp entering the set does
+      // not pop a pool of light into existence.
+      const d = Math.sqrt(bestD);
+      l.intensity = c.intensity * clamp01((EMITTER_CULL - d) / 30);
+      // Claim it so the next pool slot picks a different source.
+      em.cls = -1 - em.cls;
+    }
+    // Un-claim for the next frame.
+    for (const em of this.emitters) if (em.cls < 0) em.cls = -1 - em.cls;
   }
 
   setSky(sky: Sky): void {
@@ -590,6 +762,16 @@ export class Lighting implements ISubsystem {
     // term straight rather than the 0.62 fudge the old fat ambient needed.
     worldSunUniforms.uAmbientIntensity.value = p.ambientIntensity;
 
+    // Night is the only preset with artificial light. Build the pool the first
+    // time one is selected; other presets just zero it (see ensureLampPool).
+    this.lampsWanted = p.night > 0.5 || p.cityGlow >= 0.5;
+    if (this.lampsWanted) {
+      this.ensureLampPool();
+      this.markShadowMaskDirty();
+    } else {
+      for (const l of this.lampPool) l.intensity = 0;
+    }
+
     if (this.sky && this.sky.presetName !== key) this.sky.setPreset(key);
     this.syncSunDirection();
   }
@@ -637,6 +819,7 @@ export class Lighting implements ISubsystem {
     }
 
     this.fitCascades();
+    this.updateLamps();
 
     // --- fills ---------------------------------------------------------------
     // Rim: perpendicular to the view, opposite the sun, slightly above.
@@ -813,6 +996,9 @@ export class Lighting implements ISubsystem {
     this.cascades.length = 0;
     this.nearOnly.length = 0;
     this.midOnly.length = 0;
+    for (const l of this.lampPool) { this.group.remove(l); l.dispose(); }
+    this.lampPool.length = 0;
+    this.emitters.length = 0;
     this.hemi?.dispose();
     this.rim?.dispose();
     this.scene.remove(this.group);

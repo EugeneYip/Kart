@@ -216,7 +216,10 @@ export class PhysicsWorld implements ISubsystem {
     b.steerCmd = 0;
     b.wallGrace = 0;
     b.wallContact = false;
+    b.contactClass = 0;
     b.wallImpactRef = 0;
+    b.vergeAmount = 0;
+    b.voidTime = 0;
     b.pitch = 0;
     b.roll = 0;
     b.pitchVel = 0;

@@ -116,6 +116,36 @@ export const PHYS = {
   wallNoseLimit: 0.0,
   wallAlignRate: 2.4,
 
+  // --- the verge band (P0b-5) -----------------------------------------------
+  /**
+   * Metres past the asphalt edge that count as "fully on the verge". 1.6 m is
+   * one kerb width (`TrackBuilder.CROSS.kerbW` = 1.55) — the assumption is
+   * documented rather than imported because `ITrackService` publishes
+   * `halfWidth` but not the kerb/shoulder widths.
+   *
+   * `vergeAmount` = clamp01((|lat| - halfWidth) / vergeRef), so a kart whose CoM
+   * is 0.4 m over the line is charged a quarter of the drag and a kart sitting
+   * squarely on the kerb is charged all of it.
+   */
+  vergeRef: 1.6,
+  /**
+   * Continuous drag over the verge band, 1/s at full overlap. **Deliberately
+   * NOT multiplied by `throttleDragRelief`**: full throttle switches coast and
+   * surface drag almost off (relief = 0.05), so a throttle-scaled term would
+   * make cutting a corner across the kerb completely free. This is the number
+   * that makes the friction model a real cost instead of an exploit.
+   */
+  vergeDrag: 0.9,
+  /**
+   * Surfaces that already charge their own drag (grass, sand, dirt) must not be
+   * double-charged: the verge term fades to zero across
+   * `vergeSurfaceCap ± vergeSurfaceSpan` of `SurfaceProperties.drag`. Asphalt
+   * (0.010), metal (0.008) and ice (0.004) get the full term; dirt (0.055) and
+   * grass (0.100) get none.
+   */
+  vergeSurfaceCap: 0.03,
+  vergeSurfaceSpan: 0.02,
+
   /** Yaw authority retained while airborne. */
   airYawFactor: 0.34,
   /** Aerodynamic downforce at top speed, in g. Keeps ramps landing flat. */
@@ -257,6 +287,23 @@ export interface KartBody {
   rumblePhase: number;
   padCooldown: number;
 
+  // ---- road frame, published once per step by `resolveSurface` --------------
+  //  Cached so the contact model can classify a barrier and the drag model can
+  //  measure the verge band without either of them projecting again.
+  /** Signed lateral offset of the CoM from the centreline, metres (+ = right). */
+  roadLat: number;
+  /** Half-width of the drivable asphalt at that point, metres. */
+  roadHalfWidth: number;
+  /** Road surface normal at the nearest centreline point. */
+  roadNormal: THREE.Vector3;
+  /** Road lateral axis at the nearest centreline point. */
+  roadBinormal: THREE.Vector3;
+  /**
+   * 0..1 — how far past the asphalt edge the CoM is, in units of `PHYS.vergeRef`.
+   * Drives the verge friction (KartPhysics) and the verge rumble (Suspension).
+   */
+  vergeAmount: number;
+
   // ---- drift ----
   driftPhase: DriftPhase;
   driftDir: number;
@@ -306,14 +353,29 @@ export interface KartBody {
   wallCooldown: number;
   /** True on any tick where a wall probe is overlapping. */
   wallContact: boolean;
+  /**
+   * What is being touched: 0 none, 1 verge (track edge — friction only),
+   * 2 solid scenery. See `Contact` in KartCollision.
+   */
+  contactClass: number;
   /** Unit normal of the wall last touched, pointing AWAY from the wall. */
   wallNormal: THREE.Vector3;
   /** Seconds left of post-impact grace — see KartCollision.resolveWalls. */
   wallGrace: number;
   /** Closing speed of the impact that opened the current contact, m/s. */
   wallImpactRef: number;
-  /** Monotonic count of *penalised* wall impacts. Debug/QA only. */
+  /**
+   * Monotonic count of *penalised* impacts. Since P0b-5 the ONLY thing that can
+   * increment this is a near-head-on shunt into solid scenery: a verge contact
+   * is friction, not a penalty, and must never appear here. QA asserts on it.
+   */
   wallImpacts: number;
+  /** Subset of `wallImpacts` charged by solid scenery. Debug/QA only. */
+  solidImpacts: number;
+  /** Count of continuous scrape events published. Debug/QA only. */
+  scrapeEvents: number;
+  /** Seconds spent grounded on `Void` — the recovery grace. See checkBounds. */
+  voidTime: number;
 
   // ---- readouts (debug / VFX) ----
   slipAngle: number;
@@ -410,6 +472,12 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     rumblePhase: state.id * 1.7,
     padCooldown: 0,
 
+    roadLat: 0,
+    roadHalfWidth: 11,
+    roadNormal: new THREE.Vector3(0, 1, 0),
+    roadBinormal: new THREE.Vector3(1, 0, 0),
+    vergeAmount: 0,
+
     driftPhase: DriftPhase.None,
     driftDir: 0,
     driftTime: 0,
@@ -450,10 +518,14 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     bumpCooldown: 0,
     wallCooldown: 0,
     wallContact: false,
+    contactClass: 0,
     wallNormal: new THREE.Vector3(0, 1, 0),
     wallGrace: 0,
     wallImpactRef: 0,
     wallImpacts: 0,
+    solidImpacts: 0,
+    scrapeEvents: 0,
+    voidTime: 0,
 
     slipAngle: 0,
     gripFactor: 1,
@@ -631,8 +703,19 @@ export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
   }
 
   // --- surface -----------------------------------------------------------
+  resolveRoadFrame(b, track);
   resolveSurface(b, track);
-  const props = SURFACES[b.surface] ?? SURFACES[SurfaceType.Road];
+  let props = SURFACES[b.surface] ?? SURFACES[SurfaceType.Road];
+  if (b.grounded && b.surface === SurfaceType.Void) {
+    // A kart with wheels still on ground the track calls `Void` is off the
+    // racing line, not in a hole. `SURFACES[Void]` is all zeros — including
+    // `speedMul: 0`, which collapses the soft cap and deletes the kart's speed
+    // outright. On the shipping track that band is only 0.4 m wide, just past
+    // the shoulder edge, so the old behaviour was a hard stop for what the
+    // player reads as a wide line. Charge heavy off-road instead; `checkBounds`
+    // owns the actual recovery, and it now waits `COLL.voidGrace` first.
+    props = SURFACES[SurfaceType.OffRoad];
+  }
   const immune = b.boostImmunity > 0 || st.starTime > 0;
   const speedMul = immune ? Math.max(1, props.speedMul) : props.speedMul;
   const surfDrag = immune ? Math.min(0.012, props.drag) : props.drag;
@@ -880,6 +963,15 @@ export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
   }
   aLong -= vFwd * dragRate;
 
+  // The verge (P0b-5). Riding the kerb / apron is FRICTION — a steady, entirely
+  // predictable cost with no impulse, no yaw and no event, applied outside the
+  // throttle relief above so that it bites under power. Fades out on surfaces
+  // that already charge their own drag so grass isn't billed twice.
+  if (b.grounded && b.vergeAmount > 0) {
+    const fade = clamp01((PHYS.vergeSurfaceCap - surfDrag) / PHYS.vergeSurfaceSpan);
+    aLong -= vFwd * PHYS.vergeDrag * b.vergeAmount * fade;
+  }
+
   // Gravity along the slope. NOTE: the honest slope force is ALREADY applied —
   // `_v1` carries gravity plus the suspension normal force, whose sum on an
   // incline is exactly the down-slope component. This is a small extra bias on
@@ -953,6 +1045,24 @@ export function syncVelocityReadouts(b: KartBody): void {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Where the CoM sits in the road's own frame. One projection per step, cached on
+ * the body, consumed by three places that would otherwise each project again:
+ * the verge drag below, `Suspension`'s verge rumble, and `KartCollision`'s
+ * contact classifier. `ITrackService.project` is allocation-free (both the real
+ * `Track` and the bench return pooled samples), so this adds no garbage.
+ */
+function resolveRoadFrame(b: KartBody, track: ITrackService): void {
+  const s = track.project(b.position);
+  b.roadHalfWidth = s.halfWidth;
+  b.roadNormal.copy(s.normal);
+  b.roadBinormal.copy(s.binormal);
+  _v1.copy(b.position).sub(s.position);
+  b.roadLat = _v1.dot(s.binormal);
+  const over = Math.abs(b.roadLat) - s.halfWidth;
+  b.vergeAmount = b.grounded && over > 0 ? clamp01(over / PHYS.vergeRef) : 0;
+}
 
 function resolveSurface(b: KartBody, track: ITrackService): void {
   let s: SurfaceType;
@@ -1074,6 +1184,8 @@ function stepRespawn(b: KartBody, dt: number): void {
   b.steerCmd = 0;
   b.wallGrace = 0;
   b.wallContact = false;
+  b.contactClass = 0;
+  b.vergeAmount = 0;
   b.pitch = damp(b.pitch, 0, 0.1, dt);
   b.roll = damp(b.roll, 0, 0.1, dt);
   b.pitchVel = 0;
@@ -1123,6 +1235,9 @@ function guardNaN(b: KartBody): void {
   b.steerCmd = 0;
   b.wallGrace = 0;
   b.wallContact = false;
+  b.contactClass = 0;
+  b.vergeAmount = 0;
+  b.voidTime = 0;
   b.pitch = 0;
   b.roll = 0;
   b.pitchVel = 0;

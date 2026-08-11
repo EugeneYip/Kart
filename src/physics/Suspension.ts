@@ -66,6 +66,8 @@ const SUSP = {
   /** Off-road rumble: metres of ground displacement at roughness 1. */
   rumbleAmp: 0.055,
   rumbleFreq: 26,
+  /** Extra effective roughness at full verge overlap — see KartBody.vergeAmount. */
+  vergeRough: 0.35,
   /** Landing impact threshold, m/s, below which we don't emit `kart:land`. */
   landThreshold: 1.2,
   /** How long all four wheels must be off the ground to count as airborne. */
@@ -125,6 +127,11 @@ export class Suspension {
     const props = SURFACES[b.surface] ?? SURFACES[SurfaceType.Road];
     const speedAbs = Math.abs(b.forwardSpeed);
     b.rumblePhase += dt * SUSP.rumbleFreq * (0.4 + clamp01(speedAbs / 20));
+    // Riding the verge rumbles even where the surface itself is smooth asphalt —
+    // that shake IS the feedback for the friction cost in KartPhysics, and it is
+    // the only cue a player gets that they are on the kerb rather than the road.
+    // One tick stale (walls resolve after this), which is 8 ms and invisible.
+    const roughness = props.roughness + SUSP.vergeRough * b.vergeAmount;
 
     for (let i = 0; i < 4; i++) {
       const w = b.wheels[i];
@@ -158,9 +165,9 @@ export class Suspension {
       // Off-road rumble: shake the *ground*, not the chassis — that way the
       // springs do the work and the shake is filtered exactly like a real bump.
       let dist = _hit.distance;
-      if (props.roughness > 0.01 && speedAbs > 1.5) {
+      if (roughness > 0.01 && speedAbs > 1.5) {
         const n = hash11(Math.floor(b.rumblePhase * 3.1) + i * 37.7) - 0.5;
-        dist += n * SUSP.rumbleAmp * props.roughness * clamp01(speedAbs / 14) * 2;
+        dist += n * SUSP.rumbleAmp * roughness * clamp01(speedAbs / 14) * 2;
       }
 
       let len = dist - SUSP.rayLift - t.wheelRadius;

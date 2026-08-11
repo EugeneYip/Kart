@@ -41,6 +41,12 @@ export interface SkyPreset {
   skyGamma: number;
   /** Saturation restored after compression — AgX desaturates as it rolls off. */
   skySat: number;
+  /**
+   * Strength of the warm/cool crossover chroma dip, 0..1. See `crossoverAmount`
+   * in the sky shader: this is the fix for the green sunset band. Presets whose
+   * sky never crosses from cool to warm (day, storm) can leave it low.
+   */
+  chromaDip: number;
 
   cloudCoverage: number;
   cloudErode: number;
@@ -122,40 +128,61 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     // and props read as sitting *on* the track rather than floating over it.
     sunElevation: 42, sunAzimuth: 38, moonElevation: -40, moonAzimuth: 210,
     turbidity: 2.4, rayleigh: 1.9, mie: 0.0042, mieG: 0.80, sunIntensity: 1.0,
-    skyScale: 0.34, skyGamma: 0.42, skySat: 1.30,
-    cloudCoverage: 0.46, cloudErode: 0.55, cloudOpacity: 1.0, cloudSpeed: 1.0,
+    // chromaDip is small here on purpose: a 42 deg sun never produces the
+    // warm/cool crossover, so measured over the whole sky column `day` has zero
+    // samples in the green band with the dip on OR off. All 0.25 buys is
+    // insurance for the near-horizon haze band (its only measurable effect:
+    // chroma 0.459 -> 0.36 at 3 deg elevation, hue unchanged at 198).
+    skyScale: 0.34, skyGamma: 0.42, skySat: 1.30, chromaDip: 0.25,
+    // Coverage is a threshold in standard deviations of the cloud noise now, so
+    // it means what it says: 0.52 measures 37.6 % of the sky between 6 deg and
+    // 40 deg elevation covered by the union of the three decks (see the note on
+    // `layerDensity`). It used to mean nothing at all — every deck was empty.
+    cloudCoverage: 0.52, cloudErode: 0.55, cloudOpacity: 1.0, cloudSpeed: 1.0,
     cloudLit: 0xfff8ee, cloudDark: 0x53749c, cloudAmbient: 0.34, cloudLum: 2.3,
     haze: 0x9dc3ea, hazeStrength: 0.60, hazeLum: 1.00,
     night: 0, cityGlow: 0, embers: 0, lightning: 0,
     keyColor: 0xfff1d6, keyIntensity: 3.9,
-    skyAmbient: 0x8fbdf2, groundAmbient: 0x5d5747, ambientIntensity: 0.36,
+    skyAmbient: 0x8fbdf2, groundAmbient: 0x6d6553, ambientIntensity: 0.40,
     bounceColor: 0x8f8a63, bounceIntensity: 0.45,
     rimColor: 0xbcd8ff, rimIntensity: 0.22,
     fogColor: 0x5c80b0, fogSunColor: 0xffe3ae, fogDensity: 0.00085, fogHeight: 3, fogFalloff: 0.020,
     envIntensity: 0.40,
-    godRays: 0.18, godRayColor: 0xfff0d0, shadowIntensity: 1.0,
+    // NOT 1.0. A shadow map knows about occlusion but nothing about the bounce
+    // that fills a real shadow, so a fully-opaque shadow term is the darkest
+    // possible answer — the reported 8:1 split inside one frame (a kart in the
+    // grandstand's shadow at 15 % luminance beside a sunlit wall at 250).
+    // Leaving 10 % of the key inside shadow is the one lever that lifts *only*
+    // shadowed pixels; raising ambientIntensity or envIntensity lifts the lit
+    // ones too and flattens the whole image, which is the trap this file warns
+    // about above. The grade's blue shadowTint keeps the residual from reading
+    // as warm spill.
+    godRays: 0.18, godRayColor: 0xfff0d0, shadowIntensity: 0.90,
   }),
   sunset: P({
     sunElevation: 4.5, sunAzimuth: -74, moonElevation: 22, moonAzimuth: 120,
     turbidity: 5.4, rayleigh: 3.3, mie: 0.014, mieG: 0.872, sunIntensity: 1.1,
-    skyScale: 0.50, skyGamma: 0.44, skySat: 1.32,
-    cloudCoverage: 0.50, cloudErode: 0.42, cloudOpacity: 1.0, cloudSpeed: 0.75,
+    skyScale: 0.50, skyGamma: 0.44, skySat: 1.32, chromaDip: 1.0,
+    cloudCoverage: 0.54, cloudErode: 0.42, cloudOpacity: 1.0, cloudSpeed: 0.75,
     cloudLit: 0xffc98a, cloudDark: 0x3a2b45, cloudAmbient: 0.30, cloudLum: 2.0,
     haze: 0xff9a5e, hazeStrength: 0.68, hazeLum: 0.95,
     night: 0, cityGlow: 0.1, embers: 0, lightning: 0,
     keyColor: 0xffa055, keyIntensity: 3.7,
-    skyAmbient: 0x6f8fd4, groundAmbient: 0x3a2c26, ambientIntensity: 0.38,
+    skyAmbient: 0x6f8fd4, groundAmbient: 0x483630, ambientIntensity: 0.42,
     bounceColor: 0xa35f38, bounceIntensity: 0.5,
     rimColor: 0x8fb4ff, rimIntensity: 0.36,
     fogColor: 0x8a5a4a, fogSunColor: 0xffbe80, fogDensity: 0.00105, fogHeight: 2, fogFalloff: 0.017,
     envIntensity: 0.45,
-    godRays: 1.0, godRayColor: 0xffb066, shadowIntensity: 1.0,
+    // See the note on `day.shadowIntensity` — same reasoning, and a low sun
+    // makes the shadows long enough that an opaque shadow term covers a large
+    // fraction of the frame.
+    godRays: 1.0, godRayColor: 0xffb066, shadowIntensity: 0.90,
   }),
   night: P({
     sunElevation: -16, sunAzimuth: -74, moonElevation: 42, moonAzimuth: -30,
     turbidity: 1.8, rayleigh: 0.7, mie: 0.0035, mieG: 0.78, sunIntensity: 1.0,
-    skyScale: 0.30, skyGamma: 0.50, skySat: 1.15,
-    cloudCoverage: 0.33, cloudErode: 0.6, cloudOpacity: 0.9, cloudSpeed: 0.6,
+    skyScale: 0.30, skyGamma: 0.50, skySat: 1.15, chromaDip: 0.35,
+    cloudCoverage: 0.38, cloudErode: 0.6, cloudOpacity: 0.9, cloudSpeed: 0.6,
     cloudLit: 0x6b7c98, cloudDark: 0x0a0e1a, cloudAmbient: 0.25, cloudLum: 1.1,
     haze: 0x121b30, hazeStrength: 0.72, hazeLum: 0.55,
     night: 1, cityGlow: 1.0, embers: 0, lightning: 0,
@@ -170,8 +197,8 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
   storm: P({
     sunElevation: 27, sunAzimuth: 150, moonElevation: -30, moonAzimuth: 20,
     turbidity: 9.5, rayleigh: 1.1, mie: 0.022, mieG: 0.70, sunIntensity: 0.55,
-    skyScale: 0.34, skyGamma: 0.46, skySat: 1.06,
-    cloudCoverage: 0.88, cloudErode: 0.22, cloudOpacity: 1.0, cloudSpeed: 2.4,
+    skyScale: 0.34, skyGamma: 0.46, skySat: 1.06, chromaDip: 0.25,
+    cloudCoverage: 0.92, cloudErode: 0.22, cloudOpacity: 1.0, cloudSpeed: 2.4,
     cloudLit: 0x9aa4b2, cloudDark: 0x1d2228, cloudAmbient: 0.55, cloudLum: 1.5,
     haze: 0x5f6a76, hazeStrength: 0.78, hazeLum: 0.80,
     night: 0, cityGlow: 0, embers: 0, lightning: 1,
@@ -186,8 +213,8 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
   volcanic: P({
     sunElevation: 11, sunAzimuth: 196, moonElevation: -20, moonAzimuth: 10,
     turbidity: 8.5, rayleigh: 2.6, mie: 0.032, mieG: 0.90, sunIntensity: 0.85,
-    skyScale: 0.46, skyGamma: 0.45, skySat: 1.22,
-    cloudCoverage: 0.64, cloudErode: 0.35, cloudOpacity: 1.0, cloudSpeed: 1.4,
+    skyScale: 0.46, skyGamma: 0.45, skySat: 1.22, chromaDip: 0.90,
+    cloudCoverage: 0.68, cloudErode: 0.35, cloudOpacity: 1.0, cloudSpeed: 1.4,
     cloudLit: 0xff7a3a, cloudDark: 0x1e0c10, cloudAmbient: 0.42, cloudLum: 1.8,
     haze: 0x8f3a20, hazeStrength: 0.76, hazeLum: 0.85,
     night: 0, cityGlow: 0, embers: 1, lightning: 0,
@@ -228,6 +255,9 @@ uniform float uSunIntensity;
 uniform float uSkyScale;
 uniform float uSkyGamma;
 uniform float uSkySat;
+uniform float uChromaDip;
+/** Camera XZ, so the cloud planes are intersected in world space and parallax. */
+uniform vec2  uCamXZ;
 
 uniform float uCloudCoverage;
 uniform float uCloudErode;
@@ -319,57 +349,174 @@ vec3 atmosphere(vec3 rd, out float sunDisc){
  * compression and AgX's own rolloff bleach the hue. This is the single change
  * that turns the sky from milk into a believable saturated blue.
  */
+/**
+ * WARM/COOL CROSSOVER DETECTOR — the green sunset band.
+ *
+ * At a low sun the analytic sky runs cool at the zenith and warm at the
+ * horizon, and G is high at *both* ends: measured off a shipped frame the two
+ * ends are (119,171,166) and (231,185,129). A per-channel ramp between those
+ * has G as its largest channel across the middle of the transition, which is
+ * the reported hue ladder 174 -> 163 -> 136 -> 85 -> 33 — four consecutive
+ * heights in the green band. No colour space fixes that: the short hue path
+ * from 174 to 33 runs through green in every one of them.
+ *
+ * So collapse chroma instead of rotating hue. This returns a 4t(1-t)-shaped
+ * bump that peaks exactly where |R-B| is smallest, i.e. at the crossover,
+ * gated on green actually being the dominant channel so a neutral overcast sky
+ * is left alone. Multiplying skySat by (1 - this) is also the height-dependent
+ * skySat the report asked for — the crossover only happens at one elevation for
+ * a given sun, so it *is* a height ramp, but one that follows the sun instead
+ * of being pinned to a hard-coded rd.y.
+ */
+float crossoverAmount(vec3 c){
+  float mx = max(max(c.r, c.g), c.b);
+  float xf = 1.0 - clamp(abs(c.r - c.b) / max(mx, 1e-5), 0.0, 1.0);
+  float gRel = clamp((c.g - 0.5 * (c.r + c.b)) / max(mx, 1e-5), 0.0, 1.0);
+  return smoothstep(0.24, 0.86, xf) * smoothstep(0.008, 0.075, gRel);
+}
+
+/** Pull a colour towards a low-chroma warm cream of its own luminance. */
+vec3 creamify(vec3 c, float amt){
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  return mix(c, vec3(l) * vec3(1.085, 1.0, 0.90), amt);
+}
+
 vec3 skyGrade(vec3 c){
   float l = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
   float lo = uSkyScale * pow(l, uSkyGamma);
   c *= lo / l;
-  return max(mix(vec3(lo), c, uSkySat), vec3(0.0));
+  // Detect on the *saturated* result, not on 'c': the extrapolation below is
+  // what the eye sees, and measuring pre-saturation chroma made the dip fire on
+  // merely-cyan zenith pixels as well as on the green band.
+  float dip = crossoverAmount(mix(vec3(lo), c, uSkySat)) * uChromaDip;
+  vec3 g = mix(vec3(lo), c, mix(uSkySat, 0.32, dip));
+  return max(creamify(g, dip * 0.66), vec3(0.0));
 }
 
 // --- clouds -----------------------------------------------------------------
-vec4 nz(vec2 uv, float lod){ return textureLod(uNoise, uv, lod); }
+#define NOISE_PX 256.0
+vec4 nz(vec2 uv, float lod){ return textureLod(uNoise, uv, clamp(lod, 0.0, 8.0)); }
+
+/**
+ * ---------------------------------------------------------------------------
+ *  WHY THIS USED TO RENDER NOTHING — read before touching the constants.
+ * ---------------------------------------------------------------------------
+ *  'makeCloudNoise(256)' packs four tiling fBms. Measured over all 65 536
+ *  texels (and stable to within 3 % through mip 3):
+ *
+ *      channel            content            mean    sigma    range
+ *      R  fBm f3,  4 oct  coarse body        0.496   0.098    0.20 .. 0.74
+ *      G  fBm f7,  3 oct  cumulus masses     0.486   0.141    0.08 .. 0.83
+ *      B  fBm f17, 3 oct  erosion detail     0.494   0.138    0.06 .. 0.90
+ *      A  fBm f2,  2 oct  cloud groups       0.368   0.158    0.07 .. 0.75
+ *
+ *  Every channel is a sum of value-noise octaves, so it is near-Gaussian and
+ *  *narrow*. The old density test was
+ *
+ *      base = 0.60R + 0.28G + 0.12B;             // sigma 0.049 about 0.50
+ *      d    = (base - (1 - cov)) / cov;
+ *      d    = clamp(d * 1.55 - B * erode * 0.85, 0, 1);
+ *
+ *  which for the shipped 'day' coverage of 0.46 needed base > 0.61 to survive
+ *  the erosion subtraction — that is +2.2 sigma, and only reachable at mip 0.
+ *  It never got mip 0: the lod was 'log2(1 + t*scale*220) - 3', a function of
+ *  distance rather than of footprint, which asked for mip 4.8 at 10 deg
+ *  elevation where the true screen footprint is mip 0.4. Box-filtering to mip 4
+ *  drops max(base) to 0.644 and mip 6 to 0.532 — *below the threshold* — so the
+ *  predicate was false for every pixel of every deck. Measured alpha was
+ *  identically 0.0000 across the whole hemisphere for day, sunset and night;
+ *  only 'storm' (cov 0.88, threshold 0.12) ever produced any cloud at all, and
+ *  then only on the middle deck. Authored, wired, never once fired.
+ *
+ *  Two fixes, both necessary:
+ *    1. the lod comes from the real screen-space derivative (see cloudLayer);
+ *    2. the threshold is expressed in standard deviations, so "coverage" is a
+ *       coverage fraction at any mip level rather than an absolute noise value.
+ */
+const vec4 NZ_MEAN = vec4(0.496, 0.486, 0.494, 0.368);
+const vec4 NZ_ISIG = vec4(10.24, 7.072, 7.225, 6.333);
 
 float layerDensity(vec2 p, float cov, float erode, float lod){
-  vec2 w = nz(p * 0.21 + vec2(0.011, 0.007) * uTime, lod + 1.0).ba;
-  vec2 q = p + (w - 0.5) * 0.62;
+  // Low-frequency group mask + domain warp. This is what puts clear sky between
+  // cloud masses instead of an even sheet of noise. Deliberately NOT animated:
+  // shapes stay rigid in tile space and the whole field translates with the
+  // deck's drift, so clouds move instead of boiling in place.
+  vec4 w = nz(p * 0.31, lod + 1.7);
+  float clump = (w.a - NZ_MEAN.a) * NZ_ISIG.a;
+  vec2 q = p + vec2(w.a - NZ_MEAN.a, w.r - NZ_MEAN.r) * 1.15;
+
   vec4 n = nz(q, lod);
-  float base = n.r * 0.60 + n.g * 0.28 + n.b * 0.12;
-  float d = (base - (1.0 - cov)) / max(cov, 1e-3);
-  d = clamp(d * 1.55 - n.b * erode * 0.85, 0.0, 1.0);
-  return d;
+  // Mip flattening: sigma(G) falls 0.141 -> 0.080 by mip 6, so the last few
+  // degrees above the horizon would lose their cloud to the filter rather than
+  // to the art direction. Compensate on the way out.
+  float body = (n.g - NZ_MEAN.g) * NZ_ISIG.g * mix(1.0, 1.85, smoothstep(3.5, 6.0, lod));
+  float fine = (n.b - NZ_MEAN.b) * NZ_ISIG.b;
+
+  float v = body * 0.90 + clump * 0.66 + fine * 0.20 - (2.30 - cov * 3.55);
+  // A firm core with a short shoulder reads as a cumulus edge; a wide ramp
+  // reads as smoke. Erosion bites the shoulder only, never the core.
+  float d = smoothstep(0.0, 1.05, v);
+  return d * (1.0 - erode * 0.50 * smoothstep(0.75, 0.0, v));
 }
 
-/** rgb = premultiplied colour, a = coverage */
-vec4 cloudLayer(vec3 rd, float height, float scale, vec2 drift,
-                float cov, float erode, float opacity, float cosT, float lightMul){
-  if (rd.y <= 0.004) return vec4(0.0);
-  float t = height / rd.y;
-  if (t > 260000.0) return vec4(0.0);
-  vec2 p = rd.xz * t * scale + drift;
-  float lod = clamp(log2(1.0 + t * scale * 220.0) - 3.0, 0.0, 6.0);
+/**
+ * One cloud deck. rgb = premultiplied radiance, a = coverage.
+ *
+ * 'deep' adds a second self-shadow tap, 'vert' the zenith-ward tap that gives
+ * the deck lit tops and shadowed bottoms. Cirrus needs neither, so the three
+ * decks together cost the same 9 density evaluations the empty version did.
+ */
+vec4 cloudLayer(vec3 rd, float height, vec2 scale, vec2 drift, float cov,
+                float erode, float opacity, float cosT, float lightMul,
+                const in bool deep, const in bool vert){
+  float t = height / max(rd.y, 1e-4);
+  // Intersect the plane in *world* space so the decks parallax against each
+  // other as the camera drives: for the same travel the low deck shifts ~7x
+  // further across the noise than the cirrus, which is the whole point of
+  // having three of them.
+  vec2 p = (uCamXZ + rd.xz * t) * scale + drift;
+  // Real footprint from the screen-space derivative — resolution and fov
+  // independent, and correct near the horizon where the plane projection
+  // compresses the field by 1/rd.y^2. Computed before any early-out so the
+  // derivative stays in uniform control flow.
+  float lod = clamp(log2(max(max(fwidth(p.x), fwidth(p.y)), 1e-7) * NOISE_PX), 0.0, 6.0);
+  if (rd.y <= 0.004 || t > 260000.0) return vec4(0.0);
 
   float d = layerDensity(p, cov, erode, lod);
-  if (d <= 0.002) return vec4(0.0);
+  if (d <= 0.003) return vec4(0.0);
 
-  // Self-shadowing: march a couple of steps toward the sun in plane space.
-  vec2 so = normalize(uSunDir.xz + vec2(1e-4)) * (0.020 + 0.012 / max(0.15, abs(uSunDir.y)));
-  float s1 = layerDensity(p + so,        cov, erode, lod);
-  float s2 = layerDensity(p + so * 2.6,  cov, erode, lod + 0.5);
+  // Self-shadowing: step toward the sun in plane space. The step grows as the
+  // sun drops, which is what makes a low sun rake across the deck.
+  vec2 so = normalize(uSunDir.xz + vec2(1e-4)) * (0.022 + 0.013 / max(0.15, abs(uSunDir.y)));
+  float s1 = layerDensity(p + so, cov, erode, lod);
+  float s2 = deep ? layerDensity(p + so * 2.7, cov, erode, lod + 0.5) : s1 * 0.8;
   float occ = clamp(s1 * 0.75 + s2 * 0.45, 0.0, 1.4);
-  float lightE = exp(-occ * 2.4);
+  float lightE = exp(-occ * 2.35);
+
+  // Zenith-ward tap. Where the mass thins towards the zenith we are looking at
+  // its top; where it thickens we are under its base.
+  float topLit = 0.62;
+  if (vert) {
+    float dz = layerDensity(p - normalize(rd.xz + vec2(1e-4)) * 0.030, cov, erode, lod);
+    topLit = 0.5 + 0.5 * clamp((d - dz) * 2.1, -1.0, 1.0);
+  }
 
   // Beer-powder: thin edges glow, thick cores go dark.
   float powder = 1.0 - exp(-d * 5.5);
-  float phase  = hgPhase(cosT, 0.62) * 5.0 + hgPhase(cosT, -0.15) * 1.4;
+  float phase  = hgPhase(cosT, 0.62) * 3.2 + hgPhase(cosT, -0.16) * 1.1;
 
-  vec3 col = mix(uCloudDark, uCloudLit, lightE * (0.55 + 0.45 * powder));
-  col += uCloudLit * phase * lightE * 0.30 * lightMul;
-  // Silver lining — thin, sun-facing edges.
-  col += uCloudLit * pow(clamp(cosT, 0.0, 1.0), 9.0) * (1.0 - d) * lightE * 1.9 * lightMul;
-  col = mix(col, uCloudLit * uCloudAmbient, 0.18);
+  float shade = lightE * mix(0.34, 1.0, topLit) * (0.52 + 0.48 * powder);
+  vec3 col = mix(uCloudDark, uCloudLit, clamp(shade, 0.0, 1.0));
+  col += uCloudLit * phase * lightE * 0.26 * lightMul * (0.40 + 0.60 * powder);
+  // Silver lining. (d - s1) > 0 is exactly the rim that faces the sun, so the
+  // lining needs no samples of its own.
+  float rim = clamp((d - s1) * 3.4, 0.0, 1.0) * (1.0 - d * 0.55);
+  col += uCloudLit * rim * (0.55 + 1.9 * pow(clamp(cosT, 0.0, 1.0), 4.0)) * lightMul;
+  // Sky fill on the base only, so ambient never washes the lit tops.
+  col = mix(col, uCloudLit * uCloudAmbient, 0.20 * (1.0 - topLit));
 
-  float a = clamp(d * opacity * 1.35, 0.0, 1.0);
-  a *= smoothstep(0.006, 0.075, rd.y);
+  float a = clamp(d * opacity * 1.25, 0.0, 1.0);
+  a *= smoothstep(0.010, 0.085, rd.y);
   // uCloudLum lifts the deck above the graded sky so tops read bright and
   // bottoms read as shadow instead of both saturating to white.
   return vec4(col * a * uCloudLum, a);
@@ -473,13 +620,25 @@ void main(){
   float lightMul = mix(1.0, 0.10, uNight);
 
   // Three parallaxed cloud decks — high cirrus, main cumulus, low scud.
+  //
+  // The scales set the feature size, and they matter as much as the coverage:
+  // 1/scale is the tile size in metres, and the G channel (base frequency 7)
+  // carries the cumulus masses. The middle deck at 1.05e-4 tiles every 9.5 km,
+  // so its masses are ~1.4 km across and its erosion detail ~560 m — cumulus.
+  // The old 5.6e-5 put the dominant structure at 2.5 km, which is why even a
+  // working density would have read as one continuous smear.
+  // The cirrus deck is anisotropic on purpose: unequal x/z scales stretch the
+  // same noise into streaks.
   float t = uTime * uCloudSpeed;
-  vec4 hi  = cloudLayer(rd, 7000.0, 0.0000225, vec2(0.0042, 0.0021) * t,
-                        uCloudCoverage * 0.62, uCloudErode * 1.4, uCloudOpacity * 0.5, cosT, lightMul);
-  vec4 mid = cloudLayer(rd, 3100.0, 0.0000560, vec2(0.0069, 0.0033) * t,
-                        uCloudCoverage, uCloudErode, uCloudOpacity, cosT, lightMul);
-  vec4 low = cloudLayer(rd, 1550.0, 0.0001150, vec2(0.0112, 0.0058) * t,
-                        uCloudCoverage * 0.78, uCloudErode * 0.8, uCloudOpacity * 0.72, cosT, lightMul);
+  vec4 hi  = cloudLayer(rd, 7000.0, vec2(0.000030, 0.000078), vec2(0.0042, 0.0021) * t,
+                        uCloudCoverage * 0.55, uCloudErode * 1.35, uCloudOpacity * 0.42,
+                        cosT, lightMul, false, false);
+  vec4 mid = cloudLayer(rd, 3100.0, vec2(0.000105, 0.000105), vec2(0.0069, 0.0033) * t,
+                        uCloudCoverage, uCloudErode, uCloudOpacity,
+                        cosT, lightMul, true, true);
+  vec4 low = cloudLayer(rd, 1550.0, vec2(0.000205, 0.000205), vec2(0.0112, 0.0058) * t,
+                        uCloudCoverage * 0.72, uCloudErode * 0.8, uCloudOpacity * 0.68,
+                        cosT, lightMul, false, true);
 
   // back-to-front composite
   col = col * (1.0 - hi.a)  + hi.rgb;
@@ -501,6 +660,12 @@ void main(){
   float hb = smoothstep(0.14, -0.045, rd.y);
   vec3 hazeCol = uHaze * uHazeLum * (0.85 + 0.7 * pow(clamp(cosT, 0.0, 1.0), 5.0));
   col = mix(col, hazeCol, hb * uHazeStrength);
+
+  // The haze mix is itself a per-channel warm/cool crossover, so it can create a
+  // green midpoint of its own inside the band. Same collapse, applied after.
+  if (uChromaDip > 0.001 && hb > 0.001) {
+    col = creamify(col, crossoverAmount(col) * uChromaDip * hb * 0.80);
+  }
 
   gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
 }
@@ -609,6 +774,8 @@ export class Sky implements ISubsystem {
       uSkyScale: { value: 0.38 },
       uSkyGamma: { value: 0.42 },
       uSkySat: { value: 1.42 },
+      uChromaDip: { value: 0.55 },
+      uCamXZ: { value: new THREE.Vector2() },
       uCloudCoverage: { value: 0.42 },
       uCloudErode: { value: 0.55 },
       uCloudOpacity: { value: 1 },
@@ -726,6 +893,7 @@ export class Sky implements ISubsystem {
     u.uSkyScale.value = p.skyScale;
     u.uSkyGamma.value = p.skyGamma;
     u.uSkySat.value = p.skySat;
+    u.uChromaDip.value = p.chromaDip;
     u.uCloudCoverage.value = p.cloudCoverage;
     u.uCloudErode.value = p.cloudErode;
     u.uCloudOpacity.value = p.cloudOpacity;
@@ -798,6 +966,9 @@ export class Sky implements ISubsystem {
     const cam = this.currentCamera;
     if (cam) {
       this.mesh.position.copy(cam.position);
+      // Cloud decks are intersected in world space, so they need the camera's
+      // ground position to parallax against each other.
+      (u.uCamXZ.value as THREE.Vector2).set(cam.position.x, cam.position.z);
       _tmpV.copy(this.sunDirection).multiplyScalar(760).add(cam.position);
       this.rayMesh.position.copy(_tmpV);
       this.rayMesh.quaternion.copy(cam.quaternion);

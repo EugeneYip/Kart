@@ -96,6 +96,139 @@ export const CROSS = {
  * + gridStagger); item rows are kept out of it.
  */
 const START_GRID_LENGTH = 70;
+
+// ---------------------------------------------------------------------------
+//  ROAD VOLUMES — the exclusion set the world dresser must respect
+// ---------------------------------------------------------------------------
+/**
+ * ========================= WHY THIS EXISTS =========================
+ * A human playtester reported buildings poking through the tunnel wall and
+ * standing *inside the bore*, on the racing line.
+ *
+ * The guard that was in place tested **lateral distance to the centreline**:
+ * every corner of a prop's footprint was projected onto the spline and had to
+ * clear `halfWidth + margin`. That took coastal from 19 violations to 0 and is
+ * still the right test for a flat trackside. It is, however, purely 2D — it has
+ * no notion of the tunnel as a *volume*. A townhouse row authored at lat ±15
+ * clears a 9 m half-width road by 6 m and passes; the tunnel arch at that
+ * station springs from `hw + kerb + shoulder + 0.6 = 12.75 m` and rises 8.2 m,
+ * so the same house has 3.5 m of its gable *inside the rock*. Street lamps
+ * authored at lat -12 are inside the bore outright, standing in the traffic
+ * space, and no lateral test will ever say so.
+ *
+ * So the builder publishes the volumes it actually creates. `Props` reads them
+ * through `roadVolumePenetration()` and either pushes an authored prop out or
+ * drops a procedural one. Sampling is a swept cross-section rather than a
+ * bounding box because a tunnel follows a descending left-hander: its AABB is
+ * mostly *outside* the tunnel.
+ *
+ * Frames carry their own basis, which is what makes the same code correct on
+ * the Neon Metropolis wall-ride: at 84° of bank "up" is very nearly horizontal,
+ * and a naive `y` test passes everything. Work in `(tangent, binormal, normal)`
+ * and banking costs nothing.
+ */
+export const ROAD_VOLUME_KIND = {
+  /** Tunnel bore + lining. Cross-section is a half-ellipse. */
+  Tunnel: 1,
+  /** Elevated deck: box above the road, plus the soffit below it. */
+  Bridge: 2,
+  /** Anti-gravity plating — same box, arbitrarily banked. */
+  AntiGravity: 4,
+} as const;
+
+/** One sampled cross-section of an excluded volume, with its own basis. */
+export interface RoadVolume {
+  kind: number;
+  /** Section origin: centreline point, already offset to the section's centre. */
+  px: number; py: number; pz: number;
+  tx: number; ty: number; tz: number;
+  bx: number; by: number; bz: number;
+  nx: number; ny: number; nz: number;
+  /** Lateral semi-extent, metres. */
+  lat: number;
+  /** Extent above the origin along the normal, metres. */
+  up: number;
+  /** Extent below the origin along the normal, metres. */
+  down: number;
+  /** Half-ellipse (tunnel) rather than a box. */
+  arch: boolean;
+}
+
+/**
+ * Metres of solid a prop must clear *beyond* the traffic space. The tunnel
+ * lining is a single-sided shell, so a prop that merely clears the bore still
+ * z-fights the rock and shows a slice of wall inside the tunnel. 1.25 m is the
+ * apparent thickness of the ribbed lining plus a hand's breadth.
+ */
+export const ROAD_VOLUME_SHELL = 1.25;
+
+/** Arc-length spacing of published frames, metres. */
+const VOLUME_STEP = 4;
+
+/**
+ * The current circuit's excluded volumes. Rebuilt by every `buildTrack()`;
+ * `lapLength` lets a consumer working in resampled-station arc length rescale.
+ * Module-level for the same reason `worldRegistry` is: the world dresser is
+ * constructed by `Environment`, which never sees a `Track`.
+ */
+export const roadVolumes: {
+  list: RoadVolume[];
+  step: number;
+  lapLength: number;
+} = { list: [], step: VOLUME_STEP, lapLength: 0 };
+
+/**
+ * Metres a world point sits *inside* the published volumes — specifically, the
+ * shortest lateral push that would clear them. 0 means clear.
+ *
+ * @param margin extra clearance demanded on every face (pass
+ *               `ROAD_VOLUME_SHELL` to clear the outside of the tunnel shell).
+ * @param out    optional: receives the world-space outward push direction.
+ */
+export function roadVolumePenetration(
+  x: number, y: number, z: number,
+  margin = 0,
+  out?: THREE.Vector3,
+  kinds = 0xff,
+): number {
+  const list = roadVolumes.list;
+  if (list.length === 0) return 0;
+  const reach = roadVolumes.step * 0.75;
+  let worst = 0;
+  for (let i = 0; i < list.length; i++) {
+    const v = list[i];
+    if ((v.kind & kinds) === 0) continue;
+    const rx = x - v.px, ry = y - v.py, rz = z - v.pz;
+    // Cheap reject before the three dot products.
+    const span = v.lat + v.up + margin + reach;
+    if (rx * rx + ry * ry + rz * rz > span * span) continue;
+    const along = rx * v.tx + ry * v.ty + rz * v.tz;
+    if (along < -reach || along > reach) continue;
+    const up = rx * v.nx + ry * v.ny + rz * v.nz;
+    if (up < -v.down - margin || up > v.up + margin) continue;
+    const lat = rx * v.bx + ry * v.by + rz * v.bz;
+    let need = v.lat + margin;
+    if (v.arch && up > 0) {
+      // Lateral half-width of the bore at this height. Above the crown the
+      // requirement falls to zero, which is correct: clear over the top.
+      const h = v.up + margin;
+      const k = 1 - (up / h) * (up / h);
+      need *= k > 0 ? Math.sqrt(k) : 0;
+    }
+    const a = lat < 0 ? -lat : lat;
+    if (a >= need) continue;
+    const pen = need - a;
+    if (pen > worst) {
+      worst = pen;
+      if (out) {
+        const s = lat < 0 ? -1 : 1;
+        out.set(v.bx * s, v.by * s, v.bz * s);
+      }
+    }
+  }
+  return worst;
+}
+
 /**
  * Item box CENTRE height above the road surface, metres.
  *
@@ -564,6 +697,43 @@ export function buildTrack(
 
   const gapAt = (i: number) => (stations[i].flags & TF.Gap) !== 0;
 
+  // ---- exclusion volumes (see the ROAD VOLUMES block at the top) -----------
+  roadVolumes.list.length = 0;
+  roadVolumes.step = VOLUME_STEP;
+  roadVolumes.lapLength = L;
+  let lastVolumeD = -1e9;
+  const publishVolume = (st: Station): void => {
+    const kind =
+      st.flags & TF.Tunnel ? ROAD_VOLUME_KIND.Tunnel
+        : st.flags & TF.AntiGravity ? ROAD_VOLUME_KIND.AntiGravity
+          : st.flags & TF.Bridge ? ROAD_VOLUME_KIND.Bridge
+            : 0;
+    if (kind === 0 || st.flags & TF.Gap) return;
+    if (st.d - lastVolumeD < VOLUME_STEP) return;
+    lastVolumeD = st.d;
+    const arch = kind === ROAD_VOLUME_KIND.Tunnel;
+    // Same numbers the arch / fascia sweeps below use, so the exclusion volume
+    // is the geometry rather than an estimate of it.
+    const outer = st.hw + CROSS.kerbW + Math.max(st.shL, st.shR)
+      + (arch ? 0.6 : 0.4);
+    // The bore's ellipse is centred on the springing line, which sits a crown
+    // plus a shoulder drop below the centreline.
+    const lift = arch ? -CROSS.crown - CROSS.shoulderDrop : 0;
+    roadVolumes.list.push({
+      kind,
+      px: st.pos.x + st.nrm.x * lift,
+      py: st.pos.y + st.nrm.y * lift,
+      pz: st.pos.z + st.nrm.z * lift,
+      tx: st.tan.x, ty: st.tan.y, tz: st.tan.z,
+      bx: st.bin.x, by: st.bin.y, bz: st.bin.z,
+      nx: st.nrm.x, ny: st.nrm.y, nz: st.nrm.z,
+      lat: outer,
+      up: arch ? CROSS.tunnelH : 6.5,
+      down: arch ? 1.2 : CROSS.deckDepth + 0.6,
+      arch,
+    });
+  };
+
   // ---- helper: ambient occlusion + dirt for a lateral position ------------
   const shadeRoad = (st: Station, lat: number, out: THREE.Color): void => {
     const u = Math.abs(lat) / Math.max(1e-3, st.hw);
@@ -599,6 +769,7 @@ export function buildTrack(
     const stitch = !thisIsGap && !nextIsGap ? true : false;
     const d = st.d;
     const v2 = d / L;
+    publishVolume(st);
 
     // ---------------- road ribbon ----------------
     const roadRing: number[] = [];

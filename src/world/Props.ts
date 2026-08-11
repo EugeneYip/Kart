@@ -35,6 +35,11 @@ import {
   InstanceChunks, canvasTexture, makeDetailNormal,
   type PathStation, type TerrainField, type WorldContext, type WorldTheme,
 } from './WorldTextures';
+// The one thing the world dresser needs from the track layer: the volumes the
+// road builds around itself (tunnel bores, bridge decks, anti-gravity tubes).
+// Published module-level by `buildTrack()` because `Environment` constructs the
+// dresser and never hands it a `Track`. See the ROAD VOLUMES block there.
+import { ROAD_VOLUME_SHELL, roadVolumePenetration, roadVolumes } from '@/track/TrackBuilder';
 
 // ===========================================================================
 // Public placement types
@@ -120,6 +125,13 @@ interface Anchor {
   arc: number;
   scale: number;
   seed: number;
+  /**
+   * Set by the road-volume guard in `emit()`. An authored prop is emitted as
+   * several passes (body, glow, cloth, metal, sign) over the **same** anchor
+   * array, so the verdict has to live on the anchor: testing per pass would
+   * reject a lamp post's mast and keep its lit head hanging in the tunnel.
+   */
+  blocked?: boolean;
 }
 
 // ===========================================================================
@@ -134,6 +146,7 @@ const _m = new THREE.Matrix4();
 const _s = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _axisY = new THREE.Vector3(0, 1, 0);
+const _volDir = new THREE.Vector3();
 
 type Shade = { top?: number; side?: number; bottom?: number };
 
@@ -1096,6 +1109,8 @@ interface AuthoredSpec {
   metal?: THREE.BufferGeometry;
   /** Companion pass on the sponsor atlas, with cells baked into the uvs. */
   sign?: THREE.BufferGeometry;
+  /** Companion pass on the lit-window material — city blocks and towers. */
+  windows?: THREE.BufferGeometry;
   cull?: number;
   shadow?: boolean;
 }
@@ -1130,6 +1145,47 @@ const CULL_FAR = 1600;
  * cascades at all. Below this a prop is a bollard or a cone and its shadow is a
  * smudge the ground's own sun march already implies.
  */
+/**
+ * ================== TUNNEL / BRIDGE / WALL-RIDE CLEARANCE ==================
+ *
+ * Playtest defect: buildings clipped through the tunnel wall and stood inside
+ * the bore, on the racing line. The clearance test that existed projected every
+ * footprint corner onto the spline and demanded `halfWidth + margin` of lateral
+ * distance — good for a flat trackside, and it did take coastal from 19 road
+ * violations to 0, but it is a purely two-dimensional test. A house outside the
+ * tunnel's outer wall clears the road laterally *and* has its gable buried in
+ * the rock: the old test cannot express the tunnel as a volume, so it passed.
+ *
+ * `TrackBuilder` now publishes the swept cross-sections it actually builds, and
+ * the rule is applied at the only place every prop instance passes through —
+ * `emit()`. Two behaviours, because the two kinds of prop want opposite things:
+ *
+ *   * **procedural dressing** (tyre walls, sponsor boards, catch fence, street
+ *     lights, braziers) is *dropped*. A tunnel's lining is its barrier; a tyre
+ *     stack inside the bore is set dressing that became an obstacle.
+ *   * **authored props** are *pushed clear* first (see `clearAuthored()`), and
+ *     only dropped if they cannot be seated within `AUTHORED_PUSH_LIMIT`. The
+ *     track author asked for a village along that stretch; the fix is to stand
+ *     it outside the hill, not to delete it.
+ *
+ * Vertical sampling matters: an anchor sits at the prop's base, and the base of
+ * a 9 m street lamp can be below the springing line of the arch while the mast
+ * is inside it, so the anchor is probed as a short column.
+ */
+const VOLUME_PROBE_FRACTIONS = [0.06, 0.3, 0.65, 1.0];
+/** Metres an authored prop may be pushed sideways before it is dropped instead. */
+const AUTHORED_PUSH_LIMIT = 16;
+
+/**
+ * Authored types that belong *in* the corridor and must never be pushed or
+ * dropped: a tunnel portal frames the bore, a gantry straddles the road, a
+ * bridge pylon holds the deck up. Keep in sync with `normaliseType()`.
+ */
+const CORRIDOR_PROPS = new Set([
+  'startgantry', 'balloonarch', 'arch', 'tunnelportal', 'hoload',
+  'bridgepylon', 'spiralpylon', 'monorailpylon', 'agpylon', 'energypylon',
+]);
+
 const SHADOW_MIN_RADIUS = 0.95;
 
 /**
@@ -1175,6 +1231,11 @@ export class Props implements ISubsystem {
   private fence!: THREE.MeshStandardMaterial;
 
   private time = 0;
+  /** Instances the road-volume guard removed this build — reported once. */
+  private volumeDrops = 0;
+  private volumePushes = 0;
+  /** Authored placements grouped by normalised type, minus any already claimed. */
+  private authored = new Map<string, Anchor[]>();
 
   constructor(
     scene: THREE.Scene,
@@ -1198,6 +1259,11 @@ export class Props implements ISubsystem {
     this.scene.add(this.group);
 
     this.buildMaterials();
+    // Group the authored placements FIRST. A theme builder can then claim the
+    // ones it already has geometry for (`takeAuthored`), folding them into an
+    // existing InstancedMesh instead of adding a draw call for a second copy of
+    // the same skyscraper.
+    this.collectAuthored();
     this.buildRaceDressing();
     switch (this.theme) {
       case 'coastal': this.buildCoastal(); break;
@@ -1208,6 +1274,13 @@ export class Props implements ISubsystem {
       default: this.buildPastoral(); break;
     }
     this.buildAuthored();
+    if (this.volumeDrops || this.volumePushes) {
+      console.info(
+        `[Props] road-volume guard: ${this.volumePushes} authored props pushed clear, `
+        + `${this.volumeDrops} instances dropped from `
+        + `${roadVolumes.list.length} tunnel/bridge/anti-gravity sections`,
+      );
+    }
   }
 
   // =========================================================================
@@ -1305,6 +1378,11 @@ export class Props implements ISubsystem {
       atlasBaked?: boolean;
       place?: (a: Anchor, i: number, m: THREE.Matrix4) => boolean;
       motion?: 'gull' | 'tram';
+      /**
+       * This prop belongs inside the road corridor (gantry, portal, arch, deck
+       * pylon), so skip the tunnel / bridge / anti-gravity clearance test.
+       */
+      corridor?: boolean;
     } = {},
   ): THREE.InstancedMesh | null {
     if (!anchors.length) { geo.dispose(); return null; }
@@ -1316,6 +1394,9 @@ export class Props implements ISubsystem {
     // suggests; only props big enough to throw a readable shadow pay for one.
     if (!geo.boundingSphere) geo.computeBoundingSphere();
     const radius = geo.boundingSphere?.radius ?? 0;
+    // Local AABB, for the road-volume clearance test below.
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const localBox = geo.boundingBox;
     mesh.castShadow = o.shadow !== false && radius >= SHADOW_MIN_RADIUS;
     mesh.receiveShadow = o.shadow !== false;
     // Opt into Lighting's cascade masks (see SHADOW_LAYER there). A tyre stack
@@ -1335,9 +1416,11 @@ export class Props implements ISubsystem {
     const placed: Array<{ x: number; y: number; z: number }> = [];
 
     let n = 0;
+    let blocked = 0;
     const bounds = new THREE.Box3();
     for (let i = 0; i < anchors.length; i++) {
       const a = anchors[i];
+      if (o.corridor !== true && this.insideRoadVolume(a, localBox)) { blocked++; continue; }
       _m.identity();
       if (o.place) {
         if (!o.place(a, i, _m)) continue;
@@ -1366,6 +1449,7 @@ export class Props implements ISubsystem {
       placed.push({ x: _v.x, y: _v.y, z: _v.z });
       n++;
     }
+    if (blocked > 0) this.volumeDrops += blocked;
     if (n === 0) { mesh.dispose(); geo.dispose(); return null; }
     mesh.count = n;
     mesh.instanceMatrix.needsUpdate = true;
@@ -1398,6 +1482,86 @@ export class Props implements ISubsystem {
 
     this.meshes.push({ mesh, motion: o.motion, chunks });
     return mesh;
+  }
+
+  /**
+   * True when this prop occupies a tunnel bore / shell, a bridge deck box or an
+   * anti-gravity tube. Memoised on the anchor so every companion pass (glow,
+   * cloth, metal, sign) agrees — see the note on `Anchor.blocked`. The body pass
+   * is always emitted first, so the memo is set from the full silhouette rather
+   * than from a lamp head or a banner.
+   */
+  private insideRoadVolume(a: Anchor, bb: THREE.Box3 | null): boolean {
+    if (a.blocked !== undefined) return a.blocked;
+    if (roadVolumes.list.length === 0) { a.blocked = false; return false; }
+    let hit = bb !== null && this.boxPenetration(a, bb, _volDir) > 0;
+    if (!hit) {
+      // Corners alone can straddle a volume — a ring or an arch has all eight
+      // outside it. Probe the axis too, up the prop's own height.
+      const top = Math.max(1.5, bb ? bb.max.y : 4) * a.scale;
+      for (const f of VOLUME_PROBE_FRACTIONS) {
+        if (roadVolumePenetration(a.x, a.y + top * f, a.z, ROAD_VOLUME_SHELL) > 0) {
+          hit = true;
+          break;
+        }
+      }
+    }
+    a.blocked = hit;
+    return hit;
+  }
+
+  /**
+   * Push authored anchors out of the road's own volumes using the prop's real
+   * oriented bounding box, so a 6 m-wide townhouse is judged on its gable and
+   * not on its origin. Lateral, because trackside dressing belongs beside the
+   * road: raising a house over a tunnel would only trade one wrong answer for
+   * another. Anything that cannot be seated inside `AUTHORED_PUSH_LIMIT` is
+   * marked blocked and `emit()` drops it.
+   *
+   * Returns `[pushed, dropped]`.
+   */
+  private clearAuthored(anchors: Anchor[], geo: THREE.BufferGeometry): [number, number] {
+    if (roadVolumes.list.length === 0) return [0, 0];
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return [0, 0];
+    let pushed = 0, dropped = 0;
+    const dir = new THREE.Vector3();
+    for (const a of anchors) {
+      let moved = 0;
+      for (let iter = 0; iter < 8; iter++) {
+        const pen = this.boxPenetration(a, bb, dir);
+        if (pen <= 0) break;
+        const stepOut = Math.min(pen + 0.3, AUTHORED_PUSH_LIMIT - moved);
+        if (stepOut <= 0.01) { a.blocked = true; dropped++; break; }
+        a.x += dir.x * stepOut;
+        a.z += dir.z * stepOut;
+        moved += stepOut;
+        // Re-seat on the ground it has moved onto, else a pushed prop floats.
+        a.y = this.field.heightAt(a.x, a.z);
+        if (iter === 7) { a.blocked = true; dropped++; }
+      }
+      if (moved > 0 && a.blocked !== true) { pushed++; a.blocked = false; }
+    }
+    return [pushed, dropped];
+  }
+
+  /** Worst road-volume penetration over the eight corners of an anchor's OBB. */
+  private boxPenetration(a: Anchor, bb: THREE.Box3, dir: THREE.Vector3): number {
+    const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
+    const s = a.scale;
+    let worst = 0;
+    for (let c = 0; c < 8; c++) {
+      const lx = (c & 1 ? bb.max.x : bb.min.x) * s;
+      const ly = (c & 2 ? bb.max.y : bb.min.y) * s;
+      const lz = (c & 4 ? bb.max.z : bb.min.z) * s;
+      // Yaw about +Y: local +X -> (cos, 0, -sin), local +Z -> (sin, 0, cos).
+      const wx = a.x + lx * ca + lz * sa;
+      const wz = a.z - lx * sa + lz * ca;
+      const pen = roadVolumePenetration(wx, a.y + ly, wz, ROAD_VOLUME_SHELL, _volDir);
+      if (pen > worst) { worst = pen; dir.copy(_volDir); }
+    }
+    return worst;
   }
 
   private builder(): Builder {
@@ -1458,7 +1622,8 @@ export class Props implements ISubsystem {
         b.tube(k * legX / 6.5, 11.2, -1.0, k * legX / 6.5, 11.2, 1.0, 0.06, 4, 0x3a424b);
       }
       b.box(0, 12.2, 0, legX + 1.0, 1.5, 0.35, 0xe9e6dd, { shade: { side: 1.05 } });
-      this.emit('gantry', b.build('gantry'), this.matte, gantryAnchor, { cull: CULL_MID });
+      this.emit('gantry', b.build('gantry'), this.matte, gantryAnchor,
+        { cull: CULL_MID, corridor: true });
     }
     {
       // Lit "FINISH" strip + lamp bars on the deck.
@@ -1468,14 +1633,14 @@ export class Props implements ISubsystem {
         b.box(k * (hw / 5.4), 11.15, 0, 0.55, 0.1, 0.5, 0xfff2c8);
       }
       this.emit('gantryLights', b.build('gantryLights'), this.glow, gantryAnchor,
-        { cull: CULL_MID, bloom: true, shadow: false });
+        { cull: CULL_MID, bloom: true, shadow: false, corridor: true });
     }
     {
       // Sponsor banner hanging under the deck.
       const b = this.builder();
       b.banner(0, 11.2, -0.1, (hw + 1) * 2, 2.6, 0, 0xffffff, 5, [0, 0, 1, 1]);
       this.emit('gantryBanner', b.build('gantryBanner'), this.atlasSway, gantryAnchor,
-        { cull: CULL_MID, atlasCells: 8, shadow: false });
+        { cull: CULL_MID, atlasCells: 8, shadow: false, corridor: true });
     }
 
     // ---- sponsor boards ------------------------------------------------------
@@ -1710,7 +1875,7 @@ export class Props implements ISubsystem {
       }
       b.flap = 0;
       this.emit('balloonArch', b.build('balloonArch'), this.glowSoft, arches,
-        { cull: CULL_NEAR, shadow: false });
+        { cull: CULL_NEAR, shadow: false, corridor: true });
     }
 
     // ---- distance / turn signs ----------------------------------------------
@@ -2328,10 +2493,10 @@ export class Props implements ISubsystem {
    * catalogue; anything unknown is reported once and skipped (a wrong prop in
    * the wrong place is worse than no prop).
    */
-  private buildAuthored(): void {
+  private collectAuthored(): void {
     const props = this.ctx.hints.props;
     if (!props || !props.length) return;
-    const byType = new Map<string, Anchor[]>();
+    const byType = this.authored;
     const unknown = new Set<string>();
 
     for (const p of props) {
@@ -2362,34 +2527,64 @@ export class Props implements ISubsystem {
     if (unknown.size) {
       console.info('[Props] track requested prop types with no builder:', [...unknown].join(', '));
     }
+  }
 
-    for (const [key, anchors] of byType) {
+  /**
+   * Claim the authored anchors for `key` and remove them from the pending set,
+   * so a theme builder can append them to an emit it is already making. Two
+   * copies of the same skyscraper geometry is two draw calls for one silhouette;
+   * this makes an authored landmark free.
+   */
+  private takeAuthored(key: string): Anchor[] {
+    const list = this.authored.get(key);
+    if (!list) return [];
+    this.authored.delete(key);
+    return list;
+  }
+
+  /** Build whatever authored types no theme builder claimed. */
+  private buildAuthored(): void {
+    for (const [key, anchors] of this.authored) {
       const spec = this.authoredSpec(key);
       if (!spec) continue;
+      const corridor = CORRIDOR_PROPS.has(key);
+      // Seat the whole group clear of the tunnel bore / bridge deck / wall-ride
+      // BEFORE any pass is emitted, so body, glow, cloth, metal and sign all
+      // land on the same resolved anchor. See the CLEARANCE block above.
+      if (!corridor) {
+        const [pushed, dropped] = this.clearAuthored(anchors, spec.geo);
+        this.volumePushes += pushed;
+        void dropped;
+      }
       const body = spec.mat ?? this.matte;
       this.emit(`authored:${key}`, spec.geo, body, anchors, {
         cull: spec.cull ?? CULL_MID,
         bloom: body === this.glow || body === this.glowSoft,
         shadow: spec.shadow !== false,
+        corridor,
       });
       // Optional companion passes so one authored type can mix materials without
       // a multi-material mesh: an emissive lamp head, a cloth sail, a chain-link
       // panel. Each is still a single instanced draw.
       if (spec.glow) {
         this.emit(`authored:${key}:glow`, spec.glow, spec.softGlow ? this.glowSoft : this.glow,
-          anchors, { cull: spec.cull ?? CULL_MID, bloom: true, shadow: false });
+          anchors, { cull: spec.cull ?? CULL_MID, bloom: true, shadow: false, corridor });
       }
       if (spec.cloth) {
         this.emit(`authored:${key}:cloth`, spec.cloth, this.matteSway, anchors,
-          { cull: spec.cull ?? CULL_MID, shadow: false });
+          { cull: spec.cull ?? CULL_MID, shadow: false, corridor });
       }
       if (spec.metal) {
         this.emit(`authored:${key}:metal`, spec.metal, this.metal, anchors,
-          { cull: spec.cull ?? CULL_MID });
+          { cull: spec.cull ?? CULL_MID, corridor });
       }
       if (spec.sign) {
         this.emit(`authored:${key}:sign`, spec.sign, this.atlas, anchors,
-          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false });
+          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
+      }
+      if (spec.windows) {
+        this.emit(`authored:${key}:windows`, spec.windows, this.windows, anchors,
+          { cull: spec.cull ?? CULL_MID, bloom: true, shadow: false, corridor });
       }
     }
   }

@@ -30,8 +30,15 @@
  *      zeroed buffer of the right size. Textures come out blank; the spline,
  *      the geometry and every `ITrackService` query are the real thing.
  *
- *   3. `fakeRenderer()` — enough of a `WebGLRenderer` for `Track`'s
- *      constructor (`capabilities.getMaxAnisotropy()` and friends).
+ *   3. `src/dev/headless.ts` (a separate module — see the warning below) hands
+ *      out a fake `WebGLRenderer` and loads a real `Track`.
+ *
+ *  ⚠️ DO NOT import anything from THIS file in a probe. This module holds a
+ *  pending top-level `await import(entry)` for the whole life of the run, so a
+ *  probe that imports it deadlocks the module graph — Node reports
+ *  `ERR_UNSETTLED_TOP_LEVEL_AWAIT` (exit 13) with no output at all, which is a
+ *  memorable half-hour. Helpers live in `src/dev/headless.ts` for exactly this
+ *  reason.
  *
  *  NEVER import this from the shipped bundle. And if a module you are probing
  *  starts needing real pixels, shim it explicitly — do not trust a no-op.
@@ -205,38 +212,9 @@ if (typeof globalThis.HTMLCanvasElement === 'undefined') {
   globalThis.HTMLCanvasElement = class HTMLCanvasElement {};
 }
 
-// ---------------------------------------------------------------------------
-//  3. Fake renderer — Track's constructor wants one; nothing draws
-// ---------------------------------------------------------------------------
-
-export function fakeRenderer() {
-  return {
-    capabilities: {
-      getMaxAnisotropy: () => 16,
-      isWebGL2: true,
-      maxTextureSize: 8192,
-      maxTextures: 16,
-      precision: 'highp',
-    },
-    extensions: { get: () => null, has: () => false },
-    domElement: makeCanvas(1280, 720),
-    outputColorSpace: 'srgb',
-    toneMapping: 0,
-    toneMappingExposure: 1,
-    shadowMap: { enabled: false, type: 0 },
-    info: { render: { calls: 0, triangles: 0 }, memory: { geometries: 0, textures: 0 } },
-    getPixelRatio: () => 1,
-    setPixelRatio() {},
-    getSize: (v) => (v && v.set ? v.set(1280, 720) : { width: 1280, height: 720 }),
-    setSize() {},
-    setRenderTarget() {},
-    render() {},
-    clear() {},
-    compile() {},
-    initTexture() {},
-    dispose() {},
-  };
-}
+// A canvas factory the helpers in `headless.ts` can reach without importing
+// this module (see the deadlock warning at the top of the file).
+globalThis.__AK_MAKE_CANVAS__ = makeCanvas;
 
 // ---------------------------------------------------------------------------
 //  Entry point

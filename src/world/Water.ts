@@ -40,6 +40,8 @@ export type WaterPresetName = 'ocean' | 'lake' | 'lava' | 'none';
 
 interface WaterLook {
   shallow: number;
+  /** the middle stop of the depth ramp — without it turquoise->navy reads as a wash */
+  mid: number;
   deep: number;
   floor: number;
   /** metres of depth over which the shore foam band sits */
@@ -52,18 +54,20 @@ interface WaterLook {
   roughness: number;
   glint: number;
   causticStrength: number;
+  /** how much whitecap breaks on a steep crest, 0..1 */
+  whitecap: number;
 }
 
 const LOOKS: Record<'ocean' | 'lake', WaterLook> = {
   ocean: {
-    shallow: 0x39c8bd, deep: 0x08324f, floor: 0xa89468,
-    foamWidth: 1.5, absorb: 0.30, swell: [0.46, 34], choppy: 1.0,
-    roughness: 0.055, glint: 1.0, causticStrength: 1.0,
+    shallow: 0x4fd6c4, mid: 0x1683a6, deep: 0x06263f, floor: 0xa89468,
+    foamWidth: 1.9, absorb: 0.26, swell: [0.46, 34], choppy: 1.0,
+    roughness: 0.055, glint: 1.0, causticStrength: 1.0, whitecap: 0.5,
   },
   lake: {
-    shallow: 0x35a08c, deep: 0x113a44, floor: 0x6d6a4a,
-    foamWidth: 0.85, absorb: 0.46, swell: [0.16, 18], choppy: 0.55,
-    roughness: 0.035, glint: 0.8, causticStrength: 0.75,
+    shallow: 0x46b8a2, mid: 0x1c6b75, deep: 0x0d323c, floor: 0x6d6a4a,
+    foamWidth: 1.1, absorb: 0.42, swell: [0.16, 18], choppy: 0.55,
+    roughness: 0.035, glint: 0.8, causticStrength: 0.75, whitecap: 0.16,
   },
 };
 
@@ -289,6 +293,7 @@ export class Water implements ISubsystem {
       uReflMatrix: { value: this.textureMatrix },
       uReflAmount: { value: 0 },
       uShallow: { value: new THREE.Color(look.shallow) },
+      uMid: { value: new THREE.Color(look.mid) },
       uDeep: { value: new THREE.Color(look.deep) },
       uFloor: { value: new THREE.Color(look.floor) },
       uSwell: { value: new THREE.Vector2(look.swell[0], look.swell[1]) },
@@ -298,6 +303,7 @@ export class Water implements ISubsystem {
       uRough: { value: look.roughness },
       uGlint: { value: look.glint },
       uCaustic: { value: look.causticStrength },
+      uWhitecap: { value: look.whitecap },
     };
 
     const mat = new THREE.ShaderMaterial({
@@ -366,6 +372,7 @@ export class Water implements ISubsystem {
         uniform sampler2D uReflMap;
         uniform float uReflAmount;
         uniform vec3 uShallow;
+        uniform vec3 uMid;
         uniform vec3 uDeep;
         uniform vec3 uFloor;
         uniform float uFoamWidth;
@@ -373,6 +380,7 @@ export class Water implements ISubsystem {
         uniform float uRough;
         uniform float uGlint;
         uniform float uCaustic;
+        uniform float uWhitecap;
         uniform vec2 uWindDir;
 
         varying vec3 vWorld;
@@ -421,17 +429,30 @@ export class Water implements ISubsystem {
           vec3 bed = bedTint * absorbT;
 
           // Caustics: two counter-scrolling cells, only where light reaches.
-          vec2 cuv = vWorld.xz * 0.075;
-          float ca = texture2D(uCausticMap, cuv + vec2(uTime * 0.021, uTime * -0.013)).r;
-          float cb = texture2D(uCausticMap, cuv * 1.47 - vec2(uTime * 0.017, uTime * 0.024)).r;
-          float caustic = pow(ca * cb, 1.4) * exp(-max(depth, 0.0) * 0.42)
-                        * uCaustic * max(uSunDirection.y, 0.0) * (1.0 - vFar * 0.7);
-          bed += uSunColor * caustic * 1.5;
+          // Gated, because past ~9 m of depth the exponential has already killed
+          // them and past vFar they are sub-pixel — that is two texture fetches
+          // saved over most of an ocean, which pays for the specular below.
+          float causticAmt = uCaustic * max(uSunDirection.y, 0.0) * (1.0 - vFar * 0.7);
+          if (causticAmt > 0.015 && depth < 10.0) {
+            vec2 cuv = vWorld.xz * 0.075;
+            float ca = texture2D(uCausticMap, cuv + vec2(uTime * 0.021, uTime * -0.013)).r;
+            float cb = texture2D(uCausticMap, cuv * 1.47 - vec2(uTime * 0.017, uTime * 0.024)).r;
+            float caustic = pow(ca * cb, 1.4) * exp(-max(depth, 0.0) * 0.42) * causticAmt;
+            bed += uSunColor * caustic * 1.5;
+          }
 
+          // Three-stop depth ramp. Two stops put the whole turquoise->navy
+          // transition inside the first couple of metres and then held one flat
+          // navy for the entire body of water; a mid stop is what gives an ocean
+          // its readable shelf -> channel -> deep banding.
           float dn = 1.0 - exp(-max(depth, 0.0) * uAbsorb);
-          vec3 body = mix(uShallow, uDeep, dn);
+          vec3 body = mix(
+            mix(uShallow, uMid, clamp(dn * 2.0, 0.0, 1.0)),
+            uDeep, clamp(dn * 2.0 - 1.0, 0.0, 1.0));
+          // Backscatter: shallow water over pale sand glows from below.
+          body += uShallow * (1.0 - dn) * (1.0 - dn) * 0.22 * max(uSunDirection.y, 0.05);
           // Sun scattering through the swell — crests glow slightly green-gold.
-          body += uShallow * max(vWave, 0.0) * 0.35 * max(uSunDirection.y, 0.0);
+          body += uShallow * max(vWave, 0.0) * 0.30 * max(uSunDirection.y, 0.0);
           vec3 refracted = mix(bed, body, dn);
 
           // --- reflection ------------------------------------------------------
@@ -452,41 +473,81 @@ export class Water implements ISubsystem {
           // --- fresnel ---------------------------------------------------------
           float ndv = clamp(dot(N, V), 0.0, 1.0);
           float F = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
-          F = mix(F, 1.0, 0.10);   // a touch of extra sheen reads better in AgX
+          F = mix(F, 1.0, 0.06);   // a touch of extra sheen reads better in AgX
 
           vec3 col = mix(refracted, reflCol, F);
 
-          // --- sun glint --------------------------------------------------------
+          // --- sun specular: a path, not a spark --------------------------------
+          // Was pow(NdotH, 240..1400) against a normal interpolated from a coarse
+          // disc. A lobe that tight is far narrower than a pixel at range, so it
+          // either misses entirely or latches onto whole triangles — which is why
+          // a sunset over this ocean had no sun path at all. Sub-pixel normal
+          // variance *is* roughness, so widening the lobe with distance (and in
+          // choppy shallows) converts that aliasing into the broad glitter road
+          // that actually appears on water.
+          float wRough = clamp(uRough + vFar * 0.19 + (1.0 - min(depth, 6.0) / 6.0) * 0.03, 0.02, 0.55);
+          float wA = wRough * wRough;
           vec3 H = normalize(uSunDirection + V);
-          float spec = pow(max(dot(N, H), 0.0), mix(240.0, 1400.0, 1.0 - uRough));
-          float glintFade = 1.0 - vFar * 0.35;
-          col += uSunColor * spec * uSunIntensity * 0.9 * uGlint * glintFade;
-          // Broad sheet glitter, the thing that sells a sunset on water.
-          float sheet = pow(max(dot(N, H), 0.0), 26.0);
-          col += uSunColor * sheet * 0.16 * uGlint * max(uSunDirection.y * 3.0, 0.0);
+          float ndh = max(dot(N, H), 0.0);
+          float dd = ndh * ndh * (wA * wA - 1.0) + 1.0;
+          float ggx = min((wA * wA) / (3.14159265 * dd * dd), 42.0);
+          float sunUp = smoothstep(-0.05, 0.14, uSunDirection.y);
+          float ndl = max(dot(N, uSunDirection), 0.0);
+          col += uSunColor * ggx * ndl * sunUp * uSunIntensity * uGlint * 0.030;
+          // Broad sheet sheen under the sun, which is what carries the glitter
+          // road out to the horizon once the tight lobe has faded.
+          float sheet = pow(ndh, 18.0);
+          col += uSunColor * sheet * 0.26 * uGlint * sunUp;
 
-          // --- foam --------------------------------------------------------------
-          // The waterline moves with the swell, so the band breathes.
-          float shoreDepth = depth - vWave * 0.75;
-          float shore = 1.0 - smoothstep(0.0, uFoamWidth, shoreDepth);
-          vec2 fuv = vWorld.xz * 0.09;
-          float f1 = texture2D(uFoamMap, fuv + vec2(uTime * 0.026, uTime * 0.017)).r;
-          float f2 = texture2D(uFoamMap, fuv * 2.3 - vec2(uTime * 0.041, uTime * 0.022)).g;
-          float churn = f1 * 0.62 + f2 * 0.55;
-          float shoreFoam = smoothstep(0.32, 0.92, shore * (0.55 + churn));
-          // A tight bright lip right at the edge.
-          shoreFoam = max(shoreFoam, smoothstep(0.16, 0.0, shoreDepth) * (0.55 + churn * 0.5));
-          float crestFoam = smoothstep(0.55, 1.25, vFold) * churn * (1.0 - vFar * 0.6);
-          float foam = clamp(shoreFoam + crestFoam * 0.85, 0.0, 1.0);
+          // --- foam ------------------------------------------------------------
+          // Deep open water away from a crest needs neither churn tap.
+          float shoreDepth = depth - vWave * 0.9;
+          float foamNeed = max(
+            1.0 - smoothstep(0.0, uFoamWidth * 2.4, shoreDepth),
+            step(1.05, vFold) * (1.0 - vFar));
+          float churn = 0.55;
+          if (foamNeed > 0.004) {
+            vec2 fuv = vWorld.xz * 0.09;
+            float f1 = texture2D(uFoamMap, fuv + vec2(uTime * 0.026, uTime * 0.017)).r;
+            float f2 = texture2D(uFoamMap, fuv * 2.3 - vec2(uTime * 0.041, uTime * 0.022)).g;
+            churn = f1 * 0.62 + f2 * 0.55;
+          }
+
+          // Whitecaps. The old term was smoothstep(0.55, 1.25, vFold) * churn — a
+          // white band along every crest of a five-wave sum, interpolated from a
+          // vertex attribute across a disc whose cells reach 8 m. That is the
+          // barcode: parallel hard-edged stripes marching across the whole sea.
+          // Water only breaks on the steepest faces and only in patches, so this
+          // needs a crest threshold near the top of the fold range, an
+          // independent patch mask, and a hard distance fade to stop the pattern
+          // ever becoming periodic on screen.
+          float capPatch = smoothstep(0.42, 0.88, churn);
+          float cap = smoothstep(1.20, 1.86, vFold) * capPatch * uWhitecap;
+          cap *= (1.0 - vFar) * (1.0 - vFar);
+
+          // Shoreline. The hard bright lip (smoothstep(0.16, 0.0, depth), forced
+          // to full alpha) drew a cut-edged white ribbon down the entire coast.
+          // Real surf is a wide ragged band whose leading edge is displaced by
+          // churn rather than merely faded, and which dissolves into wet sand.
+          float band = uFoamWidth * (0.75 + churn * 1.1);
+          float shore = 1.0 - smoothstep(0.0, band, shoreDepth);
+          float swash = smoothstep(0.18, 0.92, shore * (0.42 + churn * 0.95));
+          float lip = smoothstep(0.0, 0.7, -shoreDepth + (churn - 0.62) * 0.85) * 0.7;
+          float foam = clamp(max(swash, lip) + cap * 0.9, 0.0, 1.0);
 
           vec3 foamCol = mix(vec3(0.86, 0.90, 0.93), uSunColor * 0.5 + 0.5, 0.25);
           foamCol *= (uAmbientIntensity * 0.5 + max(uSunDirection.y, 0.05) * uSunIntensity * 0.32);
           col = mix(col, foamCol, foam);
 
           // --- fade in at the waterline ------------------------------------------
-          float alpha = clamp(depth * 2.6, 0.0, 1.0);
-          alpha = mix(alpha, 1.0, foam * 0.85);
-          alpha = mix(alpha, 1.0, F * 0.7);
+          // Gated on depth as well as Fresnel: at a grazing angle F goes to 1
+          // everywhere, and the old form therefore snapped the last few
+          // centimetres of water to fully opaque — a hard edge exactly where the
+          // sea should be dissolving into the beach.
+          float shallowFade = clamp(depth * 1.7, 0.0, 1.0);
+          float alpha = shallowFade;
+          alpha = max(alpha, min(1.0, shallowFade + 0.4) * foam);
+          alpha = max(alpha, F * 0.9 * clamp(depth * 2.4, 0.0, 1.0));
 
           col = applyHeightFog(col, vWorld, cameraPosition);
           gl_FragColor = vec4(col, alpha);
@@ -619,6 +680,7 @@ export class Water implements ISubsystem {
     const look = LOOKS[preset];
     const u = mat.uniforms;
     (u.uShallow.value as THREE.Color).setHex(look.shallow);
+    (u.uMid.value as THREE.Color).setHex(look.mid);
     (u.uDeep.value as THREE.Color).setHex(look.deep);
     (u.uFloor.value as THREE.Color).setHex(look.floor);
     (u.uSwell.value as THREE.Vector2).set(look.swell[0], look.swell[1]);
@@ -628,6 +690,7 @@ export class Water implements ISubsystem {
     u.uRough.value = look.roughness;
     u.uGlint.value = look.glint;
     u.uCaustic.value = look.causticStrength;
+    u.uWhitecap.value = look.whitecap;
     this.mesh.material = mat;
     this.mesh.layers.enable(LAYERS.BLOOM);
     this.reflectionsOn = this.reflectionsWanted && !!this.reflRT;
