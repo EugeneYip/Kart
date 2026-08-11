@@ -57,6 +57,9 @@ interface SampleLike {
 
 interface TrackRef {
   lapLength?: number;
+  /** `ITrackService.trackId` — how we notice the circuit has been swapped. */
+  trackId?: string;
+  def?: { id?: string };
   roadGroup?: THREE.Object3D;
   group?: THREE.Object3D;
   getDecorationHints?: () => unknown;
@@ -145,7 +148,14 @@ export class Environment implements ISubsystem {
 
   private sky: { presetName: string; setPreset(n: string): void } | null = null;
   private lighting: { presetName: string; setPreset(n: string): void } | null = null;
+  /** True once the authored preset has been OBSERVED to survive a live frame. */
   private presetPushed = false;
+  private presetTries = 0;
+
+  /** The circuit id this world was built for. Empty until `init()` runs. */
+  private builtTrackId = '';
+  /** True while a circuit rebuild is in flight. */
+  private rebuilding = false;
 
   private stands: StandSpec[] = [];
   private placeholderRoad: THREE.Group | null = null;
@@ -193,14 +203,14 @@ export class Environment implements ISubsystem {
   setSky(sky: unknown): void {
     if (sky && typeof (sky as { setPreset?: unknown }).setPreset === 'function') {
       this.sky = sky as { presetName: string; setPreset(n: string): void };
-      this.pushPreset();
+      this.pushPreset(false);
     }
   }
 
   setLighting(lighting: unknown): void {
     if (lighting && typeof (lighting as { setPreset?: unknown }).setPreset === 'function') {
       this.lighting = lighting as { presetName: string; setPreset(n: string): void };
-      this.pushPreset();
+      this.pushPreset(false);
     }
   }
 
@@ -227,6 +237,9 @@ export class Environment implements ISubsystem {
     // 2.8 M triangles of Environment where there should be 1 and 1.4 M.
     if (this.built) return;
     this.built = true;
+    // Claim the circuit BEFORE building it. A build that throws must not leave
+    // `syncToTrack` believing the world is stale, or it would rebuild forever.
+    this.builtTrackId = this.currentTrackId();
 
     this.group.name = 'Environment';
     this.scene.add(this.group);
@@ -261,8 +274,9 @@ export class Environment implements ISubsystem {
     this.wind = wStrength;
 
     // Push the mood before anything builds, so per-preset colours are right.
+    // Deliberately un-latched: see `pushPreset`.
     this.resolveSkyLighting();
-    this.pushPreset();
+    this.pushPreset(false);
 
     // --- placeholder road (only when the real Track has none) -----------------
     if (!this.findRoadGroup()) {
@@ -471,20 +485,117 @@ export class Environment implements ISubsystem {
   /**
    * Publish the track's mood. Lighting is authoritative (it forwards to Sky and
    * owns the fog/sun uniform block), so prefer it and only touch Sky directly
-   * when there is no Lighting. Never re-push: if something else has already
-   * moved the preset on, that's a deliberate decision we don't fight.
+   * when there is no Lighting.
+   *
+   * `latch` is the whole subtlety. The old guard was `if (this.presetPushed)
+   * return;` set the moment a push was *attempted*, on the reasoning that
+   * anything which moved the preset afterwards had made a deliberate decision we
+   * shouldn't fight. But the thing that moved it afterwards was not a decision:
+   * `Game.init()` wires `lighting.setSky(sky)` AFTER building Environment, and
+   * that used to overwrite our push with Sky's untouched boot default. So the
+   * flag said "done" while the value said 'day' on every circuit.
+   *
+   * So: attempts made during `init()` and late wiring never latch, and `update()`
+   * re-asserts on live frames until the value is *observed* to have stuck. Once
+   * it has, we stop touching it for good — `__QA__.setSky()` and anything else
+   * that deliberately moves the mood on is then left alone, which is what the
+   * old comment was actually reaching for.
    */
-  private pushPreset(): void {
+  private pushPreset(latch: boolean): void {
     if (this.presetPushed) return;
     this.resolveSkyLighting();
+    const lighting = this.lighting;
+    const sky = this.sky;
+    if (!lighting && !sky) return;
     const want = this.skyPreset;
-    if (this.lighting) {
-      if (this.lighting.presetName !== want) safe(() => this.lighting!.setPreset(want), undefined);
-      this.presetPushed = true;
-    } else if (this.sky) {
-      if (this.sky.presetName !== want) safe(() => this.sky!.setPreset(want), undefined);
-      this.presetPushed = true;
+    // Lighting first: it is authoritative and forwards to Sky, so when the two
+    // are joined up this is the only call that does any work.
+    if (lighting && lighting.presetName !== want) safe(() => lighting.setPreset(want), undefined);
+    // But Lighting only forwards once it has been *given* a Sky, and `Game.ts`
+    // wires that after we are built (a harness may never wire it at all). Until
+    // then the forward is silently skipped and the dome sits on its boot default
+    // while the lights are correct, so close that gap here rather than assume.
+    // Both `setPreset`s are idempotent, so a redundant call costs nothing.
+    if (sky && sky.presetName !== want) safe(() => sky.setPreset(want), undefined);
+    if (!latch) return;
+    this.presetTries++;
+    // Latch only when BOTH ends are observed to hold the authored value — or,
+    // rather than warn on every frame forever if Sky/Lighting are broken enough
+    // to refuse it, give up after a few seconds.
+    const landed = (!lighting || lighting.presetName === want)
+      && (!sky || sky.presetName === want);
+    this.presetPushed = landed || this.presetTries > 240;
+  }
+
+  // =========================================================================
+  // CIRCUIT CHANGES
+  // =========================================================================
+
+  /** `ITrackService.trackId`, or '' when the track can't tell us. Allocation-free. */
+  private currentTrackId(): string {
+    const t = this.track;
+    if (!t) return '';
+    try {
+      const id = t.trackId;
+      if (typeof id === 'string' && id.length > 0) return id;
+      const d = t.def;
+      if (d && typeof d.id === 'string' && d.id.length > 0) return d.id;
+    } catch {
+      // A track service mid-teardown is allowed to throw out of its getter.
     }
+    return '';
+  }
+
+  /**
+   * Re-read the track and, if this is a *different* circuit from the one the
+   * world was built for, throw the world away and build the new one.
+   *
+   * This is what makes Neon Metropolis and Volcano Rush exist. `Track.loadTrack`
+   * swaps the road spline and nothing else; before this, both of them rendered
+   * their own road inside the Sunset Coastline world — blue daytime sky, coastal
+   * mountains, sand shoulders, palm trees — because `Environment.init()` ran
+   * exactly once, at boot, and is (correctly) idempotent thereafter.
+   *
+   * Environment does this itself, from the track it already holds, rather than
+   * waiting to be told: it is the only object that knows what it built the world
+   * from, and it needs no wiring that `Game.ts` would have to add. `update()`
+   * calls this every frame — one string compare — so *every* path that changes
+   * the circuit is covered, not just the menu's.
+   *
+   * Synchronous and fire-and-forget on purpose. `beginRace()` is sync and must
+   * not be held up: nothing else in the race depends on Environment, `ready` is
+   * false for the duration so `update()` no-ops cleanly, and the pre-race flyby
+   * covers the build. Re-entrancy is handled by the tail re-checking the id, so
+   * changing circuit twice mid-build settles on the last one asked for.
+   */
+  syncToTrack(): void {
+    if (this.rebuilding) return;
+    const id = this.currentTrackId();
+    if (!id || id === this.builtTrackId) return;
+    // Claim the slot BEFORE `rebuildWorld()` is called: it is async, so its
+    // synchronous prefix (`dispose()`, and `init()` up to its first `await`)
+    // runs before any assignment of the returned promise would land. A flag set
+    // here cannot be raced by a re-entrant call from inside that prefix.
+    this.rebuilding = true;
+    void this.rebuildWorld()
+      .catch((err) => { console.error('[Environment] circuit rebuild failed:', err); })
+      .then(() => {
+        this.rebuilding = false;
+        // The circuit may have changed again while we were building.
+        this.syncToTrack();
+      });
+  }
+
+  /**
+   * Exactly `dispose(); await init();` — no more. `dispose()` already resets
+   * `built` (and now the preset latch), and `init()` re-reads the track's hints,
+   * so the new circuit's theme, sky preset, terrain seed, water, weather, wind
+   * and props all follow from the one call. Building without disposing first is
+   * the cascade the comment in `init()` documents, so the order matters.
+   */
+  private async rebuildWorld(): Promise<void> {
+    this.dispose();
+    await this.init();
   }
 
   // =========================================================================
@@ -583,6 +694,12 @@ export class Environment implements ISubsystem {
   // =========================================================================
 
   update(ctx: FrameContext): void {
+    // Both of these have to run even while the world is not `ready`: the sky and
+    // the lighting are not ours to build, and a circuit change arrives while a
+    // previous rebuild may still be in flight.
+    this.syncToTrack();
+    if (!this.presetPushed) this.pushPreset(true);
+
     if (!this.ready) return;
 
     // Terrain, grass and water latch whichever camera drew them last. Crowd and
@@ -663,10 +780,19 @@ export class Environment implements ISubsystem {
     this.terrain = null; this.water = null; this.foliage = null;
     this.props = null; this.crowd = null; this.weather = null;
     this.field = null; this.ctx = null;
+    this.stands = [];
     this.scene.remove(this.group);
     this.group.clear();
     this.ready = false;
     this.built = false;
+    this.ownsRoad = false;
+    // A rebuild is for a new circuit with a new authored mood, so the mood has to
+    // be pushed again — and re-latched against the *new* value.
+    this.presetPushed = false;
+    this.presetTries = 0;
+    this.builtTrackId = '';
+    // `sky`, `lighting` and `camera` are deliberately kept: they are not ours to
+    // build, they outlive any one circuit, and `init()` re-wires the camera.
   }
 }
 

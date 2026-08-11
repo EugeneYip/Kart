@@ -717,6 +717,8 @@ export class Sky implements ISubsystem {
 
   presetName: SkyPresetName = 'day';
   preset: SkyPreset = SKY_PRESETS.day;
+  /** False until `setPreset` has actually applied a preset once. */
+  private presetApplied = false;
   /** 0..1 lightning flash, read by Lighting for the light-intensity pop. */
   lightningFlash = 0;
 
@@ -863,6 +865,14 @@ export class Sky implements ISubsystem {
   // -------------------------------------------------------------------------
 
   setPreset(name: SkyPresetName): void {
+    // Cheap and idempotent, so re-pushing a preset from anywhere is free: the
+    // tail of this method dirties the PMREM, and rebuilding the IBL for a
+    // preset that is already applied is a cube render plus a convolution for
+    // nothing. Cannot early-out on `name === this.presetName` alone — `init()`
+    // calls `setPreset('day')` while `presetName` is already 'day' from the
+    // field initialiser, and that first call is what fills the uniforms.
+    if (this.presetApplied && name === this.presetName) return;
+    this.presetApplied = true;
     const p = SKY_PRESETS[name] ?? SKY_PRESETS.day;
     this.presetName = name;
     this.preset = p;

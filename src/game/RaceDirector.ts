@@ -168,6 +168,7 @@ export class RaceDirector implements ISubsystem {
   private vfx: LateDep | null = null;
   private camera: LateDep | null = null;
   private ai: LateDep | null = null;
+  private environment: LateDep | null = null;
 
   // --- capability flags ----------------------------------------------------
   private canProject = false;
@@ -265,6 +266,13 @@ export class RaceDirector implements ISubsystem {
   }
 
   setItems(items: LateDep): void { this.items = items; }
+  /**
+   * Optional — lets the director tell the world that the circuit changed in the
+   * same tick as `loadTrack`, instead of leaving it to notice on its next frame.
+   * Needs `wire(this.race, 'setEnvironment', this.environment)` in `Game.ts`;
+   * everything still works without it, just one frame later.
+   */
+  setEnvironment(environment: LateDep): void { this.environment = environment; }
   setAudio(audio: LateDep): void {
     this.audio = audio;
     callOpt(audio, 'setMusicIntensity', RACE_TUNING.musicIdle);
@@ -367,6 +375,15 @@ export class RaceDirector implements ISubsystem {
         this.canLoadTrack = false;
       }
     }
+    // `loadTrack` swaps the road spline; the world the road sits in has to follow,
+    // or Neon Metropolis and Volcano Rush render inside the coastal world. The
+    // rebuild is async and deliberately NOT awaited: it is Environment's own
+    // business, nothing below depends on it, and holding a synchronous
+    // `beginRace()` open would leave the race half-started. Environment also
+    // notices the swap itself on its next frame, so this is only worth the same
+    // tick — and it is a no-op when the circuit hasn't actually changed, which is
+    // what keeps `restart()` from rebuilding the world on every retry.
+    callOpt(this.environment, 'syncToTrack');
     if (opts.characterId) callOpt(this.roster, 'setPlayerCharacter', opts.characterId);
     if (opts.kartId) callOpt(this.roster, 'setPlayerKart', opts.kartId);
 

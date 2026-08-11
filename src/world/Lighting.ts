@@ -332,6 +332,8 @@ export class Lighting implements ISubsystem {
   rim!: THREE.DirectionalLight;
 
   presetName: SkyPresetName = 'day';
+  /** False until `setPreset` has actually applied a preset once. */
+  private presetApplied = false;
 
   /** How far shadows reach, metres. */
   shadowFar: number;
@@ -714,13 +716,42 @@ export class Lighting implements ISubsystem {
   setSky(sky: Sky): void {
     this.sky = sky;
     sky.currentCamera = this.camera;
-    this.setPreset(sky.presetName);
+
+    // PUBLISH our preset into the Sky — never adopt the Sky's.
+    //
+    // This line used to be `this.setPreset(sky.presetName)`, and it was the
+    // single biggest art-direction bug in the build: every circuit rendered
+    // under flat noon light and "Sunset Coastline" had no sunset.
+    //
+    // Sky and Lighting each boot to 'day' and are joined up later. `Game.init()`
+    // orders it Sky -> Lighting -> Track -> Environment -> ... -> setSky, so by
+    // the time we get here `Environment.init()` has already published the
+    // circuit's authored mood into *us* (it targets Lighting deliberately —
+    // Lighting owns the fog/sun uniform block and forwards to Sky, so it is the
+    // authoritative end of the pair). Sky, meanwhile, has been touched by
+    // nobody: the forward at the bottom of `setPreset` is skipped while
+    // `this.sky` is still null. Reading `sky.presetName` therefore read Sky's
+    // untouched boot default and overwrote the track's mood with it.
+    //
+    // Measured before: skyPreset 'sunset' authored, lighting 'day', sky 'day',
+    // sunElevation 42, keyIntensity 3.9, night 0.
+    if (sky.presetName !== this.presetName) sky.setPreset(this.presetName);
+    // `keyDirection` is the Sky's to own, and until this moment `syncSunDirection`
+    // was falling back to a hardcoded direction. Re-read it now that Sky exists.
+    this.syncSunDirection();
   }
 
   // -------------------------------------------------------------------------
 
   setPreset(name: string): void {
     const key = (name in SKY_PRESETS ? name : 'day') as SkyPresetName;
+    // Cheap and idempotent, so re-pushing a preset from anywhere is free.
+    // Cannot early-out on `key === this.presetName` alone: `init()` calls
+    // `setPreset('day')` while `presetName` is already 'day' from the field
+    // initialiser, and that first call is what populates the cascades, the
+    // hemisphere, the fog and the shared uniform block.
+    if (this.presetApplied && key === this.presetName) return;
+    this.presetApplied = true;
     const p = SKY_PRESETS[key];
     this.presetName = key;
 

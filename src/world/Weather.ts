@@ -634,8 +634,14 @@ export class Weather implements ISubsystem {
           // beneath it is at or below the lava surface.
           vec3 right = normalize(vec3(uCamMatrix[0][0], uCamMatrix[0][1], uCamMatrix[0][2]));
           vec3 fwd = -normalize(vec3(uCamMatrix[2][0], uCamMatrix[2][1], uCamMatrix[2][2]));
-          vec3 flat = normalize(vec3(fwd.x, 0.0, fwd.z) + vec3(1e-5));
-          vec3 centre = uCamPos + flat * 44.0;
+          // Name must NOT be 'flat': that is an interpolation qualifier, reserved
+          // in both GLSL ES 1.00 and 3.00, so 'vec3 flat = ...' is a syntax error
+          // and this entire program silently failed to link -- "Shader Error 1282,
+          // Material Name: weather-shimmer, ERROR: 'flat' : syntax error".
+          // Volcano Rush therefore had no heat shimmer at all. There is a
+          // reserved-word regression guard in .probe-tmp/glsl-reserved.ts.
+          vec3 flatFwd = normalize(vec3(fwd.x, 0.0, fwd.z) + vec3(1e-5));
+          vec3 centre = uCamPos + flatFwd * 44.0;
           vec3 world = centre + right * (position.x * 150.0) + vec3(0.0, position.y * 26.0 + 6.0, 0.0);
           vWorld = world;
           gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);

@@ -225,7 +225,23 @@ export class Foliage implements ISubsystem {
       roughness: 0.78,
       metalness: 0,
       side: THREE.DoubleSide,
-      vertexColors: true,
+      // MUST STAY FALSE. Blade colour arrives per *instance* via
+      // `mesh.instanceColor` (see `buildGrass`), never per vertex —
+      // `bladeGeometry()` sets only position/uv/index and has no `color`
+      // attribute. `vertexColors: true` made three define USE_COLOR in the
+      // vertex prefix, which emits `attribute vec3 color; … vColor.rgb *= color;`
+      // against an attribute nothing is bound to, so the generic-attribute
+      // default (0,0,0,1) zeroed vColor before instanceColor could multiply it
+      // and all 27 360 blades rendered pure black. (MeshStandardMaterial has no
+      // `defaultAttributeValues`, unlike ShaderMaterial, so there is no white
+      // fallback to save it.)
+      //
+      // Per-instance colour is unaffected: three derives USE_INSTANCING_COLOR
+      // from `object.instanceColor !== null` alone (WebGLPrograms.js), and the
+      // *fragment* prefix defines USE_COLOR from `vertexColors || instancingColor`
+      // — so `vColor` is still declared and `diffuseColor *= vColor` still runs.
+      // Verified against three@0.185.1.
+      vertexColors: false,
       fog: true,
       dithering: true,
     });
