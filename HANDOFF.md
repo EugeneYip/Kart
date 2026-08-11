@@ -80,15 +80,41 @@ neonSign 14/14, trafficLight 1/1, obsidianSpire 18/18. Budget before → after:
 city 60→82 scene meshes / 0.35→0.44 M tris, volcano 55→66 / 0.24→0.28 M,
 coastal unchanged (control). Ceiling is 120 draw calls / 1.2 M tris.
 
-### 🔴 Two things left open here
+### Seen on screen — first pass done, art pass still needed
 
-- **None of the 18 new recipes has been LOOKED AT.** The browser pane was stuck
-  on a policy check ("Policy check in progress for this tab") for the whole
-  session, so this is numerically sound and completely un-art-directed. Screenshot
-  Neon Metropolis and Volcano Rush and judge the new props against MK8DX before
-  trusting any of them. `arcologyTower` (one instance, scale 2.4, the only
-  landmark on the lap) and `ashPlume` (1728 tris/instance) are the two most
-  likely to look wrong.
+Both circuits were finally looked at in the real game (chase + vista framings,
+800×450). **Everything renders, zero console errors, zero WebGL warnings**, and
+both circuits go from bare to genuinely populated — the city in particular now
+reads as a city, with lit `towerBlock` window grids down both sides and the
+folded-in `neonSign` posts blooming at their authored lat-17 positions.
+
+What still wants an art pass, in priority order:
+
+1. **`ashPlume` is the weakest recipe and should be redone.** It reads as a stack
+   of dark opaque lumps rather than a column of ash — the 9-puff sphere stack
+   with a 0x4a4340→0x9a9088 vertical gradient is too solid and too dark against
+   the volcanic sky, and at 1728 tris/instance it is also the most expensive new
+   prop. It probably wants soft camera-facing plates with real transparency (or
+   to move to `Weather`/VFX entirely) rather than opaque geometry.
+2. **Distant towers read as flat dark boxes against a bright sky.** The authored
+   `skyscraper` run sits at lat 74, scale 1.6 (≈74 m), and at that distance the
+   silhouettes go dark and featureless. The geometry is pre-existing — this
+   change only added 14 more anchors to it — but adding them made the problem
+   prominent, so it is now worth fixing. Wants rim light, or a paler distance
+   tint, or emissive window density that survives at range.
+3. `arcologyTower`, `bridgePylon`, `spiralPylon` and `warningPost` were not seen
+   close up. Judge them from a driver's eye before trusting them.
+
+**⚠️ Method note for whoever reads counts next — this cost real time.**
+`mesh.count` on a prop `InstancedMesh` is **not** the instance total. `emit()`
+hands any mesh with `n >= CHUNK_MIN_INSTANCES` to `InstanceChunks`, which
+rewrites `count` and the instance attributes **every frame** from camera
+position, and passes `!mesh.castShadow` so non-casters (every `glow` / `sign` /
+`windows` companion) cull more aggressively than the body they belong to.
+Reading `count` mid-frame therefore shows wildly different numbers for the same
+anchor set — `Prop:skyscraper` 66 vs `Prop:skyscraperWindows` 28, and
+`warningpost:glow` sitting at 0 — none of which is a bug. To count instances,
+read `instanceMatrix.count` (the capacity) or count anchors before emit.
 - **`bridgePylon` / `spiralPylon` have a documented compromise.** They are
   authored *below* the deck (`up: -12` city flyover, `-22` volcano bridge, `-18`
   spiral) and one geometry cannot reach all three depths — sized to meet the deck
