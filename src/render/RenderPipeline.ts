@@ -355,7 +355,7 @@ export class RenderPipeline implements ISubsystem {
       // Built lazily here so a tier rebuild re-attaches it, and only on tiers
       // that actually run the blur.
       if (!this.subjectMask) this.subjectMask = new SubjectMask(q.tier === 'low' ? 0.2 : 0.25);
-      this.subjectMask.setSize(this.width, this.height);
+      this.subjectMask.setSize(this.deviceWidth(), this.deviceHeight());
       this.motionBlur.setSubjectMask(this.subjectMask.texture);
       this.motionPass = new EffectPass(camera, this.motionBlur);
       composer.addPass(this.motionPass);
@@ -566,7 +566,7 @@ export class RenderPipeline implements ISubsystem {
     // standstill (see MB_MIN_MOTION), which has misled two reviews into
     // believing motion blur was off at speed as well.
     const mb = this.motionBlur;
-    const peak = mb ? Math.min(mb.peakMotion, MB_MAX_RADIUS) * this.width : 0;
+    const peak = mb ? Math.min(mb.peakMotion, MB_MAX_RADIUS) * this.deviceWidth() : 0;
     return {
       passes: this.composer ? this.composer.passes.filter((p) => p.enabled).length : 0,
       cpuMs: this.lastCpuMs,
@@ -618,6 +618,20 @@ export class RenderPipeline implements ISubsystem {
     const vp = this.grade.preset;
     this.vignette.darkness = vp.vignetteDarkness + this.speedSmooth * 0.14;
     this.vignette.offset = vp.vignetteOffset - this.speedSmooth * 0.05;
+  }
+
+  /**
+   * `width`/`height` are CSS pixels — that is what `Engine.getSize()` returns and
+   * what `EffectComposer.setSize()` expects, since the composer applies the
+   * renderer's pixel ratio itself. Anything that needs to reason in real buffer
+   * pixels (mask resolution, blur length in pixels) must go through these.
+   */
+  private deviceWidth(): number {
+    return Math.max(1, Math.round(this.width * this.engine.renderer.getPixelRatio()));
+  }
+
+  private deviceHeight(): number {
+    return Math.max(1, Math.round(this.height * this.engine.renderer.getPixelRatio()));
   }
 
   /**
@@ -675,7 +689,7 @@ export class RenderPipeline implements ISubsystem {
     this.height = Math.max(1, height);
     if (!this.composer) return;
     this.composer.setSize(this.width, this.height);
-    this.subjectMask?.setSize(this.width, this.height);
+    this.subjectMask?.setSize(this.deviceWidth(), this.deviceHeight());
   }
 
   dispose(): void {

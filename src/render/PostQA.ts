@@ -212,7 +212,7 @@ interface MbGame {
       getWorldDirection(v: unknown): unknown;
       updateMatrixWorld(force?: boolean): void;
     };
-    renderer: { setPixelRatio(v: number): void };
+    renderer: { setPixelRatio(v: number): void; domElement: { width: number } };
     adaptiveResolution: boolean;
     setRenderCallback(fn: (dt: number) => void): void;
   };
@@ -338,7 +338,9 @@ function mbFrame(
   const subject = h.subjectInFrame(0);
   game.engine.setRenderCallback(paint);
 
-  const width = (pipeline as unknown as { width: number }).width;
+  // Real buffer width, not CSS width: blur lengths are only meaningful in the
+  // pixels the shader actually convolves.
+  const width = game.engine.renderer.domElement.width;
   const camAny = cam as unknown as { near: number; far: number };
   const near = camAny.near;
   const far = camAny.far;

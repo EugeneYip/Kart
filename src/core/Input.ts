@@ -150,8 +150,16 @@ export class Input implements ISubsystem {
     if (Math.abs(this.touchSteer) > Math.abs(target)) target = this.touchSteer;
 
     // Ramping in feels heavier than snapping back — that asymmetry reads as weight.
+    //
+    // These are deliberately FAST, because they are no longer the authority on
+    // steering feel: `KartPhysics` owns a rate limiter on the fixed 120 Hz step.
+    // This loop runs at *display* rate, so a slow ramp here was quantised four
+    // times more coarsely at 30 fps than at 120 fps, and it double-filtered
+    // already-analog gamepad input. Keeping it light makes it an anti-step
+    // smoother and leaves the deterministic physics limiter as the single
+    // authority at any frame rate.
     const towardZero = Math.abs(target) < Math.abs(s.steer);
-    const rate = towardZero ? 12.5 : 7.5;
+    const rate = towardZero ? 20.0 : 14.0;
     s.steer = moveTowards(s.steer, target, rate * ctx.dt);
     if (Math.abs(s.steer) < 0.002) s.steer = 0;
 

@@ -212,6 +212,11 @@ export class PhysicsWorld implements ISubsystem {
     b.forward.set(0, 0, -1).applyQuaternion(quaternion);
     b.up.set(0, 1, 0).applyQuaternion(quaternion);
     b.yawRate = 0;
+    b.steerRaw = 0;
+    b.steerCmd = 0;
+    b.wallGrace = 0;
+    b.wallContact = false;
+    b.wallImpactRef = 0;
     b.pitch = 0;
     b.roll = 0;
     b.pitchVel = 0;
@@ -314,6 +319,10 @@ export class PhysicsWorld implements ISubsystem {
         b.forwardSpeed = 0;
         b.lateralSpeed = 0;
         b.yawRate = 0;
+        // The rack unwinds while the lights are on, so the countdown can't be
+        // used to pre-load a full-lock flick that fires on green.
+        b.steerRaw = 0;
+        b.steerCmd = 0;
         b.ctrlDriftPressed = false;
         b.wasGrounded = b.grounded;
         writeState(b, dt);

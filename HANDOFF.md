@@ -2,7 +2,11 @@
 
 ---
 
-## 🔴 P0 — HUMAN PLAYTEST REPORT (outranks everything below)
+## ✅ P0 — HUMAN PLAYTEST REPORT — ALL 7 FIXED
+
+All seven defects from the play session are resolved and measured. Two of them
+uncovered **entirely dead mechanics** that no test had ever caught (see "dead
+mechanics" below).
 
 A person actually played the build. These are their words, translated into
 defects. **Playability beats polish** — a beautiful game that isn't fun to drive
@@ -14,11 +18,29 @@ has failed. Do these first.
 | ~~P0-2~~ | The **start/finish gate** and sometimes a **balloon arch** sit **parallel to the road, running down its middle**, instead of spanning across it. Yaw ~90° out. **DONE** — two opposite conventions, each path using the wrong one. Gate angle off the binormal 90.0°→0.0°. | `src/world/Props.ts` |
 | ~~P0-3~~ | An **item box is stuck in the middle of the road** at the start. **DONE** — it was *height*, not lateral position. A tumbling+bobbing 1.72 m box reaches 1.47 m below centre; authored at 1.50 m left 3 cm over the road crown. Now 1.70 m. Spawns also now publish `normal` (was `undefined`, so boxes ignored bank). | `src/track/*` (`getItemBoxSpawns`) |
 | ~~P0-4~~ | ~~The **position/ranking plate clips its own text** — the plate edge cuts into the numeral.~~ **DONE** — see item 6. Measured before: at 1080p `11TH`/`12TH` lost **9.1 px of glyph and 35.1 px of outline off each side**; even `1ST` lost 10.8 px below. After: zero clipped ink across 340 configurations. | `src/ui/*` |
-| P0-5 | **"Touching the edge equals a crash" is far too harsh** — makes the game too difficult. Walls must SLIDE. | `src/physics/KartCollision.ts` |
+| ~~P0-5~~ | **"Touching the edge equals a crash" is far too harsh** — makes the game too difficult. Walls must SLIDE. **DONE** — the per-event response was fine; it ran **per tick, twice** (nose+tail probe) at 120 Hz with no notion of "still touching the same wall". Measured before: 3 s of light steering pressure against a wall took **18 m/s → 0.03 m/s, a 99.9 % loss**. After: 6.2 % loss, **1 penalty instead of ~325–650**. Retained speed 5°/15°/30°/60°/90° = 97.7 / 93.3 / 87.3 / 58.5 / 34.0 %. | `src/physics/KartCollision.ts` |
 | ~~P0-6~~ | A road section **containing a boost pad is incomplete and nearly impassable**. **DONE** — three causes, incl. `surfaceAt()` returning `Void` for `TF.Gap` before testing `TF.Glider`, so **no kart on any circuit had ever deployed a glider**. Crossings 0/12 → 8/8 at 22/28/34/40 m/s on all three tracks. | `src/track/*` |
-| P0-7 | **Steering is too sensitive / over-reacts**, making the kart hard to control. | `src/physics/*` (+ `Input.ts` by request) |
+| ~~P0-7~~ | **Steering is too sensitive / over-reacts**, making the kart hard to control. **DONE** — the old curve bottomed out at 73 % authority; at 38 m/s it demanded **7.28 g** against a 5.6 g tyre budget, and the surplus came back as slip — "twitchy input, then mushy slide". New square falloff keeps every speed inside budget. Yaw at 38 m/s 1.880 → 0.839 rad/s (−55 %); **5 m/s unchanged (−0.3 %)**, so low-speed agility survives. Drift now holds **97.0 %** of entry speed (was 63.2 %). | `src/physics/*` (+ `Input.ts` by request) |
 
-### Likely shared root cause for P0-1 / P0-2 (and possibly the sign mirroring)
+### 🔴 NEW — DEAD MECHANICS uncovered while fixing the above
+
+Two features exist in code, are authored into tracks, and **have never once run**.
+Both were found by numeric probing, not by looking — no screenshot would reveal
+a mechanic that simply never fires.
+
+| Mechanic | Status | Owner |
+|---|---|---|
+| **Gliders** | `surfaceAt()` returned `Void` for `TF.Gap` **before** testing `TF.Glider`, and every authored glider volume sits on a Gap segment. No kart on any circuit had ever deployed one. **FIXED** — crossings 0/12 → 8/8. | `src/track/*` |
+| **Anti-gravity** | Never engages. Confirmed by A/B against original physics, so it is pre-existing, not a regression. Authored AG zones exist on Neon Metropolis. | `src/physics/*` + `src/track/*` |
+| **Ramp tricks** | Never pay out. Same A/B confirmation. `kart:trick` is specified and wired but the boost never lands. | `src/physics/*` |
+
+**Suspicion worth acting on:** three independent "authored but never fires" bugs
+in one codebase means the pattern is systemic, not coincidental. Anything gated
+on a surface-flag test or a zone lookup deserves an explicit "does this ever
+become true during a real lap?" probe. Add such a probe for boost pads, item
+boxes, checkpoints, respawn triggers and every `SurfaceType`.
+
+### Shared root cause for P0-1 / P0-2 — CONFIRMED
 
 P0-2's 90°-out gates and the `sponsorBoard`'s mirrored text (item 0b below,
 where the UV path was independently verified **correct**) both point at the

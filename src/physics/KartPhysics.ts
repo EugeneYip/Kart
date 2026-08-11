@@ -35,7 +35,7 @@ import type { GroundHit, ITrackService, KartState, KartTuning } from '@/core/Typ
 import { DriftStage, SurfaceType } from '@/core/Types';
 import { SURFACES, WORLD } from '@/core/Config';
 import { bus } from '@/core/EventBus';
-import { clamp, clamp01, damp, lerp, smoothstep } from '@/core/MathUtils';
+import { clamp, clamp01, damp, lerp, moveTowards, smoothstep } from '@/core/MathUtils';
 
 // ---------------------------------------------------------------------------
 //  Constants — the feel lives here.
@@ -46,9 +46,11 @@ export const PHYS = {
   peakSlip: 0.14,
   /** How much grip is left at huge slip angles, 0..1. */
   slipFalloff: 0.34,
-  /** Lateral acceleration budget at grip 1.0, m/s². Tuned so that full lock at
-   *  top speed sits exactly on the grip limit — slower is steering-limited,
-   *  faster (boosting) understeers and forces you to drift. */
+  /** Lateral acceleration budget at grip 1.0, m/s². The steering curve below is
+   *  deliberately kept INSIDE this budget at every speed: if the chassis can yaw
+   *  faster than the tyres can redirect the velocity, the kart writes off its own
+   *  momentum as slip and the player feels a twitchy input followed by a mushy
+   *  slide. Only a fully-committed drift is allowed to approach the limit. */
   latAccel: 55,
   /** Speed scrubbed per radian of velocity redirection (gripping / drifting). */
   gripScrub: 0.042,
@@ -73,7 +75,47 @@ export const PHYS = {
   /** Boost grants off-road immunity for this long. */
   boostOffroadImmunity: 0.4,
   /** Yaw response half-life, seconds. Lower = twitchier. */
-  yawHalfLife: 0.055,
+  yawHalfLife: 0.045,
+
+  // --- steering authority vs speed -----------------------------------------
+  /**
+   * `authority = turnRate * (steerFloor + (1-steerFloor) / (1 + (v/steerRef)²))`
+   *
+   * A square falloff, not the old `1/(1+kv)`: it keeps essentially ALL of the
+   * low-speed agility (a hairpin at 5 m/s is unchanged) and then drops away hard,
+   * so a 38 m/s sweeper is a wide, planted arc instead of a flick. The old curve
+   * bottomed out at 73 % of full authority, which at 38 m/s asked the tyres for
+   * 7.3 g — well past the `latAccel` budget — and the surplus yaw came straight
+   * back out as slip. Every speed now sits comfortably inside the budget, which
+   * is what "planted and predictable" actually means numerically.
+   */
+  steerFloor: 0.22,
+  steerRef: 15,
+
+  // --- steering inertia -----------------------------------------------------
+  /** Lock units per second while winding ON. 1/7.0 ≈ 0.14 s to full lock. */
+  steerRate: 7.0,
+  /** ...and while unwinding. Faster, so you can always catch the kart. */
+  steerReturnRate: 11.0,
+  /** Smoothing on top of the rate limit — kills the corner in the ramp. */
+  steerSmoothHalf: 0.030,
+
+  // --- wall alignment -------------------------------------------------------
+  /**
+   * A barrier you are leaning on physically resists rotation INTO itself, and
+   * modelling that is not cosmetic — it is the difference between a wall you can
+   * slide down and a wall that ends your run. Without it the chassis keeps yawing
+   * while the wall pins the velocity along its face, so the slip angle marches
+   * off toward 90°, the tyre model's large-slip branch stops preserving magnitude
+   * and starts plain-damping instead, and the kart's entire momentum is deleted
+   * over about a second. Measured: 18 m/s → 0.03 m/s in 3 s of light contact.
+   *
+   * `wallNoseLimit` is the `forward·n` below which the nose counts as aimed into
+   * the wall; `wallAlignRate` is the restoring yaw that walks it back to parallel.
+   */
+  wallNoseLimit: 0.0,
+  wallAlignRate: 2.4,
+
   /** Yaw authority retained while airborne. */
   airYawFactor: 0.34,
   /** Aerodynamic downforce at top speed, in g. Keeps ramps landing flat. */
@@ -161,6 +203,10 @@ export interface KartBody {
   ctrlBrake: number;
   ctrlDrift: boolean;
   ctrlDriftPressed: boolean;
+  /** `ctrlSteer` after rate limiting — the steering rack's own position. */
+  steerRaw: number;
+  /** ...and after smoothing. THIS is what the yaw model reads. */
+  steerCmd: number;
 
   // ---- kinematics ----
   position: THREE.Vector3;
@@ -258,6 +304,16 @@ export interface KartBody {
   glideTime: number;
   bumpCooldown: number;
   wallCooldown: number;
+  /** True on any tick where a wall probe is overlapping. */
+  wallContact: boolean;
+  /** Unit normal of the wall last touched, pointing AWAY from the wall. */
+  wallNormal: THREE.Vector3;
+  /** Seconds left of post-impact grace — see KartCollision.resolveWalls. */
+  wallGrace: number;
+  /** Closing speed of the impact that opened the current contact, m/s. */
+  wallImpactRef: number;
+  /** Monotonic count of *penalised* wall impacts. Debug/QA only. */
+  wallImpacts: number;
 
   // ---- readouts (debug / VFX) ----
   slipAngle: number;
@@ -315,6 +371,8 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     ctrlBrake: 0,
     ctrlDrift: false,
     ctrlDriftPressed: false,
+    steerRaw: 0,
+    steerCmd: 0,
 
     position: new THREE.Vector3().copy(state.position),
     velocity: new THREE.Vector3().copy(state.velocity),
@@ -391,6 +449,11 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     glideTime: 0,
     bumpCooldown: 0,
     wallCooldown: 0,
+    wallContact: false,
+    wallNormal: new THREE.Vector3(0, 1, 0),
+    wallGrace: 0,
+    wallImpactRef: 0,
+    wallImpacts: 0,
 
     slipAngle: 0,
     gripFactor: 1,
@@ -638,26 +701,73 @@ export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
 
   b.velocity.addScaledVector(_v1, dt);
 
+  // --- steering inertia ---------------------------------------------------
+  // A real steering rack has mass. Feeding the stick straight into the yaw
+  // target is most of what reads as "the kart over-reacts": a 1-frame step to
+  // full lock is a step input no vehicle can produce. Rate-limit it (asymmetric
+  // — unwinding is faster than winding on, so you can always catch a slide),
+  // then smooth off the corner the limiter leaves behind. Both stages use `dt`,
+  // so the result is identical at any substep count.
+  const steerTarget = clamp(steerIn, -1, 1);
+  const unwinding =
+    Math.abs(steerTarget) < Math.abs(b.steerRaw) || steerTarget * b.steerRaw < 0;
+  b.steerRaw = moveTowards(
+    b.steerRaw,
+    steerTarget,
+    (unwinding ? PHYS.steerReturnRate : PHYS.steerRate) * dt,
+  );
+  b.steerCmd = damp(b.steerCmd, b.steerRaw, PHYS.steerSmoothHalf, dt);
+  const steer = b.steerCmd;
+
   // --- yaw ---------------------------------------------------------------
   const speedH = Math.hypot(b.velocity.dot(b.forward), b.velocity.dot(b.right));
   const absSpeed = Math.abs(b.forwardSpeed);
   const speedRatio = clamp01(absSpeed / Math.max(1, t.maxSpeed));
 
-  // MK8's signature: tight at walking pace, lazy at 200cc speeds.
-  const authority = t.turnRate * (0.55 + 0.45 / (1 + absSpeed * 0.04));
+  // MK8's signature: tight at walking pace, deliberately lazy at racing speed.
+  // See PHYS.steerFloor / steerRef for why the falloff is square.
+  const sf = absSpeed / PHYS.steerRef;
+  const authority = t.turnRate * (PHYS.steerFloor + (1 - PHYS.steerFloor) / (1 + sf * sf));
   const speedGate = clamp01(speedH / PHYS.steerGateSpeed);
   const reversing = b.forwardSpeed < -0.4;
 
   let targetYaw: number;
   if (b.driftPhase === DriftPhase.Drifting) {
     // Steering modulates how tight the drift line is; it can never flip sides.
-    const inward = clamp(steerIn * b.driftDir, -1, 1);
+    // The bonus multiplies the SAME speed-faded authority as gripping, so it can
+    // never stack into a yaw rate the tyres can't deliver — that was how a
+    // high-speed drift used to launder its own momentum into slip.
+    const inward = clamp(steer * b.driftDir, -1, 1);
     const tighten = lerp(0.52, 1.0 + t.driftTurnBonus, (inward + 1) * 0.5);
     targetYaw = -b.driftDir * authority * tighten * speedGate;
   } else if (!b.grounded) {
-    targetYaw = -steerIn * t.turnRate * PHYS.airYawFactor;
+    targetYaw = -steer * t.turnRate * PHYS.airYawFactor;
   } else {
-    targetYaw = -steerIn * authority * speedGate * (reversing ? -0.8 : 1);
+    targetYaw = -steer * authority * speedGate * (reversing ? -0.8 : 1);
+  }
+
+  // --- leaning on a barrier ----------------------------------------------
+  // The wall resists rotation into itself. Applied to the TARGET, not to
+  // `yawRate`, so the yaw filter can't fight it back: editing `yawRate` here
+  // would just be undone by the damp toward `targetYaw` on the next tick.
+  // (`wallContact` / `wallNormal` are one tick stale — walls resolve after this
+  // function — which is 8 ms and invisible.)
+  // The grace window (not just this tick's overlap) so that a kart bounced off a
+  // steep hit keeps straightening while it is airborne of the wall — that
+  // follow-through is most of why sliding down a guardrail feels helpful.
+  if ((b.wallContact || b.wallGrace > 0) && b.grounded && !hardStun) {
+    // d(forward·n)/dω = (up × forward)·n. Its sign is the direction of yaw that
+    // turns the nose back OUT of the wall.
+    const swing = _v3.crossVectors(b.up, b.forward).dot(b.wallNormal);
+    const into = b.forward.dot(b.wallNormal);
+    if (into < PHYS.wallNoseLimit && Math.abs(swing) > 1e-4) {
+      const outward = swing >= 0 ? 1 : -1;
+      // Cancel any yaw that would dig the nose in further...
+      if (targetYaw * outward < 0) targetYaw = 0;
+      // ...and add a restoring rate proportional to how nose-in we are, so a kart
+      // that arrived at 30° walks itself back to parallel and slides.
+      targetYaw += outward * PHYS.wallAlignRate * clamp01(-into);
+    }
   }
 
   if (hardStun) {
@@ -960,6 +1070,10 @@ function stepRespawn(b: KartBody, dt: number): void {
 
   b.velocity.set(0, 0, 0);
   b.yawRate = 0;
+  b.steerRaw = 0;
+  b.steerCmd = 0;
+  b.wallGrace = 0;
+  b.wallContact = false;
   b.pitch = damp(b.pitch, 0, 0.1, dt);
   b.roll = damp(b.roll, 0, 0.1, dt);
   b.pitchVel = 0;
@@ -1005,6 +1119,10 @@ function guardNaN(b: KartBody): void {
   b.position.y += 1.0;
   b.velocity.set(0, 0, 0);
   b.yawRate = 0;
+  b.steerRaw = 0;
+  b.steerCmd = 0;
+  b.wallGrace = 0;
+  b.wallContact = false;
   b.pitch = 0;
   b.roll = 0;
   b.pitchVel = 0;
@@ -1032,8 +1150,8 @@ export function writeState(b: KartBody, dt: number): void {
 
   const drifting = b.driftPhase === DriftPhase.Drifting;
   st.steerAngle = drifting
-    ? clamp(b.driftDir * 0.34 + b.ctrlSteer * 0.26, -0.62, 0.62)
-    : b.ctrlSteer * 0.5;
+    ? clamp(b.driftDir * 0.34 + b.steerCmd * 0.26, -0.62, 0.62)
+    : b.steerCmd * 0.5;
 
   for (let i = 0; i < 4; i++) {
     st.suspension[i] = b.wheels[i].compression;

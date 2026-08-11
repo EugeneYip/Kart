@@ -104,6 +104,14 @@ export class SubjectMask {
 
   get texture(): THREE.Texture { return this.target.texture; }
 
+  /**
+   * `width`/`height` must be in **device** pixels, i.e. the size of the actual
+   * colour buffer the mask is going to be sampled against, not the CSS size.
+   * RenderPipeline tracks CSS size (that is what `Engine.getSize()` returns) and
+   * the composer applies the pixel ratio internally; feeding CSS pixels here
+   * gave a 200x113 mask against a 1920x1080 frame — a tenth of the resolution
+   * rather than a quarter, and a silhouette feathered over ~10 px instead of ~4.
+   */
   setSize(width: number, height: number): void {
     const w = Math.max(32, Math.round(width * this.scale));
     const h = Math.max(18, Math.round(height * this.scale));
@@ -176,20 +184,24 @@ export class SubjectMask {
       m.material = this.flat;
     }
 
-    renderer.setRenderTarget(this.target);
-    renderer.autoClear = false;
-    renderer.setClearColor(0x000000, 1);
-    renderer.clear(true, true, false);
-    renderer.render(root, camera);
-
-    for (let i = 0; i < this.meshes.length; i++) {
-      this.meshes[i].material = this.stashed[i];
+    // try/finally is not defensive padding here: these are another subsystem's
+    // meshes, and leaving them holding a flat white material would render the
+    // player's kart as a white blob for the rest of the session.
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.autoClear = false;
+      renderer.setClearColor(0x000000, 1);
+      renderer.clear(true, true, false);
+      renderer.render(root, camera);
+    } finally {
+      for (let i = 0; i < this.meshes.length; i++) {
+        this.meshes[i].material = this.stashed[i];
+      }
+      this.stashed.length = 0;
+      renderer.setClearColor(this.prevClear, prevAlpha);
+      renderer.autoClear = prevAutoClear;
+      renderer.setRenderTarget(prevTarget);
     }
-    this.stashed.length = 0;
-
-    renderer.setClearColor(this.prevClear, prevAlpha);
-    renderer.autoClear = prevAutoClear;
-    renderer.setRenderTarget(prevTarget);
 
     this.drawCalls = renderer.info.render.calls - prevCalls;
     this.active = true;

@@ -1270,13 +1270,17 @@ function tWall(): TestReport {
   // penalties a second; 3 s of it cost 99.9 % of the kart's speed. Anything that
   // reintroduces a per-tick penalty will fail here and nowhere else.
   const grind = (withWall: boolean): { v: number; contact: number; penalties: number } => {
-    // Wall-side lateral on the tight-guardrail straight, gently leaning into it.
+    // With the wall: start beside the tight guardrail and lean gently into it.
+    // Without: straight down the middle, steer 0 — the control run must not touch
+    // a barrier at all, so it cannot steer (0.35 of lock puts it in the OTHER
+    // guardrail inside three seconds, which made the first version of this
+    // control run just as dead as the case it was supposed to baseline).
     place(4, withWall ? -(WALL_TIGHT - 1.0) : 0, 18, 0);
     const b = physics.getBody(0)!;
     const pen0 = b.wallImpacts;
     let contact = 0;
     for (let i = 0; i < 120 * 3; i++) {
-      physics.setControl(0, ctrl(withWall ? -0.35 : -0.35, 1));
+      physics.setControl(0, ctrl(withWall ? -0.35 : 0, 1));
       stepPhysics(1);
       if (b.wallContact) contact++;
     }

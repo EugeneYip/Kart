@@ -255,9 +255,30 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     contrast: 1.08,
     pivot: 0.43,
     saturation: 1.14,
-    vibrance: 0.26,
+    // GREEN SKY BAND — this is the render side's half of it.
+    //
+    // Measured down the centre of a sunset frame (hue in degrees, top to
+    // bottom): the sky runs 174 -> 163 -> 136 -> 85 -> 33. Four consecutive
+    // sample heights have green as the dominant channel, which is the reported
+    // teal -> green -> orange band. With this LUT and the saturation/vibrance
+    // stage switched off the band is *still there*, so the hue rotation
+    // originates in src/world/Sky.ts (see the report) — but the grade was
+    // amplifying it in two ways, and both are fixed here:
+    //
+    //   vibrance 0.26 was the highest of any preset, and vibrance by definition
+    //   weights towards LOW-chroma pixels — which is exactly what the washed-out
+    //   green transition band is. It took the band from sat 0.30 to 0.42.
+    //
+    //   midTint blue at 0.90 pulls B down through the mid-tones, and pulling B
+    //   out of a teal is the definition of rotating it towards green: measured,
+    //   the LUT moved the band from hue 174 to hue 156.
+    //
+    // Warm highlights are what sells golden hour and they are untouched
+    // (highTint still drops B hard); only the mid-tones, where the transition
+    // band lives, are relaxed.
+    vibrance: 0.18,
     shadowTint: [0.98, 0.9, 1.1],
-    midTint: [1.07, 0.985, 0.9],
+    midTint: [1.07, 0.985, 0.955],
     highTint: [1.16, 1.0, 0.76],
     lutContrast: 0.18,
     lutIntensity: 1.0,
