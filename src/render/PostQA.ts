@@ -42,7 +42,173 @@ interface EngineLike {
   renderer: {
     getContext(): WebGL2RenderingContext;
     setRenderTarget(t: null): void;
+    info: { programs?: Array<{ name?: string; program?: WebGLProgram | null }> | null };
   };
+}
+
+// ---------------------------------------------------------------------------
+//  GL validation probe
+// ---------------------------------------------------------------------------
+
+/**
+ * Attribute every GL error to the draw call and shader program that caused it.
+ *
+ * This exists because of a reported flood of
+ *
+ *   GL_INVALID_OPERATION: Mismatch between texture format and sampler type
+ *
+ * that Chrome eventually silences, and which — being emitted by the browser's
+ * command decoder rather than by JavaScript — does not appear in any console
+ * reader an automated reviewer has access to. Two review rounds argued about
+ * which subsystem owned it from indirect evidence. This makes it a measurement:
+ * `gl.getError()` is called immediately after every draw, so an error can only
+ * belong to the draw that just happened, and the currently bound program is
+ * resolved back to its three.js material name.
+ *
+ * A validation failure per draw also makes Chrome's command decoder crawl, so a
+ * non-empty result here is a performance finding as much as a correctness one.
+ *
+ * `getError()` forces a synchronous flush, so this is a diagnostic tool and
+ * never something to leave running.
+ */
+const GL_ERROR_NAMES: Record<number, string> = {
+  0x0500: 'INVALID_ENUM',
+  0x0501: 'INVALID_VALUE',
+  0x0502: 'INVALID_OPERATION',
+  0x0505: 'OUT_OF_MEMORY',
+  0x0506: 'INVALID_FRAMEBUFFER_OPERATION',
+  0x9242: 'CONTEXT_LOST_WEBGL',
+};
+
+const DRAW_ENTRY_POINTS = [
+  'drawElements',
+  'drawElementsInstanced',
+  'drawArrays',
+  'drawArraysInstanced',
+] as const;
+
+interface GlValidateResult {
+  frames: number;
+  draws: number;
+  errors: number;
+  /** `entryPoint | ERROR_NAME | program` -> count. Empty object means clean. */
+  byCause: Record<string, number>;
+  pendingBefore: number;
+}
+
+async function glValidate(engine: EngineLike, frames: number): Promise<GlValidateResult> {
+  const gl = engine.renderer.getContext();
+  const programsOf = (): Array<{ name?: string; program?: WebGLProgram | null }> =>
+    engine.renderer.info.programs ?? [];
+
+  // Drain anything already queued so we only attribute errors we observed.
+  let pendingBefore = 0;
+  while (gl.getError() !== 0 && pendingBefore < 64) pendingBefore++;
+
+  const byCause: Record<string, number> = {};
+  let draws = 0;
+  let errors = 0;
+
+  type Ctx = Record<string, unknown>;
+  const ctx = gl as unknown as Ctx;
+  const original: Record<string, unknown> = {};
+
+  const nameOfCurrentProgram = (): string => {
+    const current = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
+    if (!current) return 'no-program';
+    for (const p of programsOf()) if (p.program === current) return p.name ?? 'unnamed';
+    // postprocessing builds its fullscreen materials outside three's cache.
+    return 'fullscreen-pass';
+  };
+
+  for (const key of DRAW_ENTRY_POINTS) {
+    const fn = ctx[key] as ((...a: unknown[]) => void) | undefined;
+    if (typeof fn !== 'function') continue;
+    original[key] = fn;
+    const bound = fn.bind(gl);
+    ctx[key] = (...args: unknown[]): void => {
+      bound(...args);
+      draws++;
+      const e = gl.getError();
+      if (e === 0) return;
+      errors++;
+      const cause = `${key} | ${GL_ERROR_NAMES[e] ?? e} | ${nameOfCurrentProgram()}`;
+      byCause[cause] = (byCause[cause] ?? 0) + 1;
+    };
+  }
+
+  let counted = 0;
+  for (let i = 0; i < frames; i++) {
+    await new Promise<void>((r) => {
+      let done = false;
+      const finish = (): void => { if (!done) { done = true; r(); } };
+      requestAnimationFrame(finish);
+      // rAF stops entirely when the preview pane is not compositing; without
+      // this the probe would hang instead of reporting a short run.
+      setTimeout(finish, 120);
+    });
+    counted++;
+  }
+
+  for (const key of DRAW_ENTRY_POINTS) {
+    if (original[key]) ctx[key] = original[key];
+  }
+
+  return { frames: counted, draws, errors, byCause, pendingBefore };
+}
+
+/**
+ * Everything the render chain binds into a sampler, with the properties that
+ * decide whether the bind is legal. A depth texture with a comparison mode set
+ * requires `sampler2DShadow`; bound to a plain `sampler2D` it fails validation
+ * on every draw of that program — which is the mechanism behind the reported
+ * flood, and the reason this dumps `compareFunction` for every target.
+ */
+function describeBoundTextures(pipeline: RenderPipeline): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  type Tex = {
+    name?: string; format?: number; type?: number; internalFormat?: unknown;
+    minFilter?: number; magFilter?: number; compareFunction?: unknown;
+    isDepthTexture?: boolean; colorSpace?: string;
+  };
+  const add = (label: string, t: Tex | null | undefined): void => {
+    if (!t) { out.push({ label, texture: 'none' }); return; }
+    out.push({
+      label,
+      name: t.name || '(unnamed)',
+      depth: !!t.isDepthTexture,
+      format: t.format,
+      type: t.type,
+      internalFormat: t.internalFormat ?? null,
+      minFilter: t.minFilter,
+      magFilter: t.magFilter,
+      // The one that bites. Must be null/undefined for a `sampler2D` bind.
+      compareFunction: (t.compareFunction ?? null) as unknown,
+      colorSpace: t.colorSpace,
+    });
+  };
+
+  const c = pipeline.composer as unknown as {
+    inputBuffer?: { texture?: Tex; depthTexture?: Tex };
+    outputBuffer?: { texture?: Tex; depthTexture?: Tex };
+    depthTexture?: Tex;
+  };
+  add('composer.inputBuffer.color', c.inputBuffer?.texture);
+  add('composer.inputBuffer.depth', c.inputBuffer?.depthTexture);
+  add('composer.outputBuffer.depth', c.outputBuffer?.depthTexture);
+
+  const p = pipeline as unknown as {
+    normalPass?: { texture?: Tex } | null;
+    subjectMask?: { texture?: Tex } | null;
+  };
+  add('normalPass.texture', p.normalPass?.texture);
+  add('subjectMask.texture', p.subjectMask?.texture);
+
+  for (const pass of pipeline.composer.passes) {
+    const dt = (pass as unknown as { getDepthTexture?: () => Tex | null }).getDepthTexture?.();
+    if (dt) add(`${describe(pass)}.depthTexture`, dt);
+  }
+  return out;
 }
 
 /** Wait two frames, then read the composited frame back and summarise it. */
@@ -112,6 +278,16 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
   const api = {
     pipeline,
     probe: () => probe(engine),
+
+    /**
+     * Prove the presence or absence of the `Mismatch between texture format and
+     * sampler type` flood. Returns `{ errors: 0, byCause: {} }` when clean, or
+     * the exact draw entry point / error / material name when not.
+     */
+    glValidate: (frames = 30) => glValidate(engine, frames),
+
+    /** Every texture the post chain binds, with its sampler-compatibility fields. */
+    boundTextures: () => describeBoundTextures(pipeline),
 
     /**
      * Per-pass cost. Measures median frame time with every pass on, then with
@@ -628,7 +804,10 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
   };
 
   (globalThis as unknown as Record<string, unknown>).__POST__ = api;
-  console.info('[PostQA] window.__POST__ ready — probe() passCost() toneMap() exposure() passes() autoRun()');
+  console.info(
+    '[PostQA] window.__POST__ ready — probe() passCost() toneMap() exposure() passes() autoRun()'
+    + ' glValidate() boundTextures()',
+  );
 
   let auto = '';
   try { auto = sessionStorage.getItem('postqa.auto') ?? ''; } catch { /* ignore */ }

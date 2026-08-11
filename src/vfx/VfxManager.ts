@@ -855,9 +855,18 @@ export class VfxManager implements IVfxService, ISubsystem {
       }),
 
       bus.on('quality:change', () => {
-        // The pools are sized at init; nothing to rebuild, but the depth
-        // prepass follows the tier.
-        this.setDepthPrepass(this.quality.tier === 'ultra');
+        // The pools are sized at init, so there is nothing to rebuild here.
+        //
+        // This deliberately does NOT re-enable the depth prepass on ultra. It
+        // used to (`setDepthPrepass(tier === 'ultra')`), which quietly undid the
+        // decision documented at the end of init(): the prepass re-renders the
+        // ENTIRE scene a second time every frame purely to soften particle
+        // edges, and it is also the prime suspect for the
+        // `GL_INVALID_OPERATION: Mismatch between texture format and sampler
+        // type` flood (binding a depth attachment to a plain sampler2D). Any
+        // quality change — including the automatic ones — would silently switch
+        // both costs back on. The analytic ground fade covers the case that
+        // matters, and `setDepthPrepass(true)` still exists for A/B runs.
       }),
     );
   }

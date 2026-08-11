@@ -79,6 +79,34 @@ export interface GradePreset {
   blackPoint: number;
   whitePoint: number;
 
+  /**
+   * SHADOW TOE. The black point above is a *hard* clip: everything below it
+   * became exactly 0 and every shadow in the frame lost its detail at once.
+   * Measured on a gameplay frame, a kart sitting in the grandstand shadow read
+   * ~15 % luminance while a wall three metres away read ~250/255 — an 8:1
+   * mismatch inside one frame, and the shadow half of it was unrecoverable
+   * because the grade had already thrown the information away.
+   *
+   * `toeKnee` is where the toe stops and the straight portion begins (in
+   * post-range-map units), `toeFloor` is the value that input 0 lands on, and
+   * `toeGamma < 1` *expands* shadow separation inside the toe rather than
+   * compressing it. The curve is C0-continuous with the straight portion at the
+   * knee and monotonic everywhere, so it cannot invert or band.
+   */
+  toeKnee: number;
+  toeFloor: number;
+  toeGamma: number;
+
+  /**
+   * HIGHLIGHT SHOULDER. Painted white lines and kerbs were landing on exactly
+   * 1.0 — pure #FFF — which clips, kills the paint's own texture, and leaves
+   * SMAA nothing to anti-alias along the line edge. `shoulderKnee` is where the
+   * roll-off starts and `shoulderCeil` is where 1.0 lands; slope continuity at
+   * the knee is solved for, not eyeballed.
+   */
+  shoulderKnee: number;
+  shoulderCeil: number;
+
   /** Added into the shadows, per channel. */
   lift: readonly [number, number, number];
   /** Mid-tone gamma, per channel. >1 brightens mids. */
@@ -182,7 +210,15 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     lookPower: 1.2,
     lookSat: 1.45,
     blackPoint: 0.02,
-    whitePoint: 0.995,
+    // Was 0.995, which mapped sRGB 0.975 and everything above it onto exactly
+    // 1.0 — that is the "kerbs and painted lines clip to #FFF" defect. Above 1
+    // there is headroom for the shoulder to roll into.
+    whitePoint: 1.04,
+    toeKnee: 0.1,
+    toeFloor: 0.017,
+    toeGamma: 0.72,
+    shoulderKnee: 0.86,
+    shoulderCeil: 0.972,
     lift: [0.0, 0.004, 0.014],
     gamma: [1.0, 1.0, 1.0],
     gain: [1.025, 1.008, 0.99],
@@ -207,7 +243,12 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     lookPower: 1.16,
     lookSat: 1.5,
     blackPoint: 0.012,
-    whitePoint: 0.995,
+    whitePoint: 1.05,
+    toeKnee: 0.11,
+    toeFloor: 0.021,
+    toeGamma: 0.72,
+    shoulderKnee: 0.85,
+    shoulderCeil: 0.968,
     lift: [0.018, 0.008, 0.022],
     gamma: [0.99, 1.0, 1.02],
     gain: [1.05, 1.0, 0.945],
@@ -232,7 +273,14 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     lookPower: 1.06,
     lookSat: 1.32,
     blackPoint: 0.008,
-    whitePoint: 1.0,
+    whitePoint: 1.02,
+    // Night already measures 0.4 % crushed; the toe is shallower and the floor
+    // lower so it stays a night scene rather than a grey one.
+    toeKnee: 0.085,
+    toeFloor: 0.012,
+    toeGamma: 0.78,
+    shoulderKnee: 0.88,
+    shoulderCeil: 0.982,
     lift: [0.0, 0.004, 0.016],
     gamma: [1.03, 1.015, 0.985],
     gain: [0.95, 0.975, 1.05],
@@ -257,7 +305,12 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     lookPower: 1.1,
     lookSat: 1.18,
     blackPoint: 0.014,
-    whitePoint: 0.99,
+    whitePoint: 1.03,
+    toeKnee: 0.11,
+    toeFloor: 0.019,
+    toeGamma: 0.74,
+    shoulderKnee: 0.85,
+    shoulderCeil: 0.968,
     lift: [0.01, 0.014, 0.018],
     gamma: [1.0, 1.0, 1.0],
     gain: [0.97, 0.995, 1.025],
@@ -382,6 +435,8 @@ uniform mediump sampler3D gkLutB;
 
 uniform vec4 gkLook;      // x = exposure, y = look slope, z = look power, w = look saturation
 uniform vec4 gkRange;     // x = black point, y = 1/(white-black), z = contrast, w = pivot
+uniform vec4 gkToe;       // x = toe knee, y = toe floor, z = toe gamma, w = shoulder knee
+uniform vec2 gkShoulder;  // x = ceiling that input 1.0 lands on, y = roll-off exponent
 uniform vec3 gkLift;
 uniform vec3 gkInvGamma;
 uniform vec3 gkGain;
@@ -530,6 +585,54 @@ vec3 gkSCurve(const in vec3 x, const in float c, const in float p) {
   return mix(lo, hi, step(vec3(p), x));
 }
 
+/**
+ * SHADOW TOE.
+ *
+ * The black point used to be a hard clip — clamp((s - black) * scale, 0, 1) —
+ * so every value at or below the black point became exactly 0 simultaneously.
+ * That is why shadowed geometry had no detail: it wasn't dark, it was *gone*.
+ *
+ * This replaces the bottom of that straight line with a curve that
+ *   - lands input 0 on a small non-zero floor (gkToe.y) instead of black,
+ *   - has gamma gkToe.z < 1, which *expands* separation in the deep shadows
+ *     rather than compressing it,
+ *   - meets the straight portion exactly at the knee (gkToe.x), so mid-tones
+ *     and highlights are bit-identical to before,
+ *   - and still walks down to true zero for input below the black point, so a
+ *     genuinely black pixel is still black and the frame does not go milky.
+ *
+ * Monotone by construction: no banding, no inversion.
+ */
+vec3 gkToeCurve(const in vec3 x) {
+  float k = max(gkToe.x, 1e-4);
+  float f = gkToe.y;
+  vec3 t = clamp(x / k, 0.0, 1.0);
+  vec3 curve = f + (k - f) * pow(t, vec3(gkToe.z));
+  vec3 below = f * clamp(1.0 + x * 4.0, 0.0, 1.0);
+  vec3 toe = mix(below, curve, step(vec3(0.0), x));
+  return mix(toe, x, step(vec3(k), x));
+}
+
+/**
+ * HIGHLIGHT SHOULDER.
+ *
+ * Painted lines and kerbs were landing on 1.0 and clipping: several distinct
+ * input values collapsed onto pure #FFF, which destroys the paint's own texture
+ * and leaves SMAA a step edge with no gradient to work from — the reported
+ * "clips to pure #FFF and aliases".
+ *
+ * gkShoulder.y is solved on the CPU as (1 - knee) / (ceil - knee) so the slope
+ * is exactly 1 where the shoulder meets the straight portion; nothing below the
+ * knee changes at all.
+ */
+vec3 gkShoulderCurve(const in vec3 x) {
+  float sk = gkToe.w;
+  float ce = gkShoulder.x;
+  vec3 t = clamp((x - sk) / max(1.0 - sk, 1e-4), 0.0, 1.0);
+  vec3 hi = sk + (ce - sk) * (1.0 - pow(1.0 - t, vec3(gkShoulder.y)));
+  return mix(x, hi, step(vec3(sk), x));
+}
+
 vec3 gkSampleLut(const in vec3 c) {
   // Half-texel inset so the LUT end points are hit exactly.
   vec3 coord = c * ((gkLutSize - 1.0) / gkLutSize) + (0.5 / gkLutSize);
@@ -550,9 +653,13 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   // --- grade in sRGB-encoded space ---
   vec3 gkS = gkToSrgb(gkC);
 
-  // Input range: pull the black point down to 0 and the white point up to 1.
-  // This is what gives the frame real shadows instead of a milky floor.
-  gkS = clamp((gkS - gkRange.x) * gkRange.y, 0.0, 1.0);
+  // Input range: pull the black point down towards 0 and the white point up.
+  // NOT clamped here any more — the toe owns the bottom of the range and the
+  // shoulder owns the top, and a clamp on either end would pre-empt both.
+  gkS = (gkS - gkRange.x) * gkRange.y;
+
+  // Soft shadow toe, so shadowed geometry keeps its detail.
+  gkS = min(gkToeCurve(gkS), vec3(1.0));
 
   // Lift / gamma / gain — ASC-CDL ordering.
   gkS = gkGain * (gkS + gkLift * (1.0 - gkS));
@@ -560,6 +667,10 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 
   // Filmic contrast about the pivot.
   gkS = gkSCurve(clamp(gkS, 0.0, 1.0), gkRange.z, gkRange.w);
+
+  // Highlight shoulder — the last thing in the luminance domain, so nothing
+  // downstream can push a white back onto the clip.
+  gkS = gkShoulderCurve(gkS);
 
   // Saturation, then vibrance (weighted towards low-chroma pixels).
   float gkL = dot(gkS, gkLumaW);
@@ -583,9 +694,23 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
  * The look pass: exposure, tone mapping and grading. Non-convolution, so it
  * merges into the same EffectPass as bloom / vignette.
  */
+/**
+ * Exponent that makes the shoulder's slope exactly 1 where it meets the
+ * straight portion. `y = knee + (ceil - knee) * (1 - (1 - t)^n)` with
+ * `t = (x - knee)/(1 - knee)` has `dy/dx = n (ceil - knee)/(1 - knee)` at the
+ * knee, so `n = (1 - knee)/(ceil - knee)`. Solving it rather than eyeballing it
+ * is what keeps the curve from putting a visible crease across every bright
+ * surface in the frame.
+ */
+function shoulderExponent(knee: number, ceil: number): number {
+  return Math.max(1, (1 - knee) / Math.max(1e-3, ceil - knee));
+}
+
 export class GradeEffect extends Effect {
   private readonly look: THREE.Vector4;
   private readonly range: THREE.Vector4;
+  private readonly toe: THREE.Vector4;
+  private readonly shoulder: THREE.Vector2;
   private readonly lift: THREE.Vector3;
   private readonly invGamma: THREE.Vector3;
   private readonly gain: THREE.Vector3;
@@ -628,6 +753,12 @@ export class GradeEffect extends Effect {
       ['gkRange', new THREE.Uniform(new THREE.Vector4(
         p.blackPoint, 1 / Math.max(1e-3, p.whitePoint - p.blackPoint), p.contrast, p.pivot,
       ))],
+      ['gkToe', new THREE.Uniform(new THREE.Vector4(
+        p.toeKnee, p.toeFloor, p.toeGamma, p.shoulderKnee,
+      ))],
+      ['gkShoulder', new THREE.Uniform(new THREE.Vector2(
+        p.shoulderCeil, shoulderExponent(p.shoulderKnee, p.shoulderCeil),
+      ))],
       ['gkLift', new THREE.Uniform(new THREE.Vector3(...p.lift))],
       ['gkInvGamma', new THREE.Uniform(new THREE.Vector3(1 / p.gamma[0], 1 / p.gamma[1], 1 / p.gamma[2]))],
       ['gkGain', new THREE.Uniform(new THREE.Vector3(...p.gain))],
@@ -646,6 +777,8 @@ export class GradeEffect extends Effect {
 
     this.look = uniforms.get('gkLook')!.value as THREE.Vector4;
     this.range = uniforms.get('gkRange')!.value as THREE.Vector4;
+    this.toe = uniforms.get('gkToe')!.value as THREE.Vector4;
+    this.shoulder = uniforms.get('gkShoulder')!.value as THREE.Vector2;
     this.lift = uniforms.get('gkLift')!.value as THREE.Vector3;
     this.invGamma = uniforms.get('gkInvGamma')!.value as THREE.Vector3;
     this.gain = uniforms.get('gkGain')!.value as THREE.Vector3;
@@ -736,6 +869,16 @@ export class GradeEffect extends Effect {
       mix(a.contrast, b.contrast, t),
       mix(a.pivot, b.pivot, t),
     );
+
+    const sKnee = mix(a.shoulderKnee, b.shoulderKnee, t);
+    const sCeil = mix(a.shoulderCeil, b.shoulderCeil, t);
+    this.toe.set(
+      mix(a.toeKnee, b.toeKnee, t),
+      mix(a.toeFloor, b.toeFloor, t),
+      mix(a.toeGamma, b.toeGamma, t),
+      sKnee,
+    );
+    this.shoulder.set(sCeil, shoulderExponent(sKnee, sCeil));
 
     this.lift.set(
       mix(a.lift[0], b.lift[0], t),

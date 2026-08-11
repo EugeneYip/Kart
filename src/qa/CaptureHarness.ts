@@ -33,8 +33,54 @@ export class CaptureHarness {
   private game: Game;
   private freeFly = false;
 
+  /**
+   * Per-frame "hold" callbacks, re-applied every settled frame and by a
+   * persistent loop between shots.
+   *
+   * Two things fought the harness before this existed:
+   *  - `forceState()` used a one-shot `Object.assign`, which `KartPhysics`
+   *    overwrites on the very next tick — so a forced drift or boost never
+   *    survived to be photographed.
+   *  - The camera was placed once, then `settle()` ran frames while the kart
+   *    kept driving at ~24 m/s. A capture that looked correct was actually
+   *    taken 360–410 m behind the subject, which silently tripped every
+   *    distance-LOD cull in the VFX system and made working effects look
+   *    completely absent.
+   *
+   * Holds fix both: state and camera are re-asserted every frame.
+   */
+  private holds: Array<() => void> = [];
+  private holdRaf = 0;
+
   constructor(game: Game) {
     this.game = game;
+  }
+
+  /** Register a callback re-run every frame until `clearHolds()`. */
+  addHold(fn: () => void): void { this.holds.push(fn); }
+
+  clearHolds(): void {
+    this.holds.length = 0;
+    if (this.holdRaf) { cancelAnimationFrame(this.holdRaf); this.holdRaf = 0; }
+  }
+
+  runHolds(): void {
+    for (const h of this.holds) {
+      try { h(); } catch { /* a hold must never break a capture */ }
+    }
+  }
+
+  /**
+   * Keep holds running after `shot()` returns, so the frame the reviewer
+   * actually screenshots still shows the state that was set up.
+   */
+  startHoldLoop(): void {
+    if (this.holdRaf) cancelAnimationFrame(this.holdRaf);
+    const tick = () => {
+      this.runHolds();
+      this.holdRaf = requestAnimationFrame(tick);
+    };
+    this.holdRaf = requestAnimationFrame(tick);
   }
 
   // -- primitives the shots build on ----------------------------------------
@@ -96,6 +142,15 @@ export class CaptureHarness {
    */
   kartRelative(
     opts: { back?: number; up?: number; right?: number; lookUp?: number; lookAhead?: number; fov?: number; kartId?: number } = {},
+  ): boolean {
+    // Re-assert every frame: a one-shot placement drifts hundreds of metres
+    // behind a kart doing 24 m/s while settle() runs.
+    this.addHold(() => this.placeKartRelative(opts));
+    return this.placeKartRelative(opts);
+  }
+
+  private placeKartRelative(
+    opts: { back?: number; up?: number; right?: number; lookUp?: number; lookAhead?: number; fov?: number; kartId?: number },
   ): boolean {
     const kart = this.game.karts?.karts?.[opts.kartId ?? 0];
     if (!kart) return false;
@@ -166,14 +221,25 @@ export class CaptureHarness {
         requestAnimationFrame(finish);
         setTimeout(finish, 60);
       });
+      // Re-assert pinned state and camera every frame, or physics and the
+      // kart's own motion undo the setup before the frame is captured.
+      this.runHolds();
     }
   }
 
-  /** Force a kart into a visual state so effects can be photographed. */
+  /**
+   * Pin a kart into a visual state so effects can be photographed.
+   *
+   * Registered as a per-frame hold, because `KartPhysics` rewrites these fields
+   * every tick — a one-shot assign is gone before the next frame renders.
+   */
   forceState(kartId: number, state: Partial<Record<string, unknown>>): void {
     const karts = this.game.karts?.karts;
     if (!karts?.[kartId]) return;
-    Object.assign(karts[kartId], state);
+    const target = karts[kartId] as unknown as Record<string, unknown>;
+    const apply = () => Object.assign(target, state);
+    apply();
+    this.addHold(apply);
   }
 
   setSky(preset: string): void {
@@ -320,11 +386,12 @@ export function installCaptureHarness(game: Game): void {
     async shot(name: string) {
       const s = SHOTS.find((x) => x.name === name);
       if (!s) throw new Error(`Unknown shot "${name}". Available: ${SHOTS.map((x) => x.name).join(', ')}`);
+      harness.clearHolds();
       await s.apply(game, harness);
       await harness.settle(s.settle ?? 0.5);
-      // Re-apply after settling: the chase camera or race sim may have moved
-      // things while we waited.
-      await s.apply(game, harness);
+      // Keep the pinned state and camera asserted after this returns, so the
+      // frame the reviewer screenshots is the frame we set up.
+      harness.startHoldLoop();
       await harness.settle(0.1);
 
       const subject = harness.subjectInFrame(0);

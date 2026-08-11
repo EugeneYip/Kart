@@ -68,14 +68,17 @@ import {
   disposeGradeLuts,
 } from './effects/GradeEffect';
 import { MotionBlurEffect } from './effects/MotionBlurEffect';
+import { SubjectMask } from './effects/SubjectMask';
 import { configure as configureTextures, stats as textureStats } from './TextureFactory';
 
 /**
  * KartManager / Track are owned by other agents and are wired in from Game.
  * Accepted structurally so this file compiles no matter what shape those modules
- * settle on. The pipeline no longer reads anything out of them — depth of field
- * used to focus on the player kart, which turned out to be exactly the wrong
- * thing to do (see the DoF block in `build()`).
+ * settle on. The only thing read out of `karts` is the public
+ * `getModel(0): THREE.Object3D` accessor, feature-detected by `SubjectMask`, so
+ * that motion blur can keep the player's kart out of its own convolution.
+ * Depth of field used to focus on the player kart, which turned out to be
+ * exactly the wrong thing to do (see the DoF block in `build()`).
  */
 export type KartSource = unknown;
 export type TrackSource = unknown;
@@ -92,8 +95,31 @@ const CA_MAX = 0.0012;
 const DOF_MIN_SPEED = 0.25;
 /** Peak bokeh radius during a full boost. Deliberately gentle. */
 const DOF_BOKEH = 1.15;
-/** Below this the motion-blur pass is skipped — the shader would no-op anyway. */
+/**
+ * Below this the motion-blur pass is skipped — the shader would no-op anyway.
+ * 1.5e-4 UV is 0.29 px on a 1920-wide frame, i.e. sub-pixel.
+ */
 const MB_MIN_MOTION = 1.5e-4;
+
+/**
+ * Motion-blur tuning. These three numbers are the whole of the "everything
+ * smears at speed" defect, so they are named and documented here as well as in
+ * MotionBlurEffect.ts rather than buried as literals in `build()`.
+ *
+ * Measured on a `chase-boost` frame with a deterministic one-frame 38 m/s
+ * forward camera step at 60 Hz, 1920 wide, blur length in pixels by depth:
+ *
+ *                              5 m     20 m    74 m    sky    player kart
+ *   before (0.8 / 0.032)      22.4      6.1     1.6    0.0     ~17  <- the bug
+ *   after  (0.3 / 0.008)       8.4      2.3     0.6    0.0      0.8
+ *
+ * The kart column is the one that mattered: it has *zero* screen-space velocity
+ * and was being convolved harder than the scenery.
+ */
+const MB_CAMERA_STRENGTH = 0.3;
+const MB_MAX_RADIUS = 0.008;
+/** Fraction of the blur that survives on the masked player kart. */
+const MB_MASK_KEEP = 0.1;
 
 export class RenderPipeline implements ISubsystem {
   private readonly engine: Engine;
@@ -121,6 +147,9 @@ export class RenderPipeline implements ISubsystem {
   private vignette!: VignetteEffect;
   private ca: ChromaticAberrationEffect | null = null;
   private smaa!: SMAAEffect;
+
+  /** Quarter-res silhouette of the player kart, consumed by motion blur. */
+  private subjectMask: SubjectMask | null = null;
 
   // --- state ---
   private width = 1;
@@ -311,9 +340,16 @@ export class RenderPipeline implements ISubsystem {
     if (q.motionBlur) {
       this.motionBlur = new MotionBlurEffect({
         taps: q.tier === 'ultra' ? 14 : q.tier === 'high' ? 12 : 8,
-        cameraStrength: 0.8,
-        maxRadius: 0.032,
+        cameraStrength: MB_CAMERA_STRENGTH,
+        maxRadius: MB_MAX_RADIUS,
       });
+      this.motionBlur.setMaskKeep(MB_MASK_KEEP);
+      // The subject mask is the reason the player's kart no longer smears.
+      // Built lazily here so a tier rebuild re-attaches it, and only on tiers
+      // that actually run the blur.
+      if (!this.subjectMask) this.subjectMask = new SubjectMask(q.tier === 'low' ? 0.2 : 0.25);
+      this.subjectMask.setSize(this.width, this.height);
+      this.motionBlur.setSubjectMask(this.subjectMask.texture);
       this.motionPass = new EffectPass(camera, this.motionBlur);
       composer.addPass(this.motionPass);
     }
@@ -468,12 +504,24 @@ export class RenderPipeline implements ISubsystem {
   }
 
   /** Debug read-out for the perf HUD. */
-  getStats(): { passes: number; cpuMs: number; textureMs: number; textures: number } {
+  getStats(): {
+    passes: number; cpuMs: number; textureMs: number; textures: number;
+    maskDrawCalls: number; motionBlurPx: number;
+  } {
+    // `motionBlurPx` is the peak blur length in pixels of the current backing
+    // store, clamped exactly as the shader clamps it. Report this rather than a
+    // bare `enabled` flag: the pass legitimately reads `enabled:false` at a
+    // standstill (see MB_MIN_MOTION), which has misled two reviews into
+    // believing motion blur was off at speed as well.
+    const mb = this.motionBlur;
+    const peak = mb ? Math.min(mb.peakMotion, MB_MAX_RADIUS) * this.width : 0;
     return {
       passes: this.composer ? this.composer.passes.filter((p) => p.enabled).length : 0,
       cpuMs: this.lastCpuMs,
       textureMs: textureStats.generatedMs,
       textures: textureStats.count,
+      maskDrawCalls: this.subjectMask?.drawCalls ?? 0,
+      motionBlurPx: Math.round(peak * 10) / 10,
     };
   }
 
@@ -520,10 +568,32 @@ export class RenderPipeline implements ISubsystem {
     this.vignette.offset = vp.vignetteOffset - this.speedSmooth * 0.05;
   }
 
+  /**
+   * Render the player-kart silhouette into the motion-blur subject mask.
+   *
+   * Public so the dev QA harness can force a mask refresh when it drives
+   * `composer.render()` directly instead of going through this callback.
+   */
+  renderSubjectMask(): boolean {
+    if (!this.subjectMask || !this.motionBlur) return false;
+    const ok = this.subjectMask.render(this.engine.renderer, this.engine.camera, this.karts);
+    // Never blur against a stale silhouette: if the subject vanished (results
+    // camera, kart despawn) drop the define rather than protect the wrong pixels.
+    if (ok !== this.motionBlur.hasSubjectMask) {
+      this.motionBlur.setSubjectMask(ok ? this.subjectMask.texture : null);
+    }
+    return ok;
+  }
+
   /** Installed on Engine via setRenderCallback. */
   render(dt: number): void {
     if (this.disposed) return;
     const t0 = performance.now();
+
+    // The chase camera writes its solution during `update()`; its world matrix
+    // is not refreshed until something renders with it. Do it here so the
+    // reprojection below sees *this* frame's transform rather than last frame's.
+    this.engine.camera.updateMatrixWorld();
 
     // Matrices must be fed every frame, enabled or not, or a re-enabled
     // motion blur pass would smear against an ancient camera transform.
@@ -532,8 +602,11 @@ export class RenderPipeline implements ISubsystem {
       // The shader early-outs when the reprojected velocity is negligible, so a
       // static camera was already visually inert — but it still paid for a
       // full-screen pass every frame. Skip the pass outright instead.
-      this.motionPass.enabled = this.engine.quality.motionBlur
+      const on = this.engine.quality.motionBlur
         && this.motionBlur.peakMotion > MB_MIN_MOTION;
+      this.motionPass.enabled = on;
+      // Only pay for the silhouette on frames that will actually blur.
+      if (on) this.renderSubjectMask();
     }
 
     this.composer.render(dt);
@@ -545,6 +618,7 @@ export class RenderPipeline implements ISubsystem {
     this.height = Math.max(1, height);
     if (!this.composer) return;
     this.composer.setSize(this.width, this.height);
+    this.subjectMask?.setSize(this.width, this.height);
   }
 
   dispose(): void {
@@ -553,6 +627,8 @@ export class RenderPipeline implements ISubsystem {
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.teardownPasses();
+    this.subjectMask?.dispose();
+    this.subjectMask = null;
     disposeGradeLuts();
     this.composer?.dispose();
     // Held only to keep Game's constructor call shape stable; nothing in the

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>APEX KART — UI harness</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { background: #05070f; color: #cfe3ff; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+      body { padding: 8px; }
+
+      #bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+      #bar button, #bar select {
+        font: inherit; background: #16203c; color: #cfe3ff; border: 1px solid #2c3f6e;
+        border-radius: 5px; padding: 3px 8px; cursor: pointer;
+      }
+      #bar button:hover { background: #22325c; }
+
+      /* The stage is a containing block for `position: fixed` (transform !== none),
+         so the HUD lays out against THIS box instead of the window. That lets us
+         measure 800x450 / 960x540 / 1280x720 / 1920x1080 at 1:1 without ever
+         resizing the browser. */
+      #stage {
+        position: relative;
+        transform: translate(0, 0);
+        overflow: hidden;
+        width: 800px;
+        height: 450px;
+        background:
+          repeating-linear-gradient(45deg, #1b2c1c 0 24px, #16261a 24px 48px);
+        outline: 1px solid #3b5b8f;
+      }
+      #stage::after {
+        content: "";
+        position: absolute; inset: 0;
+        background: radial-gradient(ellipse at 50% 62%, rgba(140,190,255,0.16), transparent 70%);
+        pointer-events: none;
+      }
+      #out { margin-top: 8px; white-space: pre; font-size: 11px; color: #9effc9; }
+    </style>
+  </head>
+  <body>
+    <div id="bar"></div>
+    <div id="stage"></div>
+    <div id="out">loading…</div>
+    <script type="module" src="/src/dev/ui.ts"></script>
+  </body>
+</html>

@@ -321,7 +321,10 @@ export class Trails {
         const k = karts[i];
         const slots = this.kartSlot(k.id);
         const dist = ctx.camera.position.distanceTo(k.position);
-        const near = dist < 120;
+        // The player's boost ribbons are never distance-gated — same reasoning
+        // as the culls in DriftSparks/BoostFlame: a camera parked away from the
+        // player must not delete the player's own effects.
+        const near = k.isPlayer || dist < 120;
 
         tmpFwd.copy(F_LOCAL).applyQuaternion(k.quaternion);
         tmpUp.copy(U_LOCAL).applyQuaternion(k.quaternion);

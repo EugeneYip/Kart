@@ -315,12 +315,17 @@ export class ImpactEffects {
 
     // ======================= items ========================================
 
+    // Height-budgeted like the drift tier burst: 9.0 m/s with speedVar 0.7 tops
+    // out at 15.3 m/s, i.e. v^2/2g = 6.9 m of ballistic rise off a 1.9 m kart —
+    // a column of white shards towering ~400 px over the roof in a chase frame.
+    // 6.2 m/s peaks near 2.7 m, which reads as debris off the shell rather than
+    // a firework.
     this.dShard = makeDesc({
       sprite: SPRITE.CHIP, ramp: RAMP.WHITE_SHARP, curve: CURVE.SHRINK,
       flags: PFLAG.BOUNCE,
-      size: 0.24, sizeVar: 0.55, life: 0.85, lifeVar: 0.4,
-      speed: 9.0, speedVar: 0.7, cone: 3.14,
-      gravity: 17, drag: 0.7, restitution: 0.4,
+      size: 0.24, sizeVar: 0.55, life: 0.6, lifeVar: 0.4,
+      speed: 6.2, speedVar: 0.55, cone: 3.14,
+      gravity: 17, drag: 0.9, restitution: 0.4,
       spin: 13, soft: 0.25,
       additive: 0.55, alpha: 1, intensity: 1.5,
     });
