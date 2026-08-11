@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — HEADLESS TYPESCRIPT RUNNER
+ *  FOXY KART — HEADLESS TYPESCRIPT RUNNER
  * ============================================================================
  *  Runs any `src/**` TypeScript module under plain Node — no browser, no
  *  bundler, no dev server — so gameplay logic can be measured numerically from

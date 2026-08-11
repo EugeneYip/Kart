@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — HEADS-UP DISPLAY
+ *  FOXY KART — HEADS-UP DISPLAY
  * ============================================================================
  *  DOM + CSS above the WebGL canvas (crisp text at any resolution, trivially
  *  animatable, no font atlas). Canvas-2D only where it belongs: the minimap and

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — MINIMAP
+ *  FOXY KART — MINIMAP
  * ============================================================================
  *  Canvas-2D. The track ribbon, start/finish and item-box markers are baked
  *  once into an offscreen layer; each frame only blits that layer and paints

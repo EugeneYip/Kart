@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — ENGINE SYNTHESIS
+ *  FOXY KART — ENGINE SYNTHESIS
  * ============================================================================
  *  A believable engine is not a looped sample pitched up and down. It is a set
  *  of layers that change their *relative* balance with rpm and throttle load:

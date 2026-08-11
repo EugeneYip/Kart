@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — GPU PARTICLE ENGINE
+ *  FOXY KART — GPU PARTICLE ENGINE
  * ============================================================================
  *  One InstancedBufferGeometry, one draw call, zero per-frame CPU simulation.
  *

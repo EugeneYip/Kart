@@ -768,7 +768,29 @@ function stationFrom(
     px: s.position.x, py: s.position.y, pz: s.position.z,
     tx, tz, bx, bz,
     halfWidth: s.halfWidth,
-    tanBank: Math.tan(clamp(s.bank, -0.9, 0.9)),
+    // Cross-slope of the road surface, as dy per unit of HORIZONTAL lateral
+    // offset — which is exactly what `TerrainField.bake()` multiplies `cross` by.
+    //
+    // This was `Math.tan(s.bank)`, which was wrong twice over:
+    //
+    //  1. WRONG SIGN. The road mesh and the physics both take their cross-slope
+    //     from the spline binormal, whose `y` is the NEGATIVE of `tan(bank)`.
+    //     So the terrain banked *opposite* to the road it is meant to blend
+    //     into. Measured on coastal, 20 of 26 sampled stations disagreed in
+    //     sign; the only agreements were where bank was exactly 0. Inside the
+    //     corridor, where the residual must be ~0, mean |terrain − road| was
+    //     1.08 / 2.27 / 4.15 m on coastal / neon / volcano, peaking at 47 m.
+    //     Props seated on the terrain therefore sank under the shoulder on one
+    //     side of every banked corner and floated on the other.
+    //  2. IGNORED GRADE. `bank` describes roll only, so a station with bank 0 on
+    //     a climbing, turning section reported a flat cross-slope when the real
+    //     surface was already tilted (coastal t=0.039: tan(bank) 0.0000 vs a
+    //     true 0.0069).
+    //
+    // `bl` is the binormal's XZ length, computed above and deliberately read
+    // here BEFORE bx/bz are normalised by it. Clamped as before so a near-
+    // vertical binormal cannot produce a stamped cliff.
+    tanBank: clamp(s.binormal.y / bl, -0.9, 0.9),
     s: arc,
   };
 }

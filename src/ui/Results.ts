@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — POST-RACE RESULTS
+ *  FOXY KART — POST-RACE RESULTS
  * ============================================================================
  *  A staggered results table (one row every 90 ms), a podium for the top three,
  *  Grand Prix standings, and Next / Retry / Quit. The player's row gets a gold

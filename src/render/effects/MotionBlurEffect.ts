@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — MOTION BLUR
+ *  FOXY KART — MOTION BLUR
  * ============================================================================
  *  Per-pixel camera motion blur by depth reprojection, plus a radial speed
  *  streak that ramps with boost, plus a **subject mask** that keeps the player

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — UI / HUD DEV HARNESS
+ *  FOXY KART — UI / HUD DEV HARNESS
  * ============================================================================
  *  Measurement-first. The HUD is mounted inside a `#stage` div whose
  *  `transform` makes it the containing block for `position: fixed`, so the HUD

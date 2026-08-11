@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — RUBBER BANDING (must be INVISIBLE)
+ *  FOXY KART — RUBBER BANDING (must be INVISIBLE)
  * ============================================================================
  *  Visible rubber-banding is a cardinal sin. If the player can *see* that the
  *  AI sped up because they pulled away, the whole race stops mattering.

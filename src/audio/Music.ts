@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — ADAPTIVE PROCEDURAL SOUNDTRACK
+ *  FOXY KART — ADAPTIVE PROCEDURAL SOUNDTRACK
  * ============================================================================
  *  Three fully composed themes, played by a synthesiser built from oscillators
  *  and baked drum buffers. Nothing is randomly generated: the chord

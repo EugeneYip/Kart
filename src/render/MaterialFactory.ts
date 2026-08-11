@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — MATERIAL FACTORY
+ *  FOXY KART — MATERIAL FACTORY
  * ============================================================================
  *  Turns a `PbrSet` from TextureFactory into a shader-injected
  *  MeshStandardMaterial. Three things here matter more than anything else in

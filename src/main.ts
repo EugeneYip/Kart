@@ -37,7 +37,7 @@ bus.on('engine:progress', ({ loaded, total, message }) => {
 async function boot() {
   const container = document.getElementById('app')!;
   const tier = detectTier();
-  console.info(`[APEX KART] quality tier: ${tier}`);
+  console.info(`[Foxy Kart] quality tier: ${tier}`);
 
   const game = new Game(container, tier);
   (globalThis as Record<string, unknown>).__GAME__ = game; // for the debug console + automated QA
@@ -45,7 +45,7 @@ async function boot() {
   try {
     await game.init();
   } catch (err) {
-    console.error('[APEX KART] init failed', err);
+    console.error('[Foxy Kart] init failed', err);
     msgEl.textContent = 'Failed to start — see console';
     msgEl.style.color = '#ff7a7a';
     throw err;

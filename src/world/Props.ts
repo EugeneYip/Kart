@@ -1622,7 +1622,11 @@ export class Props implements ISubsystem {
           b.tube(sx * legX + 0.8, y, -0.8, sx * legX - 0.8, y + 1.2, 0.8, 0.075, 4, 0x3a424b);
           b.box(sx * legX, y, 0, 0.95, 0.06, 0.95, 0x353d45, { noBottom: true });
         }
-        b.box(sx * legX, 0, 0, 1.5, 0.35, 1.5, 0x22262b, { shade: { top: 1.0 } });
+        // Base plinth wrapping the four legs' feet. Centred at its own half
+        // height so the 0.7 m block stands ON the road: written as `0` it was
+        // centred on the surface and only its top half showed, which is the same
+        // centred-`box()` mistake that buried the marshal booth below.
+        b.box(sx * legX, 0.35, 0, 1.5, 0.35, 1.5, 0x22262b, { shade: { top: 1.0 } });
       }
       // Deck spanning the road.
       b.box(0, 11.6, 0, legX + 1.6, 0.55, 1.3, 0x2b3138);
@@ -1800,13 +1804,41 @@ export class Props implements ISubsystem {
         { cull: CULL_NEAR, shadow: false });
     }
     {
+      // =====================================================================
+      // THE MARSHAL BOOTH WAS EXACTLY HALF UNDERGROUND.
+      //
+      // `box()` takes a CENTRE plus HALF-extents. `prism()`, two lines below in
+      // the same recipe, takes a BASE plus a height. The booth body was written
+      // `box(0, 0, 0, 1.3, 1.25, 1.1)` — which reads as "on the ground, 1.25
+      // tall" and builds as "centred ON the ground": y = -1.25 … +1.25, so half
+      // the 2.5 m box was under the surface and the roof cap sat at the ground
+      // line. `roadside()` drops one of these 8–12 m beyond the road edge every
+      // 210 m starting at arc 0, so every circuit has one beside the
+      // start/finish line — measured at t = 0.020 (coastal), 0.015 (neon) and
+      // 0.002 (volcano), 19–25 m to the driver's left. That is the "prop box
+      // partially embedded in the ground near the start/finish line" a
+      // playtester reported, and no anchor was at fault: the probe measures
+      // `sink` (ground − origin) as 0.00 for every instance. The recipe buried
+      // itself.
+      //
+      // Nothing else here moves, because everything else was already authored
+      // for a booth standing ON y = 0 and 2.5 m tall: the window at 0.40…1.50,
+      // the rear board at 1.25…2.25, the flag mast rising from 0. Only the body
+      // and its roof cap were inconsistent.
+      // =====================================================================
       const anchors = roadside(ctx, rng, { spacing: 210, min: 8, max: 12, limit: 10 });
       const b = this.builder();
-      b.box(0, 0, 0, 1.3, 1.25, 1.1, 0xe6e3d8, { shade: { top: 1.05 } });
-      b.box(0, 1.25, 0, 1.5, 0.14, 1.3, 0xc0342c);
-      b.box(0, 0.95, 1.05, 1.0, 0.55, 0.06, 0x2a2f36);
+      /** Booth height. Centre at H/2 so the base lands on y = 0, not the centre. */
+      const H = 2.5;
+      b.box(0, H * 0.5, 0, 1.3, H * 0.5, 1.1, 0xe6e3d8, { shade: { top: 1.05 } });
+      b.box(0, H, 0, 1.5, 0.14, 1.3, 0xc0342c);           // roof cap, on the roof
+      b.box(0, 0.95, 1.05, 1.0, 0.55, 0.06, 0x2a2f36);    // window, 0.40 … 1.50
       b.prism(1.1, 0, 0.9, 0.07, 3.4, 6, 0x9aa1a9, { capBottom: true });
-      b.box(0.7, 1.75, -1.0, 0.5, 0.5, 0.06, 0xf2c53d);
+      // Rear warning board, 1.25 … 2.25. At z = -1.0 it was 0.04 m INSIDE the
+      // 2.2 m-deep body and only visible because the body used to be sunk; -1.05
+      // stands it 0.01 m clear of the back wall, mirroring what the window plate
+      // above already does on the front.
+      b.box(0.7, 1.75, -1.05, 0.5, 0.5, 0.06, 0xf2c53d);
       this.emit('marshalPost', b.build('marshalPost'), this.matte, anchors, { cull: CULL_NEAR });
     }
 
@@ -1910,14 +1942,26 @@ export class Props implements ISubsystem {
       const anchors = shoreline(ctx, rng, this.count(20), [1.2, 5.5]);
       const b = this.builder();
       const walls = 0xf2ece0;
-      b.box(0, 0, 0, 1.9, 1.35, 1.7, walls, { shade: { top: 1.02, side: 1.0 } });
-      // Pitched roof from two slanted quads.
+      // The same centred-`box()` trap as `marshalPost` in buildRaceDressing, but
+      // applied to the WHOLE hut: it was composed around its own middle rather
+      // than its floor — body -1.35…+1.35, door -1.35…+0.95 (i.e. starting at
+      // the floor), roof eaves at +1.30 (flush with the body top). With the
+      // anchor on the sand that left the floor 1.35 m under grade and buried the
+      // hut to its window sills, 36% of the silhouette. `y0` lifts the
+      // composition bodily, so every internal relationship — and therefore the
+      // silhouette — is unchanged; it just stops being sunk.
+      const hh = 1.35;          // half height of the hut body
+      const y0 = hh;            // lift that puts the floor on y = 0
+      b.box(0, y0, 0, 1.9, hh, 1.7, walls, { shade: { top: 1.02, side: 1.0 } });
+      // Pitched roof from two slanted quads. The eave beds 0.05 into the wall top.
       const rh = 1.05;
-      b.quad(-2.15, 1.3, -1.95, 0, 1.3 + rh, -1.95, 0, 1.3 + rh, 1.95, -2.15, 1.3, 1.95, 0xd7462f, 1.08);
-      b.quad(0, 1.3 + rh, -1.95, 2.15, 1.3, -1.95, 2.15, 1.3, 1.95, 0, 1.3 + rh, 1.95, 0xc23c28, 0.94);
-      b.box(0, -0.2, 1.75, 0.55, 1.15, 0.06, 0x2f5f8a);
-      b.box(0, 0.35, -1.75, 0.42, 0.36, 0.06, 0x8fc4dd);
-      for (const sx of [-1, 1]) b.prism(sx * 1.6, -0.7, sx * 1.4, 0.11, 0.75, 5, 0x6b5334);
+      const eave = y0 + 1.3;
+      b.quad(-2.15, eave, -1.95, 0, eave + rh, -1.95, 0, eave + rh, 1.95, -2.15, eave, 1.95, 0xd7462f, 1.08);
+      b.quad(0, eave + rh, -1.95, 2.15, eave, -1.95, 2.15, eave, 1.95, 0, eave + rh, 1.95, 0xc23c28, 0.94);
+      b.box(0, y0 - 0.2, 1.75, 0.55, 1.15, 0.06, 0x2f5f8a);     // door, 0 … 2.30
+      b.box(0, y0 + 0.35, -1.75, 0.42, 0.36, 0.06, 0x8fc4dd);   // rear window
+      // Corner posts, now standing on the sand instead of buried to their caps.
+      for (const sx of [-1, 1]) b.prism(sx * 1.6, 0, sx * 1.4, 0.11, 0.75, 5, 0x6b5334);
       this.emit('beachHut', b.build('beachHut'), this.matte, anchors, { cull: CULL_MID });
     }
 

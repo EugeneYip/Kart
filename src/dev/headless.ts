@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — HEADLESS TRACK + PHYSICS BOOTSTRAP
+ *  FOXY KART — HEADLESS TRACK + PHYSICS BOOTSTRAP
  * ============================================================================
  *  Shared helpers for probes that run under `src/dev/node-run.mjs`. Nothing in
  *  here renders; everything returns the REAL subsystem so a measurement means

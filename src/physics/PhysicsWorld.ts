@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — PHYSICS WORLD
+ *  FOXY KART — PHYSICS WORLD
  * ============================================================================
  *  The only entry point into physics. Everything else in the game talks to this
  *  object and nothing else in `src/physics`.

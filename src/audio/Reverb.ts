@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — PROCEDURAL CONVOLUTION REVERB + AIR LAYER
+ *  FOXY KART — PROCEDURAL CONVOLUTION REVERB + AIR LAYER
  * ============================================================================
  *  There are no impulse-response WAVs here. Every IR is synthesised sample by
  *  sample from:

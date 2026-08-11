@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — AI PERSONALITIES
+ *  FOXY KART — AI PERSONALITIES
  * ============================================================================
  *  Eight drivers who are recognisably different from the grandstand.
  *

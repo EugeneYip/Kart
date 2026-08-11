@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — SFX BANK
+ *  FOXY KART — SFX BANK
  * ============================================================================
  *  Every one of these sounds is synthesised from oscillators, noise and
  *  filters, rendered ONCE into an AudioBuffer through an OfflineAudioContext

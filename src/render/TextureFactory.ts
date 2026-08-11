@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — PROCEDURAL TEXTURE FACTORY
+ *  FOXY KART — PROCEDURAL TEXTURE FACTORY
  * ============================================================================
  *  The shared surface library. Every material in the game comes from here.
  *

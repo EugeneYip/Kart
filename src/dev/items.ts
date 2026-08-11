@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — ITEMS DEV HARNESS
+ *  FOXY KART — ITEMS DEV HARNESS
  * ============================================================================
  *  Standalone page for the ITEMS agent. Deliberately depends on NOTHING from
  *  the other agents: the track, karts, physics and vfx are all local stubs
@@ -963,7 +963,7 @@ class Harness {
   private renderHud(): void {
     const pr = this.items.projectiles;
     const lines: string[] = [];
-    lines.push(`APEX KART · ITEMS HARNESS      ${this.paused ? '[PAUSED]' : ''}`);
+    lines.push(`FOXY KART · ITEMS HARNESS      ${this.paused ? '[PAUSED]' : ''}`);
     lines.push(`view: ${this.showGallery ? 'GALLERY' : 'TRACK'}   cam ${this.camMode}   t=${this.simTime.toFixed(1)}s`);
     lines.push('');
     lines.push(`projectiles active: ${pr.activeCount}`);

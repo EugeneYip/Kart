@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — UI TYPOGRAPHY
+ *  FOXY KART — UI TYPOGRAPHY
  * ============================================================================
  *  No downloaded fonts (AGENTS.md rule 3: zero network requests). The whole
  *  look comes from a heavy system stack plus CSS: 900 weight, negative

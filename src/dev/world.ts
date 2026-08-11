@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — WORLD LAB (dev harness)
+ *  FOXY KART — WORLD LAB (dev harness)
  * ============================================================================
  *  Stands up Sky + Lighting + Environment with a stub track, so the whole world
  *  can be flown around, judged and screenshotted without waiting on Track,
@@ -413,7 +413,7 @@ function updateHud(): void {
   const e = env;
   const p = SKY_PRESETS[SKIES[skyIndex]];
   hud.innerHTML =
-    `<b>APEX KART · WORLD LAB</b>\n` +
+    `<b>FOXY KART · WORLD LAB</b>\n` +
     `theme    <span class="k">${THEMES[themeIndex]}</span>   sky <span class="k">${SKIES[skyIndex]}</span>\n` +
     `tier     <span class="k">${tier}</span>   sun ${p.sunElevation.toFixed(0)}°\n` +
     `<hr>` +

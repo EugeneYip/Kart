@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — PHYSICS BENCH  (dev page, not shipped)
+ *  FOXY KART — PHYSICS BENCH  (dev page, not shipped)
  * ============================================================================
  *  The browser half of the physics bench: a visible box-kart with four
  *  suspension-driven wheel markers, a chase camera, keyboard control via

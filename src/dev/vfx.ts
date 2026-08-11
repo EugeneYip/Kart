@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — VFX DEV HARNESS
+ *  FOXY KART — VFX DEV HARNESS
  * ============================================================================
  *  A dark stage with a textured deck, a guardrail, some pillars and a stand-in
  *  kart, so the VFX layer can be built and judged without waiting on the track,

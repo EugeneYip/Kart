@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — RAYCAST SUSPENSION
+ *  FOXY KART — RAYCAST SUSPENSION
  * ============================================================================
  *  Four independent spring-dampers, each a downward raycast from its corner of
  *  the chassis against `ITrackService.raycastGround`.

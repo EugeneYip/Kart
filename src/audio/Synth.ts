@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — SYNTH TOOLKIT
+ *  FOXY KART — SYNTH TOOLKIT
  * ============================================================================
  *  Every sound in this game is generated from maths. There are no audio files
  *  and no network requests. This module is the primitive library that the

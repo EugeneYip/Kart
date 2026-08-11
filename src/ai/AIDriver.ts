@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — AI DRIVER
+ *  FOXY KART — AI DRIVER
  * ============================================================================
  *  One instance per computer-controlled kart. Reads `KartState` (+ the racing
  *  line, the field, and the hazard list) and writes a control vector that is

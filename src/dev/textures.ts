@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — MATERIAL LAB (dev harness)
+ *  FOXY KART — MATERIAL LAB (dev harness)
  * ============================================================================
  *  Standalone page that shows every PbrSet in the library under three-point
  *  lighting plus a generated environment probe, and a 260 m asphalt plane
@@ -374,7 +374,7 @@ const rig = {
       const st = pipeline.getStats();
       const info = engine.renderer.info;
       hud.innerHTML = [
-        '<b>APEX KART — MATERIAL LAB</b>',
+        '<b>FOXY KART — MATERIAL LAB</b>',
         '<hr>',
         `fps <span class="k">${(frames / gpuAcc).toFixed(0)}</span>` +
           `  frame <span class="k">${(1000 * gpuAcc / frames).toFixed(2)} ms</span>`,

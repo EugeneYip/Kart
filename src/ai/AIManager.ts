@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — AI MANAGER
+ *  FOXY KART — AI MANAGER
  * ============================================================================
  *  Owns the racing line, one `AIDriver` per computer-controlled kart, and the
  *  rubber-band. Registered by `Game` between physics and items:

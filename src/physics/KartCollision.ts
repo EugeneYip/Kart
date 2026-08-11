@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — CONTACT MODEL
+ *  FOXY KART — CONTACT MODEL
  * ============================================================================
  *  Three jobs: track contact, karts, and falling off the world.
  *

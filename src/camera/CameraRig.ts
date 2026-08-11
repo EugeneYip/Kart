@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  CAMERA RIG — the mechanism underneath every camera in APEX KART
+ *  CAMERA RIG — the mechanism underneath every camera in FOXY KART
  * ============================================================================
  *  This file owns *how* the camera moves; `ChaseCamera` owns *where it wants
  *  to be*. Keeping them apart means the intro cinematic, the replay cameras

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — SHARED CONTRACTS
+ *  FOXY KART — SHARED CONTRACTS
  * ============================================================================
  *  This file is the single source of truth for cross-module interfaces.
  *  Every subsystem (physics, track, vfx, items, ai, ui, audio, camera)

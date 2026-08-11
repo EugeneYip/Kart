@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — POST-CHAIN QA PROBE  (development only)
+ *  FOXY KART — POST-CHAIN QA PROBE  (development only)
  * ============================================================================
  *  Installs `window.__POST__`, a set of measurement tools for the render
  *  pipeline. This exists because "the image looks washed out" is not something

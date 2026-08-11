@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — AUDIO ENGINE (facade)
+ *  FOXY KART — AUDIO ENGINE (facade)
  * ============================================================================
  *  One AudioContext, one master chain, one place that listens to the EventBus.
  *

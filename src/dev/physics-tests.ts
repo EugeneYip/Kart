@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — PHYSICS TEST BATTERY  (dev harness, not shipped)
+ *  FOXY KART — PHYSICS TEST BATTERY  (dev harness, not shipped)
  * ============================================================================
  *  The DOM-free half of the physics bench. Everything here runs under plain
  *  Node, which is the entire point:
@@ -1392,7 +1392,7 @@ export function reportText(hooks: RunHooks = {}): string {
 }
 
 export function formatReport(r: FullReport): string {
-  let out = `APEX KART — PHYSICS ASSERTIONS   ${r.passed} passed / ${r.failed} failed\n`;
+  let out = `FOXY KART — PHYSICS ASSERTIONS   ${r.passed} passed / ${r.failed} failed\n`;
   out += '─'.repeat(84) + '\n';
   for (const g of r.groups) {
     out += `\n<b>${g.name}</b>\n`;

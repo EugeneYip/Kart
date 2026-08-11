@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — MENUS
+ *  FOXY KART — MENUS
  * ============================================================================
  *  Title → Main → Character → Kart → Track → CC → race, plus Options,
  *  Controls, Pause and the post-race Results flow.
@@ -318,7 +318,7 @@ export class MenuSystem implements ISubsystem {
     const logo = el('div', 'ak-logo ak-stagger', s.root);
     logo.style.setProperty('--d', '80ms');
     el('div', 'ak-logo__streak', logo);
-    const main = numeral('APEX KART', { tone: 'gold', className: 'ak-logo__main' });
+    const main = numeral('FOXY KART', { tone: 'gold', className: 'ak-logo__main' });
     logo.appendChild(main);
     el('div', 'ak-logo__sub', logo, 'GRAND PRIX');
 

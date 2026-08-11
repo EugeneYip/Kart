@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — TONE MAP + COLOUR GRADE ("the look")
+ *  FOXY KART — TONE MAP + COLOUR GRADE ("the look")
  * ============================================================================
  *  This single effect owns *everything* between the HDR scene buffer and the
  *  display-referred image:

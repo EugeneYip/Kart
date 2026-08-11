@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — ARCADE DRIVING MODEL
+ *  FOXY KART — ARCADE DRIVING MODEL
  * ============================================================================
  *  This file owns `KartBody` (the physics-side companion to `KartState`) and
  *  the per-kart integration step.

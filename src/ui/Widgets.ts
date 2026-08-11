@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — UI WIDGET LIBRARY
+ *  FOXY KART — UI WIDGET LIBRARY
  * ============================================================================
  *  Shared, allocation-conscious building blocks for the HUD, the menus and the
  *  results screen:

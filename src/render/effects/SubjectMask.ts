@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — SUBJECT MASK
+ *  FOXY KART — SUBJECT MASK
  * ============================================================================
  *  A quarter-resolution white-on-black silhouette of the player's kart, used by
  *  MotionBlurEffect to keep the subject sharp.

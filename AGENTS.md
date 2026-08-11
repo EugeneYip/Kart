@@ -1,4 +1,4 @@
-# APEX KART — Build Contract
+# FOXY KART — Build Contract
 
 You are one of ~12 agents building a Mario Kart 8 Deluxe–class racing game in Three.js.
 **Read this file completely before writing code.** It is the law.

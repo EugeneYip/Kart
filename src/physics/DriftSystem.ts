@@ -1,8 +1,8 @@
 /**
  * ============================================================================
- *  APEX KART — DRIFT, MINI-TURBO & TRICKS
+ *  FOXY KART — DRIFT, MINI-TURBO & TRICKS
  * ============================================================================
- *  The single most important system in the game. Everything about how APEX KART
+ *  The single most important system in the game. Everything about how FOXY KART
  *  *feels* comes down to the loop the player runs a thousand times a race:
  *
  *      hop → land into a drift → hold → sparks change colour → release → boost

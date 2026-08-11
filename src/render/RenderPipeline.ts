@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — RENDER PIPELINE
+ *  FOXY KART — RENDER PIPELINE
  * ============================================================================
  *  Owns the post-processing chain and is the only thing that touches the
  *  EffectComposer. Everything is HalfFloat so bloom and AgX have real HDR
