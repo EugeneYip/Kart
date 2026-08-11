@@ -43,7 +43,7 @@ import { DriftStage } from '@/core/Types';
 import { bus } from '@/core/EventBus';
 import { clamp, clamp01, damp, lerp, sign } from '@/core/MathUtils';
 import type { KartBody } from './KartPhysics';
-import { DriftPhase, PHYS, applyBoostTo, cancelDrift, TRICK_NAMES } from './KartPhysics';
+import { DriftPhase, PHYS, WORLD_UP, applyBoostTo, cancelDrift, TRICK_NAMES } from './KartPhysics';
 
 export const DRIFT = {
   /** Stick deflection required, on landing, to commit to a drift. */
@@ -271,7 +271,22 @@ export class DriftSystem {
     if (b.trickActive) b.trickTime += dt;
 
     if (justLeftGround) {
-      const launch = b.velocity.dot(b.up);
+      // Measure the launch against WORLD up, not the chassis/contact normal.
+      // A kart riding a ramp is travelling *along* the surface, so its velocity
+      // is very nearly perpendicular to that surface's normal — the dot product
+      // reads ~0 at the exact instant a kicker is throwing it skyward. On the
+      // bench the test ramp's lip gave `velocity.dot(b.up)` = -0.41 while the
+      // kart was climbing at +6.07 m/s world-vertical, so the >= 1.6 gate could
+      // never pass and no trick had ever armed on any circuit.
+      //
+      // The two DRIFT constants corroborate world-up as the intent: a 1.6 m/s
+      // vertical launch buys 2*1.6/g ≈ 0.33 s of air, just over `trickMinAir`
+      // (0.24 s). Kerb blips measure 0.24 m/s here and are still rejected.
+      //
+      // Under anti-gravity the meaningful axis is the ground normal rather than
+      // world up; that path is left alone because it has the same along-the-
+      // surface problem and needs the departing-plane fix, not this one.
+      const launch = b.velocity.dot(WORLD_UP);
       const fromHop = b.hopTime > 0 && b.hopTime < 0.1;
       if (launch >= DRIFT.trickLaunchSpeed && !fromHop && b.trickCooldown <= 0) {
         if (b.ctrlDrift || b.airDriftGrace > 0) this.armTrick(b);
