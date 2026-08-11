@@ -280,6 +280,16 @@ export class KartModel {
   readonly tris: number;
   /** Uniform scale applied to the chassis so it matches this kart's tuning. */
   readonly modelScale: number;
+  /**
+   * What this model was actually built from. Recorded because a model that
+   * cannot say which chassis it is makes a whole class of bug invisible: kart
+   * selection was silently dropped for a long time (`RaceDirector` called a
+   * `setPlayerKart` that nobody had implemented) and there was no way to assert
+   * from outside that the selection had taken effect. `tyreId` is the RESOLVED
+   * tyre, after the `spec.tyreId ?? BODY_TYRE[bodyId]` fallback.
+   */
+  readonly bodyId: KartBodyId;
+  readonly tyreId: TyreId;
 
   /** Rich per-slot chassis at LOD 0, then one consolidated mesh per cheap LOD. */
   private lodNodes: [THREE.Group, THREE.Object3D | null, THREE.Object3D | null, THREE.Object3D | null];
@@ -434,6 +444,8 @@ export class KartModel {
 
     // --- wheels ------------------------------------------------------------
     const tyre: TyreId = spec.tyreId ?? BODY_TYRE[spec.bodyId];
+    this.bodyId = spec.bodyId;
+    this.tyreId = tyre;
     const wheelAsset = assets.wheelFor(
       tyre, builtFrame.wheelRadius, builtFrame.wheelWidth,
     );

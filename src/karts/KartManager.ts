@@ -47,6 +47,8 @@ import {
   CHARACTERS, CHARACTER_BY_ID, DEFAULT_CHARACTER_ID, type CharacterDef,
 } from './Characters';
 import { KartMaterialLibrary, type FaceExpression, type PaintSpec } from './KartMaterials';
+import { BODY_TYRE, KART_BODY_IDS, type KartBodyId } from './KartBodies';
+import type { TyreId } from './Wheels';
 import {
   KartAssets, KartModel, LOD_FAR_DISTANCE, LOD_MID_DISTANCE, LOD_WHEELS_DISTANCE,
   MID_RIVAL_COUNT, NEAR_RIVAL_COUNT, SOCKET_NAMES,
@@ -171,6 +173,11 @@ export class KartManager implements ISubsystem {
   private lodRef: HasPosition | null = null;
 
   private playerCharacterId = DEFAULT_CHARACTER_ID;
+  /**
+   * Chassis override for the player, from the kart-select screen. `null` means
+   * "whatever chassis the chosen character rides", which is the roster default.
+   */
+  private playerBodyId: KartBodyId | null = null;
   private offs: Array<() => void> = [];
 
   constructor(
@@ -315,9 +322,13 @@ export class KartManager implements ISubsystem {
 
     const paint = this.paintFor(character, variant);
     const face = faceSpecFor(character.driverId);
+    // Index 0 is the player, and only the player can override the chassis.
+    const chassis = index === 0 ? this.playerChassis(character) : {
+      bodyId: character.bodyId, tyreId: character.tyreId,
+    };
     const spec = {
-      bodyId: character.bodyId,
-      tyreId: character.tyreId,
+      bodyId: chassis.bodyId,
+      tyreId: chassis.tyreId,
       driverId: character.driverId,
       tuning,
       paintKey: `${character.id}#${variant}`,
@@ -753,23 +764,74 @@ export class KartManager implements ISubsystem {
     return this.byId.get(kartId)?.model.tris ?? 0;
   }
 
+  /**
+   * The chassis the player actually races: the kart-select override when one has
+   * been chosen, otherwise the character's own. An overridden chassis brings its
+   * natural tyre family with it (`BODY_TYRE`) — a cruiser on slicks reads as a
+   * bug, and the roster pairs body and tyre deliberately.
+   */
+  private playerChassis(character: CharacterDef): { bodyId: KartBodyId; tyreId: TyreId } {
+    const bodyId = this.playerBodyId ?? (character.bodyId as KartBodyId);
+    if (this.playerBodyId === null) {
+      return { bodyId, tyreId: character.tyreId as TyreId };
+    }
+    return { bodyId, tyreId: BODY_TYRE[bodyId] as TyreId };
+  }
+
   /** Swap the player's character. Safe to call mid-session. */
   setPlayerCharacter(id: string): void {
     const character = CHARACTER_BY_ID[id];
     if (!character) return;
+    const changed = this.playerCharacterId !== id;
     this.playerCharacterId = id;
-    if (!this.ready) return;
+    if (!this.ready || !changed) return;
+    this.rebuildPlayer();
+  }
+
+  /**
+   * Swap the player's chassis, from the kart-select screen.
+   *
+   * `RaceDirector` has always called this (`callOpt(this.roster,
+   * 'setPlayerKart', opts.kartId)`) but **nothing implemented it**, so every
+   * kart-body selection was silently dropped by `callOpt` and the player always
+   * raced their character's default chassis. Same family as the three mechanics
+   * that shipped dead — see HANDOFF.md.
+   *
+   * Passing an unknown id is a no-op rather than a throw, matching
+   * `setPlayerCharacter`: this arrives from a menu and must never take the race
+   * down. Pass `null` to go back to the character's own chassis.
+   */
+  setPlayerKart(id: string | null): void {
+    const next = id === null ? null
+      : (KART_BODY_IDS as readonly string[]).includes(id) ? (id as KartBodyId)
+        : undefined;
+    if (next === undefined) return; // unknown chassis — leave the current one alone
+    const changed = this.playerBodyId !== next;
+    this.playerBodyId = next;
+    if (!this.ready || !changed) return;
+    this.rebuildPlayer();
+  }
+
+  /**
+   * Rebuild kart 0's model in place. Shared by `setPlayerCharacter` and
+   * `setPlayerKart` so the two cannot drift apart — the chassis, the tyres, the
+   * driver and the paint all have to be resolved together, and doing that twice
+   * is how you end up with a fox on a cruiser wearing the wrong livery.
+   */
+  private rebuildPlayer(): void {
+    const character = CHARACTER_BY_ID[this.playerCharacterId] ?? CHARACTERS[0];
     const v = this.visuals[0];
-    if (!v || v.character.id === id) return;
+    if (!v) return;
 
     const old = v.model;
     const tuning = makeTuning(character.id);
     this.physics.setTuning?.(v.state.id, tuning);
     const paint = this.paintFor(character, 0);
     const face = faceSpecFor(character.driverId);
+    const chassis = this.playerChassis(character);
     const model = new KartModel(this.assets, {
-      bodyId: character.bodyId,
-      tyreId: character.tyreId,
+      bodyId: chassis.bodyId,
+      tyreId: chassis.tyreId,
       driverId: character.driverId,
       tuning,
       paintKey: `${character.id}#p`,
