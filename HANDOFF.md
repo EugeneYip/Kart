@@ -2,6 +2,103 @@
 
 ---
 
+## 🔴 P0c — THE PHYSICS BATTERY IS NOT GREEN (9 failing assertions)
+
+`node src/dev/node-run.mjs src/dev/physics-run.ts` → **33 passed / 9 failed**.
+The suite now runs headlessly (the WebGL bench split out into `src/dev/physics.ts`;
+assertions live in `physics-tests.ts`). Triaged, most-actionable first:
+
+**1. Four wall tests are STALE, not regressed. Owner: `src/dev/physics-tests.ts`**
+
+`30° wall scrub`, `10° graze`, `60° hit` and `steeper hit costs more` all report
+`Infinity %`. `hitAt()` detects contact by watching the `wallImpacts` **penalty
+counter** — which the new P0b-5 friction model deliberately never increments for
+verge contact. So `before` stays `0`, `after` stays `-1`, and the loss formula
+divides by zero. Rewrite it to measure **contact** (a `grounded`/contact flag or
+a lateral-velocity discontinuity), and guard `before === 0` instead of dividing
+by it. Note `one penalty per impact` and `a grind is not re-penalised per tick`
+both PASS at `0` penalties, which is the new model working as designed.
+
+**2. `grinding a wall is not a crash` — a real number that needs a decision.**
+3 s of leaning on the guardrail at 18 m/s entry retains **14.33 of 27.72 m/s =
+51.7 %**; the assertion wants > 60 %. The playtester did ask for friction that
+"slows the player down", so a cost is intended — this is a tuning call on *how
+much*, not a bug. Pick a target and move the assertion to match it.
+
+**3. `out of bounds → respawn` + `respawn at ~40 % speed` — UNCLASSIFIED, possibly serious.**
+A kart parked at the infield centre (`position.set(0, 8, 0)`, dead centre of the
+oval, definitively out of bounds) never fires `kart:respawn` over 200 ticks and
+ends `|u| = 0.01 m` at 3.26 m/s. **If this is real, a player who leaves the
+track is stuck forever** — that outranks everything else in this file. It could
+equally be a bench artifact (`checkBounds` changed in P0b-5). Classify it first:
+probe `checkBounds` directly with a known out-of-bounds position on a real
+circuit, not the TestTrack.
+
+**4. `off-road slows you` — classification readback, not grip.**
+Grass settles at 15.27 m/s (correctly slow, the cap is 28.7), but the assertion
+also requires `grassSurf === SurfaceType.Grass` and `surfaceAt()` reports
+**surface id 0** there. Either the probe samples a different position than the
+kart occupies, or `surfaceAt` mis-classifies. The speed is right, so this is a
+reporting bug — but it is the same *family* as the glider `TF.Gap`/`TF.Glider`
+ordering bug, so worth a careful look.
+
+**5. `banked 25°: all wheels planted` — one corner lifts at rest.**
+Ride-height band is 5.00 mm and it does not slither or jitter, so this is
+cosmetic-adjacent, but a wheel off the ground on a static bank is wrong.
+
+---
+
+## ✅ 22 of 44 AUTHORED PROP TYPES WERE BEING DROPPED — FIXED
+
+**Owner was `src/world/Props.ts`. Done in `3a85e4b`.**
+
+`TrackDefs` authors 44 distinct prop types; `normaliseType()` had aliases for 22
+and returned `null` for the other 22, so `collectAuthored()` discarded those
+placements behind a single `console.info`. Per circuit, spec entries dropped:
+
+| circuit | dropped | distinct types |
+|---|---:|---:|
+| coastal | 0/30 | 0 |
+| **city** | **17/25** | 14 |
+| **volcano** | **14/21** | 9 |
+
+Two of the three circuits were missing ~two thirds of their authored scenery.
+**This is most of why Neon Metropolis and Volcano Rush read as bare while the
+coastal track looks finished** — coastal lost nothing, so it was never a clue.
+
+Four types now fold into geometry the theme builders already emit, via
+`takeAuthored` (skyscraper, neonSign, trafficLight → `buildCity`;
+obsidianSpire → `buildVolcano`'s shard cluster) at **zero extra draw calls**.
+Anchors must be appended *after* each block's `a.scale` jitter or the authored
+scale is overwritten. The other 18 are new `authoredSpec` recipes.
+
+Verified with `.probe-tmp/props.ts` (real `Environment`, all three circuits):
+22/22 types produce geometry, every new body has **positive signed volume** (so
+none repeats the §0 inside-out bug), and the fold-ins are proven by *position
+match* rather than by name — skyscraper 14/14 authored positions present,
+neonSign 14/14, trafficLight 1/1, obsidianSpire 18/18. Budget before → after:
+city 60→82 scene meshes / 0.35→0.44 M tris, volcano 55→66 / 0.24→0.28 M,
+coastal unchanged (control). Ceiling is 120 draw calls / 1.2 M tris.
+
+### 🔴 Two things left open here
+
+- **None of the 18 new recipes has been LOOKED AT.** The browser pane was stuck
+  on a policy check ("Policy check in progress for this tab") for the whole
+  session, so this is numerically sound and completely un-art-directed. Screenshot
+  Neon Metropolis and Volcano Rush and judge the new props against MK8DX before
+  trusting any of them. `arcologyTower` (one instance, scale 2.4, the only
+  landmark on the lap) and `ashPlume` (1728 tris/instance) are the two most
+  likely to look wrong.
+- **`bridgePylon` / `spiralPylon` have a documented compromise.** They are
+  authored *below* the deck (`up: -12` city flyover, `-22` volcano bridge, `-18`
+  spiral) and one geometry cannot reach all three depths — sized to meet the deck
+  at −12 it would stand 10 m proud of the road at −22. The shaft's capital sits at
+  the anchor and descends 46 m, leaving an intentional gap to the deck underside
+  that is invisible from the road but shows in a distant side-on view. A real fix
+  needs a per-anchor height query, which `authoredSpec` cannot reach.
+
+---
+
 ## 🔴 P0b — SECOND HUMAN PLAYTEST (current priority)
 
 The through-line is explicit and should be treated as a **design direction, not
@@ -42,16 +139,24 @@ them **collisions**. This asks for a different model entirely:
 Introduce a **soft-collider** class: scenery you can scrape along with a drag
 cost, distinct from track-boundary walls. Same spirit as P0b-5.
 
-**P0b-7 — Tunnel scene clipping. Owner: `src/world/Props.ts`**
+**P0b-7 — Tunnel scene clipping. IMPLEMENTED, NOT YET VERIFIED. Owner: `src/world/Props.ts`**
 > *"During the tunnel section, buildings were clipping through the walls and
 > appearing inside the tunnel. This creates unnecessary additional obstacles."*
 
-The road-clearance test added last round checks lateral distance from the spline
-but evidently **not tunnel interiors** — a building outside the tunnel wall still
-clears the road laterally while poking through into the bore. Add a volume test
-against tunnel/bridge segments and reject or push props out. Verify numerically
-by walking the tunnel arc-length range and testing prop bounding boxes against
-the tunnel's interior volume.
+A volume test against tunnel/bridge/anti-gravity segments landed in commit
+`4d3f979`, with `insideRoadVolume` / `clearAuthored` and `volumeDrops` /
+`volumePushes` counters. It reports live numbers per circuit:
+
+| circuit | pushed clear | instances dropped | volumes |
+|---|---:|---:|---:|
+| coastal | 13 | 13 | 35 |
+| city | 2 | 15 | 76 |
+| volcano | 0 | 21 | 129 |
+
+**What is still missing is the verification the item asked for**: nobody has
+walked the tunnel arc-length range and tested prop bounding boxes against the
+bore interior. The counters prove the guard *fires*, not that it fires in the
+right places or catches everything. Do that before closing this.
 
 ---
 
@@ -87,13 +192,25 @@ a mechanic that simply never fires.
 |---|---|---|
 | **Gliders** | `surfaceAt()` returned `Void` for `TF.Gap` **before** testing `TF.Glider`, and every authored glider volume sits on a Gap segment. No kart on any circuit had ever deployed one. **FIXED** — crossings 0/12 → 8/8. | `src/track/*` |
 | **Anti-gravity** | Never engages. Confirmed by A/B against original physics, so it is pre-existing, not a regression. Authored AG zones exist on Neon Metropolis. | `src/physics/*` + `src/track/*` |
-| **Ramp tricks** | Never pay out. Same A/B confirmation. `kart:trick` is specified and wired but the boost never lands. | `src/physics/*` |
+| ~~**Ramp tricks**~~ | **FIXED** — `DriftSystem.tricks()` gated arming on `velocity.dot(b.up) >= 1.6`, but a kart riding a ramp travels *along* the surface, so that dot product reads ~0 exactly when a kicker is throwing it upward. Bench ramp lip: `dot(b.up)` **−0.41** vs `velocity.y` **+6.07**. Now measured against world up. Bench reports trick "frontflip" / 0.55 s boost (was none / 0.00). Kerb blips measure 0.24 m/s and are still rejected, so the 1.6 threshold keeps its job. AG left alone: there the meaningful axis is the ground normal, which has the same along-the-surface problem and needs a departing-plane test. | `src/physics/DriftSystem.ts` |
 
-**Suspicion worth acting on:** three independent "authored but never fires" bugs
-in one codebase means the pattern is systemic, not coincidental. Anything gated
-on a surface-flag test or a zone lookup deserves an explicit "does this ever
-become true during a real lap?" probe. Add such a probe for boost pads, item
-boxes, checkpoints, respawn triggers and every `SurfaceType`.
+**Suspicion worth acting on — now FIVE instances, so treat it as a rule.**
+Three became five while fixing the above:
+
+4. **22 of 44 authored prop types were silently dropped** (see the section
+   below). `normaliseType()` returned null and `collectAuthored` discarded the
+   placement behind one `console.info`.
+5. **`takeAuthored()` was written, documented, and never called by anything** —
+   the whole "fold authored anchors into an existing InstancedMesh" mechanism
+   was dead.
+
+Anything gated on a surface-flag test, a zone lookup, **or a name-to-builder
+table** deserves an explicit "does this ever become true during a real lap?"
+probe. Add such a probe for boost pads, item boxes, checkpoints, respawn
+triggers and every `SurfaceType`. The generalisable lesson: a lookup that
+returns null/undefined on a miss and logs instead of throwing will hide a
+whole subsystem indefinitely. Prefer an exhaustive switch or a startup
+assertion that every authored name resolves.
 
 ### Shared root cause for P0-1 / P0-2 — CONFIRMED
 
