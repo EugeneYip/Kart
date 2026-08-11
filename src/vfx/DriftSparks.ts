@@ -47,6 +47,7 @@ interface KartFx {
   accL: number;
   accR: number;
   accWisp: number;
+  accSmoke: number;
   accEmber: number;
   accArc: number;
   accRibbon: number;
@@ -63,9 +64,12 @@ export class DriftSparks {
 
   // --- emitter library ------------------------------------------------------
   private dWisp: EmitterDesc;
+  private dSparkWhite: EmitterDesc;
+  private dTyreSmoke: EmitterDesc;
   private dSparkBlue: EmitterDesc;
   private dSparkOrange: EmitterDesc;
   private dSparkPurple: EmitterDesc;
+  private dGlowWhite: EmitterDesc;
   private dGlowBlue: EmitterDesc;
   private dGlowOrange: EmitterDesc;
   private dGlowPurple: EmitterDesc;
@@ -112,6 +116,29 @@ export class DriftSparks {
     this.dSparkBlue = spark(RAMP.BLUE_SPARK, 0.155, 7.0, 0.26);
     this.dSparkOrange = spark(RAMP.ORANGE_SPARK, 0.20, 8.5, 0.30);
     this.dSparkPurple = spark(RAMP.PURPLE_SPARK, 0.235, 10.0, 0.34);
+    // STAGE 1. The colourless spark that starts every drift. Before this
+    // existed, `DriftStage.Charging` emitted nothing but a near-transparent
+    // mist wisp — measured at 3.4 spawns/frame — so the first (and by far the
+    // longest) phase of every drift was visually silent, and a screenshot taken
+    // mid-corner showed a kart sideways with no drift effect at all. Smaller,
+    // shorter and cooler than the tier sparks so the blue tier-up still reads
+    // as a distinct escalation rather than "more of the same".
+    this.dSparkWhite = spark(RAMP.WHITE_SHARP, 0.115, 5.6, 0.21);
+
+    // Tyre smoke, deliberately NOT routed through SurfaceParticles. That module
+    // is driven by `SURFACES[surface].particle`, and road/asphalt is correctly
+    // `'none'` — which meant a drift on tarmac, i.e. essentially every drift in
+    // the game, produced zero smoke. Locked rubber smokes regardless of what it
+    // is smoking on, so the drift owns this emitter itself.
+    this.dTyreSmoke = makeDesc({
+      sprite: SPRITE.SMOKE, ramp: RAMP.SMOKE_LIGHT, curve: CURVE.PUFF,
+      flags: PFLAG.TURB,
+      size: 0.46, sizeVar: 0.45, life: 0.62, lifeVar: 0.35,
+      speed: 2.0, speedVar: 0.65, cone: 1.0,
+      drift: new THREE.Vector3(0, 1.35, 0), inherit: 0.30, jitter: 0.11,
+      gravity: -1.0, drag: 2.0, turbAmp: 0.55, turbFreq: 1.15,
+      spin: 1.7, soft: 0.85, additive: 0.05, alpha: 0.30, intensity: 1.0,
+    });
 
     const glow = (ramp: number, size: number): EmitterDesc => makeDesc({
       sprite: SPRITE.GLOW, ramp, curve: CURVE.SPIKE,
@@ -121,6 +148,7 @@ export class DriftSparks {
       gravity: 2, drag: 3.0, soft: 0.4,
       additive: 1, alpha: 0.85, intensity: 0.85,
     });
+    this.dGlowWhite = glow(RAMP.WHITE_SHARP, 0.32);
     this.dGlowBlue = glow(RAMP.BLUE_SPARK, 0.42);
     this.dGlowOrange = glow(RAMP.ORANGE_SPARK, 0.52);
     this.dGlowPurple = glow(RAMP.PURPLE_SPARK, 0.60);
@@ -196,12 +224,17 @@ export class DriftSparks {
       soft: 0, flags: PFLAG.HARD,
       additive: 1, alpha: 0.9, intensity: 1.5,
     });
+    // Speed and life are budgeted against the ballistic height they produce,
+    // because this fires straight up out of a 1.9 m kart. The old 13-20 m/s at
+    // 0.55 s reached v^2/2g = 20^2/32 = **12.5 m**, which on a chase framing is
+    // a shard fountain roughly 400 px tall towering over the kart. 8.5 m/s tops
+    // out near 2.2 m — just over the roll bar, which is where MK8 puts it.
     this.dBurstSpark = makeDesc({
       sprite: SPRITE.SPARK, ramp: RAMP.WHITE_SHARP, curve: CURVE.SHRINK,
       flags: PFLAG.STRETCH | PFLAG.BOUNCE,
-      size: 0.24, sizeVar: 0.5, life: 0.55, lifeVar: 0.4,
-      speed: 13, speedVar: 0.6, cone: 1.5,
-      inherit: 0.45, gravity: 16, drag: 1.0, restitution: 0.4,
+      size: 0.22, sizeVar: 0.5, life: 0.34, lifeVar: 0.35,
+      speed: 8.5, speedVar: 0.55, cone: 1.9,
+      inherit: 0.45, gravity: 17, drag: 1.6, restitution: 0.4,
       stretch: 0.026, soft: 0.2,
       additive: 1, alpha: 1, intensity: 1.15,
     });
@@ -211,7 +244,7 @@ export class DriftSparks {
     let s = this.state.get(id);
     if (!s) {
       s = {
-        stage: DriftStage.None, accL: 0, accR: 0, accWisp: 0,
+        stage: DriftStage.None, accL: 0, accR: 0, accWisp: 0, accSmoke: 0,
         accEmber: 0, accArc: 0, accRibbon: 0, ribbonPhase: 0, glowPulse: 0,
         lastTier: -99,
       };
@@ -233,20 +266,34 @@ export class DriftSparks {
       const s = this.fx(k.id);
 
       // Distance LOD — far karts still spark, but cheaply.
+      //
+      // The PLAYER IS NEVER CULLED. A hard `dist > 140` cull here was the single
+      // most expensive line in the VFX layer: any camera parked away from the
+      // player (a QA capture framing, a cinematic, a spectator angle) silently
+      // switched the drift off entirely, and the effect that defines the genre
+      // simply did not exist in the resulting frame. Distance may reduce the
+      // rate; for the subject of the shot it must never reduce it to zero.
       const dist = ctx.camera.position.distanceTo(k.position);
-      if (dist > 140) { s.stage = k.driftStage; continue; }
-      const lod = dist < 28 ? 1 : dist < 65 ? 0.55 : 0.22;
+      if (!k.isPlayer && dist > 160) { s.stage = k.driftStage; continue; }
+      const lodRaw = dist < 28 ? 1 : dist < 65 ? 0.55 : 0.22;
+      const lod = k.isPlayer ? (lodRaw < 0.6 ? 0.6 : lodRaw) : lodRaw;
       const rate = lod * ctx.throttle;
 
       if (k.driftStage !== s.stage) {
+        // 0-based tier index: DriftStage.Blue(2) -> 0, Orange(3) -> 1,
+        // Purple(4) -> 2. This previously used `driftStage - 1`, which shifted
+        // every celebration one tier hotter than the tier actually reached — a
+        // blue tier-up flashed the orange ring, orange flashed purple — so the
+        // colour language of the charge was wrong at exactly the moment the
+        // player is looking for it.
         if (k.driftStage > s.stage && k.driftStage >= DriftStage.Blue) {
-          this.tierBurst(k, k.driftStage - 1);
+          this.tierBurst(k, k.driftStage - DriftStage.Blue);
         }
         s.stage = k.driftStage;
       }
 
       if (!k.drifting || !k.grounded || k.driftStage === DriftStage.None) {
-        s.accL = s.accR = s.accWisp = s.accEmber = s.accArc = 0;
+        s.accL = s.accR = s.accWisp = s.accSmoke = s.accEmber = s.accArc = 0;
         continue;
       }
 
@@ -263,18 +310,31 @@ export class DriftSparks {
         .addScaledVector(tmpUp, 0.34)
         .normalize();
 
-      if (k.driftStage === DriftStage.Charging) {
-        this.emitCharge(k, s, dirSign, rate * speedF, dt);
-        continue;
-      }
+      // Locked rubber always smokes, on any surface. Emitted for every drift
+      // stage including Charging, so the drift has mass from frame one.
+      this.emitTyreSmoke(k, s, rate * (0.35 + 0.65 * speedF), dt);
 
       const stage = k.driftStage;
-      const sparkDesc = stage === DriftStage.Blue ? this.dSparkBlue
-        : stage === DriftStage.Orange ? this.dSparkOrange : this.dSparkPurple;
-      const glowDesc = stage === DriftStage.Blue ? this.dGlowBlue
-        : stage === DriftStage.Orange ? this.dGlowOrange : this.dGlowPurple;
-      const baseRate = stage === DriftStage.Blue ? 150
-        : stage === DriftStage.Orange ? 210 : 270;
+      const charging = stage === DriftStage.Charging;
+      if (charging) {
+        // Keep the mist wisp as a secondary texture on top of the sparks.
+        this.emitCharge(k, s, dirSign, rate * speedF, dt);
+      }
+
+      // Four escalating colour states, and Charging is now one of them rather
+      // than a silent pre-roll: white -> blue -> orange -> purple.
+      const sparkDesc = charging ? this.dSparkWhite
+        : stage === DriftStage.Blue ? this.dSparkBlue
+          : stage === DriftStage.Orange ? this.dSparkOrange : this.dSparkPurple;
+      const glowDesc = charging ? this.dGlowWhite
+        : stage === DriftStage.Blue ? this.dGlowBlue
+          : stage === DriftStage.Orange ? this.dGlowOrange : this.dGlowPurple;
+      // Within the charging stage the rate climbs with `driftCharge`, so the
+      // spray visibly tightens as the tier-up approaches and the pop lands on
+      // an anticipation rather than out of nowhere.
+      const baseRate = charging ? 62 + 68 * clamp01(k.driftCharge)
+        : stage === DriftStage.Blue ? 150
+          : stage === DriftStage.Orange ? 210 : 270;
       const perWheel = baseRate * (0.45 + 0.55 * speedF) * rate;
 
       this.emitWheel(k, s, 'wheelRL', REAR_L, sparkDesc, glowDesc, perWheel, dt, true);
@@ -288,7 +348,13 @@ export class DriftSparks {
         rim.tint.copy(sparkDesc.tint);
         rim.ramp = sparkDesc.ramp;
         rim.size = stage === DriftStage.Purple ? 3.1 : 2.7;
-        rim.alpha = stage === DriftStage.Blue ? 0.08 : stage === DriftStage.Orange ? 0.10 : 0.13;
+        // Charging must be the FAINTEST wash, not the strongest. The old
+        // ternary chain had no Charging arm, so it fell through to the purple
+        // value and the very first stage of the drift washed the chassis harder
+        // than the top tier did.
+        rim.alpha = charging ? 0.045
+          : stage === DriftStage.Blue ? 0.08
+            : stage === DriftStage.Orange ? 0.10 : 0.13;
         tmpA.copy(k.position);
         this.ctx.particles.spawn(rim, tmpA, k.velocity, tmpA.y - 1, 1, 1);
       }
@@ -349,6 +415,27 @@ export class DriftSparks {
       s.accWisp -= 1;
       tmpB.copy(tmpUp).multiplyScalar(0.6).addScaledVector(tmpFwd, -0.6).normalize();
       this.ctx.particles.emit(this.dWisp, 1, tmpA, tmpB, k.velocity, groundY, 1);
+    }
+  }
+
+  /**
+   * White tyre smoke off both rear contact patches. Independent of the surface
+   * family on purpose — see `dTyreSmoke`.
+   */
+  private emitTyreSmoke(k: KartState, s: KartFx, rate: number, dt: number): void {
+    s.accSmoke += 34 * rate * dt;
+    if (s.accSmoke < 1) return;
+    let n = Math.floor(s.accSmoke);
+    s.accSmoke -= n;
+    if (n > 6) n = 6;
+    for (let i = 0; i < n; i++) {
+      const left = (i & 1) === 0;
+      const off = left ? REAR_L : REAR_R;
+      socketPos(this.src, k, left ? 'wheelRL' : 'wheelRR', off[0], off[1], off[2], tmpA);
+      const groundY = tmpA.y - 0.30;
+      tmpA.y = groundY + 0.10;
+      tmpB.copy(tmpUp).multiplyScalar(0.55).addScaledVector(tmpFwd, -0.62).normalize();
+      this.ctx.particles.emit(this.dTyreSmoke, 1, tmpA, tmpB, k.velocity, groundY, 1);
     }
   }
 
@@ -413,14 +500,22 @@ export class DriftSparks {
 
     this.dBurstSpark.ramp = ramp;
     this.dBurstSpark.size = (0.20 + t * 0.045) * scale;
-    this.dBurstSpark.speed = 12 + t * 4;
+    // Height-budgeted, same reasoning as the descriptor: 8-10.4 m/s peaks at
+    // 2.0-3.4 m. The old 12-20 m/s threw shards 12 m into the air.
+    this.dBurstSpark.speed = 8 + t * 1.2;
     p.emit(this.dBurstSpark, Math.round((18 + t * 10) * this.ctx.throttle), pos, tmpUp, vel, groundY, 1);
 
     // A second, flatter fan so the burst hugs the ground like MK8's does.
-    tmpC.copy(tmpUp).multiplyScalar(0.25).normalize();
+    // The direction stays vertical and the CONE is opened to ~2.5 rad, which is
+    // what actually flattens the spray: a near-hemispherical cone about +Y
+    // throws most of its sparks sideways along the deck. (Scaling the up-vector
+    // and re-normalising it — as this did before — is a no-op: normalize(0,
+    // 0.25, 0) is just (0, 1, 0), so the "flat" fan was an exact duplicate of
+    // the vertical one, at double the cost and half the read.)
+    this.dBurstSpark.cone = 2.5;
+    this.dBurstSpark.speed = 6.5 + t * 1.0;
+    p.emit(this.dBurstSpark, Math.round((14 + t * 8) * this.ctx.throttle), tmpB, tmpUp, vel, groundY, 1);
     this.dBurstSpark.cone = 1.9;
-    p.emit(this.dBurstSpark, Math.round((14 + t * 8) * this.ctx.throttle), tmpB, tmpC, vel, groundY, 1);
-    this.dBurstSpark.cone = 1.5;
   }
 
   dispose(): void { this.state.clear(); }

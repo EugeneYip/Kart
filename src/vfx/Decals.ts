@@ -350,8 +350,11 @@ export class Decals {
       this.skids.set(k.id, s);
     }
 
+    // The player always lays rubber. A blanket 90 m cull meant that whenever
+    // the camera was not right behind the player — including every QA capture
+    // framing — a full drift left no skid marks at all.
     const dist = this.ctx.camera.position.distanceTo(k.position);
-    if (dist > 90 || !k.grounded) { s.ok[0] = 0; s.ok[1] = 0; return; }
+    if ((!k.isPlayer && dist > 110) || !k.grounded) { s.ok[0] = 0; s.ok[1] = 0; return; }
 
     tmpUp.copy(U_LOCAL).applyQuaternion(k.quaternion);
     const lateral = Math.abs(k.velocity.dot(tmpRight.set(1, 0, 0).applyQuaternion(k.quaternion)));

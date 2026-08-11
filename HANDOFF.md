@@ -2,6 +2,50 @@
 
 ---
 
+## 🔴 P0 — HUMAN PLAYTEST REPORT (outranks everything below)
+
+A person actually played the build. These are their words, translated into
+defects. **Playability beats polish** — a beautiful game that isn't fun to drive
+has failed. Do these first.
+
+| # | Defect | Owner |
+|---|---|---|
+| P0-1 | Start-line audience seating is mispositioned and **visually extends onto the road**. | `src/world/Props.ts` |
+| P0-2 | The **start/finish gate** and sometimes a **balloon arch** sit **parallel to the road, running down its middle**, instead of spanning across it. Yaw ~90° out. | `src/world/Props.ts` |
+| P0-3 | An **item box is stuck in the middle of the road** at the start. | `src/track/*` (`getItemBoxSpawns`) |
+| P0-4 | The **position/ranking plate clips its own text** — the plate edge cuts into the numeral. | `src/ui/*` |
+| P0-5 | **"Touching the edge equals a crash" is far too harsh** — makes the game too difficult. Walls must SLIDE. | `src/physics/KartCollision.ts` |
+| P0-6 | A road section **containing a boost pad is incomplete and nearly impassable**. | `src/track/*` |
+| P0-7 | **Steering is too sensitive / over-reacts**, making the kart hard to control. | `src/physics/*` (+ `Input.ts` by request) |
+
+### Likely shared root cause for P0-1 / P0-2 (and possibly the sign mirroring)
+
+P0-2's 90°-out gates and the `sponsorBoard`'s mirrored text (item 0b below,
+where the UV path was independently verified **correct**) both point at the
+**prop anchor/yaw derivation from the spline**. Suspect `tangent` vs `binormal`
+confusion or swapped `Math.atan2` arguments. A gate spanning the road must have
+its long axis along the **binormal**; a trackside board must face along
+**−tangent** toward oncoming karts. **Fix the shared derivation once** and
+re-check the sign mirroring afterwards — it may resolve for free.
+
+### These are all numerically checkable — prefer that over screenshots
+The browser pane is a single shared resource and is contended.
+- Road continuity: step the spline at ~0.5 m, raycast down, report arc-length
+  ranges with no hit or a height discontinuity.
+- Prop clearance: project bounding-box corners via `track.project()`, assert
+  lateral distance > `halfWidth`.
+- Gate orientation: assert long axis is within a few degrees of the local
+  `binormal`, not the `tangent`.
+- Wall harshness: fire a kart at 5/15/30/60/90° and report retained speed %.
+  Also count collision events for a kart parked against a wall for 3 s — at
+  120 Hz a naive implementation penalises it ~360 times.
+- Text clipping: `el.scrollWidth <= el.clientWidth`, rects inside the viewport,
+  no two HUD rects intersecting. Test `11TH`/`12TH`, not just `1ST`.
+
+---
+
+---
+
 ## ⚠️ 0. READ FIRST — every closed primitive in `Props.ts` was inside-out
 
 `Builder.box`, `prism`, `tube`, `sphere` and `torus` all emitted

@@ -561,8 +561,14 @@ export class BoostFlame {
       if (k.starTime > 0 && boosting) s.variant = 'star';
       if (s.strength < 0.02) continue;
 
+      // The player's flame is never distance-culled. `boostTime`/`boostStrength`
+      // being correct is not enough to see a flame: with the camera parked away
+      // from the player (a QA framing, a cinematic, a spectator angle) this
+      // `continue` fired and a full mini-turbo rendered zero flame instances
+      // while `strength` sat at 1.0 — the state was right and only the distance
+      // gate was false.
       const dist = ctx.camera.position.distanceTo(k.position);
-      if (dist > 180) continue;
+      if (!k.isPlayer && dist > 200) continue;
 
       const v = VARIANTS[s.variant];
       tmpFwd.copy(F_LOCAL).applyQuaternion(k.quaternion);
@@ -605,7 +611,8 @@ export class BoostFlame {
       }
 
       // --- particle detail --------------------------------------------------
-      const lod = dist < 30 ? 1 : dist < 70 ? 0.5 : 0.2;
+      const lodRaw = dist < 30 ? 1 : dist < 70 ? 0.5 : 0.2;
+      const lod = k.isPlayer ? (lodRaw < 0.6 ? 0.6 : lodRaw) : lodRaw;
       const rate = lod * ctx.throttle * s.strength;
       const p = ctx.particles;
       const groundY = k.position.y - 0.6;

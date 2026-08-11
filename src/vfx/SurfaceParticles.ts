@@ -254,9 +254,11 @@ export class SurfaceParticles {
       const fam = this.families.get(props.particle);
       if (!fam) continue;
 
+      // Never cull the player — see the same note in DriftSparks.update().
       const dist = ctx.camera.position.distanceTo(k.position);
-      if (dist > 130) continue;
-      const lod = dist < 30 ? 1 : dist < 70 ? 0.5 : 0.2;
+      if (!k.isPlayer && dist > 150) continue;
+      const lodRaw = dist < 30 ? 1 : dist < 70 ? 0.5 : 0.2;
+      const lod = k.isPlayer ? (lodRaw < 0.6 ? 0.6 : lodRaw) : lodRaw;
 
       const speed = Math.abs(k.speed);
       const speedF = clamp01(speed / 16);

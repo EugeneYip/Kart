@@ -134,39 +134,62 @@ const S = (t: number, c: number, i: number, a: number): Stop => ({ t, c, i, a })
 
 /**
  * `c` = sRGB hex, `i` = HDR intensity multiplier (>1 blooms), `a` = opacity.
+ *
+ * TUNED AGAINST THE MEASURED GRADE, NOT A GUESS. The colour grade is now
+ * AgX at **exposure 0.70** (it was 1.3), meanSat 0.508, 0 % blown highlights,
+ * bloom `threshold 0.85, smoothing 0.1, radius 0.62, intensity 0.72`.
+ *
+ * Two consequences drive every number below:
+ *
+ *  1. Halving the exposure halves what reaches the tone curve, so every
+ *     emissive authored against 1.3 now lands roughly an octave too dim and
+ *     stops crossing the 0.85 bloom threshold. Hot cores are scaled UP ~1.3x.
+ *  2. Counter-intuitively the lower exposure makes colour *stronger*, because
+ *     less of the frame reaches AgX's desaturating shoulder. So the coloured
+ *     mid-section of each spark ramp is raised too — it no longer washes to
+ *     white the way it did at 1.3 — and the pure-white lead-in stays short.
+ *
+ * Smoke is the other half of the story: it is drawn PREMULTIPLIED, so a dark
+ * smoke colour does not "look dark", it *subtracts* — it punches a hole in
+ * whatever is behind it, including the sky. Every smoke ramp is therefore
+ * lifted well above mid-grey and its peak alpha cut; smoke must read as haze
+ * you can see through, never as a silhouette.
  */
 const RAMPS: Record<number, Stop[]> = {
   [RAMP.WHITE]: [S(0, 0xffffff, 1.6, 0), S(0.12, 0xffffff, 1.4, 1), S(1, 0xffffff, 1.0, 0)],
-  [RAMP.WHITE_SHARP]: [S(0, 0xffffff, 2.6, 1), S(0.55, 0xffffff, 1.4, 0.8), S(1, 0xffffff, 0.6, 0)],
+  [RAMP.WHITE_SHARP]: [S(0, 0xffffff, 3.2, 1), S(0.55, 0xffffff, 1.7, 0.8), S(1, 0xffffff, 0.6, 0)],
 
   // The white-hot lead-in is deliberately only ~5 % of life. A longer one makes
   // drift sparks read as generic white sparkles instead of "I am at BLUE tier".
   // The tier colour has to be unmistakable on the very first frame.
   [RAMP.BLUE_SPARK]: [
-    S(0, 0xffffff, 4.2, 1), S(0.05, 0xcfeeff, 3.6, 1), S(0.16, 0x4fb0ff, 3.0, 0.98),
-    S(0.55, 0x1560ff, 1.9, 0.70), S(1, 0x0a2470, 0.7, 0),
+    S(0, 0xffffff, 5.6, 1), S(0.05, 0xcfeeff, 4.8, 1), S(0.16, 0x4fb0ff, 4.0, 0.98),
+    S(0.55, 0x1560ff, 2.6, 0.70), S(1, 0x0a2470, 0.9, 0),
   ],
   [RAMP.ORANGE_SPARK]: [
-    S(0, 0xffffff, 4.6, 1), S(0.05, 0xfff0b0, 4.0, 1), S(0.16, 0xffab35, 3.2, 0.98),
-    S(0.55, 0xff5a08, 2.1, 0.70), S(1, 0x7a1c00, 0.6, 0),
+    S(0, 0xffffff, 6.1, 1), S(0.05, 0xfff0b0, 5.3, 1), S(0.16, 0xffab35, 4.3, 0.98),
+    S(0.55, 0xff5a08, 2.8, 0.70), S(1, 0x7a1c00, 0.8, 0),
   ],
   [RAMP.PURPLE_SPARK]: [
-    S(0, 0xffffff, 5.0, 1), S(0.05, 0xffc8ff, 4.4, 1), S(0.15, 0xe055ff, 3.5, 0.98),
-    S(0.52, 0x8a20ff, 2.2, 0.70), S(1, 0x280058, 0.7, 0),
+    S(0, 0xffffff, 6.6, 1), S(0.05, 0xffc8ff, 5.8, 1), S(0.15, 0xe055ff, 4.7, 0.98),
+    S(0.52, 0x8a20ff, 2.9, 0.70), S(1, 0x280058, 0.9, 0),
   ],
+  // The very first frames of a drift are now carried by real sparks, but this
+  // wisp still has to be *seen* as the "charging" cue rather than guessed at,
+  // so it is roughly 1.5x brighter and half again as opaque as before.
   [RAMP.CHARGE_WISP]: [
-    S(0, 0xeaf6ff, 1.3, 0), S(0.18, 0xd7ecff, 1.1, 0.55), S(0.55, 0x9fc9ff, 0.8, 0.30),
-    S(1, 0x6d9fe0, 0.5, 0),
+    S(0, 0xeaf6ff, 2.0, 0), S(0.18, 0xd7ecff, 1.7, 0.72), S(0.55, 0x9fc9ff, 1.2, 0.42),
+    S(1, 0x6d9fe0, 0.7, 0),
   ],
 
   [RAMP.FLAME]: [
-    S(0, 0xffffff, 7.5, 1), S(0.08, 0xfff4c4, 5.6, 1), S(0.22, 0xffc247, 4.0, 1),
-    S(0.44, 0xff7a10, 2.4, 0.92), S(0.68, 0xd32b00, 1.2, 0.55), S(0.86, 0x4a1206, 0.5, 0.22),
-    S(1, 0x1a1210, 0.3, 0),
+    S(0, 0xffffff, 9.0, 1), S(0.08, 0xfff4c4, 6.8, 1), S(0.22, 0xffc247, 4.9, 1),
+    S(0.44, 0xff7a10, 2.9, 0.92), S(0.68, 0xd32b00, 1.45, 0.55), S(0.86, 0x4a1206, 0.6, 0.22),
+    S(1, 0x1a1210, 0.35, 0),
   ],
   [RAMP.FLAME_BLUE]: [
-    S(0, 0xffffff, 8.0, 1), S(0.08, 0xdff2ff, 6.0, 1), S(0.24, 0x74c6ff, 4.2, 1),
-    S(0.48, 0x2b7bff, 2.4, 0.9), S(0.74, 0x8a2bff, 1.3, 0.5), S(1, 0x1a0640, 0.4, 0),
+    S(0, 0xffffff, 9.6, 1), S(0.08, 0xdff2ff, 7.2, 1), S(0.24, 0x74c6ff, 5.0, 1),
+    S(0.48, 0x2b7bff, 2.9, 0.9), S(0.74, 0x8a2bff, 1.55, 0.5), S(1, 0x1a0640, 0.5, 0),
   ],
   [RAMP.RAINBOW]: [
     S(0, 0xff3b6b, 3.0, 1), S(0.17, 0xffb02e, 3.0, 1), S(0.34, 0xf7ff45, 3.0, 1),
@@ -174,22 +197,29 @@ const RAMPS: Record<number, Stop[]> = {
     S(1, 0xff5bd6, 2.0, 0),
   ],
 
+  // Lifted hard off the floor. The old 0x9aa1ab @ 0.85 intensity was already
+  // dim at exposure 1.3; at 0.70 it landed near black, and because the particle
+  // shader outputs PREMULTIPLIED colour a near-black puff at alpha 0.62 does not
+  // read as "dark smoke" — it reads as a hole cut in the world, sky included.
+  // Peak alpha is cut 0.62 -> 0.40 for the same reason: smoke is a veil.
   [RAMP.SMOKE]: [
-    S(0, 0xb9bec6, 0.9, 0), S(0.10, 0x9aa1ab, 0.85, 0.62), S(0.45, 0x757c88, 0.75, 0.42),
-    S(1, 0x4e545e, 0.6, 0),
+    S(0, 0xe8ecf2, 1.45, 0), S(0.10, 0xd2d8e2, 1.30, 0.40), S(0.45, 0xb2bac6, 1.10, 0.26),
+    S(1, 0x8e97a4, 0.90, 0),
   ],
+  // "Dark" now means *darker than the light smoke*, not black. Same reasoning:
+  // 0x3f424a at alpha 0.85 was a silhouette-shaped hole.
   [RAMP.SMOKE_DARK]: [
-    S(0, 0x5c5f66, 0.7, 0), S(0.08, 0x3f424a, 0.6, 0.85), S(0.42, 0x2c2f36, 0.5, 0.6),
-    S(1, 0x191b20, 0.4, 0),
+    S(0, 0x9aa0a8, 1.05, 0), S(0.08, 0x7c828c, 0.95, 0.55), S(0.42, 0x61666f, 0.80, 0.38),
+    S(1, 0x44484f, 0.62, 0),
   ],
   [RAMP.SMOKE_LIGHT]: [
-    S(0, 0xffffff, 1.15, 0), S(0.12, 0xf2f5fa, 1.05, 0.5), S(0.5, 0xd7dde6, 0.9, 0.3),
-    S(1, 0xb4bcc8, 0.7, 0),
+    S(0, 0xffffff, 1.50, 0), S(0.12, 0xf2f5fa, 1.35, 0.46), S(0.5, 0xd7dde6, 1.15, 0.28),
+    S(1, 0xb4bcc8, 0.95, 0),
   ],
 
   [RAMP.DUST]: [
-    S(0, 0xe8d3ab, 1.1, 0), S(0.09, 0xd7bd8e, 1.0, 0.78), S(0.42, 0xb99a6b, 0.85, 0.5),
-    S(1, 0x8a7350, 0.6, 0),
+    S(0, 0xe8d3ab, 1.5, 0), S(0.09, 0xd7bd8e, 1.4, 0.62), S(0.42, 0xb99a6b, 1.2, 0.40),
+    S(1, 0x8a7350, 0.85, 0),
   ],
   [RAMP.GRASS]: [
     S(0, 0xd9f79a, 1.2, 1), S(0.25, 0x86d24a, 1.0, 1), S(0.65, 0x4e9a2c, 0.8, 0.75),
@@ -213,8 +243,8 @@ const RAMPS: Record<number, Stop[]> = {
   ],
 
   [RAMP.METAL_SPARK]: [
-    S(0, 0xffffff, 5.5, 1), S(0.12, 0xfff2cf, 4.4, 1), S(0.38, 0xffd071, 3.2, 0.9),
-    S(0.72, 0xff8b2b, 1.8, 0.5), S(1, 0x6b2a00, 0.6, 0),
+    S(0, 0xffffff, 6.6, 1), S(0.12, 0xfff2cf, 5.3, 1), S(0.38, 0xffd071, 3.8, 0.9),
+    S(0.72, 0xff8b2b, 2.2, 0.5), S(1, 0x6b2a00, 0.75, 0),
   ],
   [RAMP.FIREBALL]: [
     S(0, 0xffffff, 9.0, 1), S(0.06, 0xfff8d0, 7.0, 1), S(0.16, 0xffd257, 5.0, 1),
@@ -253,8 +283,8 @@ const RAMPS: Record<number, Stop[]> = {
     S(1, 0x5f8fc0, 0.6, 0),
   ],
   [RAMP.EMBER]: [
-    S(0, 0xfff6d0, 5.0, 1), S(0.25, 0xffb347, 3.4, 1), S(0.62, 0xff5c14, 2.0, 0.7),
-    S(1, 0x501000, 0.6, 0),
+    S(0, 0xfff6d0, 6.0, 1), S(0.25, 0xffb347, 4.1, 1), S(0.62, 0xff5c14, 2.4, 0.7),
+    S(1, 0x501000, 0.75, 0),
   ],
 };
 
