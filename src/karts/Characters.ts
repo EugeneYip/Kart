@@ -1,11 +1,13 @@
 /**
  * ============================================================================
- *  APEX KART — ROSTER
+ *  FOXY KART — ROSTER
  * ============================================================================
- *  Eight characters, eight genuinely different stat spreads. The `id` values
- *  match `CHARACTER_STATS` in `src/physics/Tuning.ts` so `makeTuning(id)`
- *  returns the chassis these stats describe — there is exactly one place where
- *  balance is decided, and this is the presentation-side mirror of it.
+ *  Ten characters, ten genuinely different stat spreads. The `id` values match
+ *  `CHARACTER_STATS` in `src/physics/Tuning.ts` so `makeTuning(id)` returns the
+ *  chassis these stats describe — there is exactly one place where balance is
+ *  decided, and this is the presentation-side mirror of it.
+ *
+ *  Foxy leads the roster: the game is named after her.
  * ============================================================================
  */
 
@@ -45,6 +47,40 @@ export interface CharacterDef {
 }
 
 export const CHARACTERS: readonly CharacterDef[] = [
+  {
+    id: 'foxy',
+    name: 'Foxy',
+    tagline: 'Never loses grip, never wins a drag race.',
+    bodyId: 'standard',
+    tyreId: 'slick',
+    color: 0xe4761f,
+    secondaryColor: 0xf3e3cb,
+    glowColor: 0x4fc8f0,
+    // The corner-exit specialist. Deliberately NOT Vex (who has 1.0 handling and
+    // bad traction) and NOT Pip (who has 0.24 speed and 0.96 accel): Foxy has
+    // real traction, a real top speed, and the second-best mini-turbo on the
+    // roster, but average acceleration — so she wins by never making a mistake,
+    // not by recovering from one.
+    stats: { speed: 0.52, accel: 0.58, weight: 0.2, handling: 0.72, traction: 0.78, miniTurbo: 0.84 },
+    driverId: 'fox',
+    flake: 0.45,
+  },
+  {
+    id: 'capy',
+    name: 'Capy',
+    tagline: 'Arrives late. Arrives anyway.',
+    bodyId: 'cruiser',
+    tyreId: 'knobbly',
+    color: 0xc4622d,
+    secondaryColor: 0x6e90ae,
+    glowColor: 0xffb44a,
+    // The immovable-but-slow heavy. Torque (0.78 speed) and Strata (0.86) are
+    // both *fast* heavies; Capy is the first one that is genuinely slow in a
+    // straight line, with the roster's worst acceleration and maximum traction.
+    stats: { speed: 0.4, accel: 0.18, weight: 0.92, handling: 0.3, traction: 1.0, miniTurbo: 0.5 },
+    driverId: 'capy',
+    flake: 0.3,
+  },
   {
     id: 'nova',
     name: 'Nova',
@@ -156,7 +192,13 @@ export const CHARACTER_BY_ID: Readonly<Record<string, CharacterDef>> = Object.fr
   Object.fromEntries(CHARACTERS.map((c) => [c.id, c])),
 );
 
-export const DEFAULT_CHARACTER_ID = 'nova';
+/**
+ * The mascot. `KartManager.setPlayerCharacter()` overrides this the moment the
+ * menu makes a pick, so this only decides who the player drives if nothing ever
+ * asks — but it is also the one line to change back to `'nova'` if a QA framing
+ * turns out to depend on the player's kart being red.
+ */
+export const DEFAULT_CHARACTER_ID = 'foxy';
 
 export function characterAt(index: number): CharacterDef {
   return CHARACTERS[((index % CHARACTERS.length) + CHARACTERS.length) % CHARACTERS.length];

@@ -121,6 +121,8 @@ interface Visual {
   accelProxy: number;
   hopPrev: boolean;
   hitTimer: number;
+  /** Seconds parked. Drives the driver's idle face once it passes the threshold. */
+  idleTimer: number;
   pose: DriverPose;
   shadowHeight: number;
   lod: LodLevel;
@@ -293,6 +295,13 @@ export class KartManager implements ISubsystem {
       skin: driver.skinColor,
       flake: character.flake,
       matte: character.matte,
+      // Pelt tones for the animal drivers. Deliberately NOT hue-shifted for
+      // duplicate racers: repainting a kart is a livery, repainting a fox is a
+      // different animal. Only `color` varies between variants.
+      fur: driver.fur ?? driver.skinColor,
+      furAlt: driver.furAlt,
+      furDark: driver.furDark,
+      knit: driver.knitwear === true,
     };
   }
 
@@ -339,7 +348,7 @@ export class KartManager implements ISubsystem {
       starHue: (index * 0.137) % 1,
       sq: 0, sqVel: 0,
       lastSpeed: 0, accelProxy: 0,
-      hopPrev: false, hitTimer: 0,
+      hopPrev: false, hitTimer: 0, idleTimer: 0,
       pose: { ...NEUTRAL_POSE },
       shadowHeight: -model.restGroundY,
       lod: 0,
@@ -644,10 +653,18 @@ export class KartManager implements ISubsystem {
       p.bob = clamp01(0.25 + st.rpm * 0.55 - clamp01(st.speedRatio) * 0.35);
       m.setDriverPose(dt, p);
 
+      // Parked long enough to look bored. This is what `thoughtful` / `sleepy`
+      // exist for: a fox that stares into space on the grid and a capybara that
+      // dozes off is most of what sells them as characters, and it costs one
+      // timer plus a UV offset.
+      const still = Math.abs(st.speed) < 0.5 && !st.stunned && st.boostTime <= 0;
+      v.idleTimer = still ? v.idleTimer + dt : 0;
+
       let expr: FaceExpression = 'neutral';
       if (st.finished) expr = 'happy';
       else if (v.hitTimer > 0) expr = 'hit';
       else if (st.drifting || st.boostTime > 0 || st.speedRatio > 0.82) expr = 'determined';
+      else if (v.idleTimer > 1.6) expr = DRIVERS[v.character.driverId].face.idle ?? 'neutral';
       m.driver?.setExpression(expr);
     }
 

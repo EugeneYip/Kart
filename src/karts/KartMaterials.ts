@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import type { QualitySettings } from '@/core/Types';
+import { clamp01 } from '@/core/MathUtils';
 
 // ---------------------------------------------------------------------------
 // Slots
@@ -47,11 +48,22 @@ export type MaterialSlot =
   | 'skin'         // driver skin
   | 'cloth'        // driver suit primary
   | 'clothAlt'     // driver suit secondary
-  | 'face';        // driver face atlas
+  | 'face'         // driver face atlas
+  // --- animal drivers -------------------------------------------------------
+  // Fur is not skin: it wants a strand normal, a much broader sheen lobe and no
+  // clearcoat at all. Three tones because that is what a readable animal costs —
+  // body, light underside/markings, and dark extremities.
+  | 'fur'          // primary pelt
+  | 'furAlt'       // cream / light markings (muzzle, chest, tail tip)
+  | 'furDark';     // dark extremities (ear tips, paws, boots)
 
 export const ALL_SLOTS: readonly MaterialSlot[] = [
   'paint', 'paint2', 'chrome', 'metal', 'plastic', 'rubber', 'glass',
   'lightFront', 'lightRear', 'glow', 'seat', 'skin', 'cloth', 'clothAlt', 'face',
+  // Appended, never inserted: `atlasUv()` bakes the column index into every
+  // consolidated buffer's UVs, so re-ordering this list would silently repaint
+  // every existing kart.
+  'fur', 'furAlt', 'furDark',
 ];
 
 /** Slots that must be registered on the bloom layer. */
@@ -75,7 +87,7 @@ export const EMISSIVE_SLOTS: readonly MaterialSlot[] = ['lightFront', 'lightRear
  *
  * Column order is `ALL_SLOTS`; `atlasUv()` is the one place that mapping lives.
  */
-export const ATLAS_COLS = 16;
+export const ATLAS_COLS = 24;
 
 const SLOT_COLUMN: Readonly<Record<MaterialSlot, number>> = Object.freeze(
   Object.fromEntries(ALL_SLOTS.map((s, i) => [s, i])) as Record<MaterialSlot, number>,
@@ -130,6 +142,11 @@ function atlasEntries(spec: PaintSpec): Record<MaterialSlot, AtlasEntry> {
     cloth: { color: new THREE.Color(spec.cloth ?? spec.color).getHex(), roughness: 0.68, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
     clothAlt: { color: new THREE.Color(spec.clothAlt ?? spec.secondary).getHex(), roughness: 0.68, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
     face: { color: new THREE.Color(spec.skin ?? 0xf0c39a).getHex(), roughness: 0.7, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
+    // Fur reads matte at the merged LODs; the sheen that sells it up close is a
+    // per-slot material feature and cannot go in a lookup strip.
+    fur: { color: new THREE.Color(spec.fur ?? spec.skin ?? 0xc08040).getHex(), roughness: 0.86, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
+    furAlt: { color: new THREE.Color(spec.furAlt ?? 0xf0e2cc).getHex(), roughness: 0.88, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
+    furDark: { color: new THREE.Color(spec.furDark ?? 0x4a2e20).getHex(), roughness: 0.82, metalness: 0, clearcoat: 0, clearcoatRoughness: 0 },
   };
 }
 
@@ -429,6 +446,74 @@ function makeSeatTextures(size: number): { map: THREE.CanvasTexture; normal: THR
   return { map: canvasTexture(c, true, 1, 4), normal: normalFromHeight(h, size, 0.9) };
 }
 
+/**
+ * Fur: directional strand clumps.
+ *
+ * A single octave of noise gives velvet, not fur. What makes it read is *shear*
+ * — the height field is sampled along a slowly-curving flow direction so the
+ * strands clump into locks, and a high-frequency ridge term on top gives the
+ * individual hairs. The result is deliberately anisotropic: under a rim light
+ * the locks catch a broken highlight instead of an even sheen band, which is the
+ * whole difference between "plush toy" and "animal".
+ */
+function makeFurNormal(size: number): THREE.DataTexture {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      // Flow field: locks sweep down-and-across, wandering slowly.
+      const flow = (fbm(u * 3.0, v * 3.0, 3, 101) - 0.5) * 1.6;
+      const su = u * 22 + flow * 2.4;
+      const sv = v * 34;
+      // Lock mass: broad, stretched along the flow.
+      const lock = fbm(su * 0.5, sv * 0.16, 3, 113);
+      // Individual strands: a sharp ridge across the lock direction.
+      const strandPhase = su * Math.PI * 2 + fbm(u * 8, v * 8, 2, 127) * 5.0;
+      const strand = 1 - Math.abs(Math.sin(strandPhase)) ** 0.55;
+      // Tips fade so the strands taper rather than ending in a wall.
+      const taper = 0.35 + 0.65 * (1 - Math.abs(Math.sin(sv * Math.PI * 0.5)));
+      h[y * size + x] = lock * 0.55 + strand * taper * 0.45;
+    }
+  }
+  return normalFromHeight(h, size, 1.15);
+}
+
+/**
+ * Chunky knitwear: vertical ribs of alternating knit/purl stitches.
+ *
+ * Each stitch is a rounded lozenge leaning alternately left and right, so a
+ * column reads as a plaited rib rather than a corrugated sheet. The rib pitch is
+ * coarse on purpose — a jumper knitted at sock gauge disappears at ten metres.
+ */
+function makeKnitNormal(size: number): THREE.DataTexture {
+  const h = new Float32Array(size * size);
+  const ribs = 9;          // ribs across the tile
+  const rows = 13;         // stitch rows down the tile
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      const rib = u * ribs;
+      const row = v * rows;
+      const ri = Math.floor(rib), rj = Math.floor(row);
+      // Local stitch coordinates, -1..1.
+      const fx = (rib - ri) * 2 - 1;
+      const fy = (row - rj) * 2 - 1;
+      // Alternate the lean per row so the stitches interlock.
+      const lean = ((ri + rj) & 1) ? 0.42 : -0.42;
+      const lx = fx + fy * lean;
+      // Rounded lozenge: a superellipse bump.
+      const d = Math.min(1, Math.abs(lx) ** 2.4 + Math.abs(fy) ** 2.0);
+      let n = (1 - d) ** 0.65;
+      // The purl valley between ribs stays dark.
+      n *= 0.55 + 0.45 * (1 - Math.abs(fx) ** 3);
+      // Fibre fuzz over the top so the wool is not vacuum-formed plastic.
+      n = n * 0.86 + fbm(u * 42, v * 42, 3, 61) * 0.14;
+      h[y * size + x] = n;
+    }
+  }
+  return normalFromHeight(h, size, 1.35);
+}
+
 /** Fine woven cloth for the driver suits. */
 function makeClothNormal(size: number): THREE.DataTexture {
   const h = new Float32Array(size * size);
@@ -480,7 +565,7 @@ function makeBillboardTexture(size = 64): THREE.CanvasTexture {
 // Driver faces
 // ---------------------------------------------------------------------------
 
-export type FaceStyle = 'human' | 'robot' | 'alien' | 'visor';
+export type FaceStyle = 'human' | 'robot' | 'alien' | 'visor' | 'fox' | 'capy';
 
 export interface FaceSpec {
   style: FaceStyle;
@@ -495,24 +580,377 @@ export interface FaceSpec {
   /** 0 = narrow eyes, 1 = big round eyes. */
   eyeSize?: number;
   /** Facial hair / markings. */
-  mark?: 'none' | 'moustache' | 'freckles' | 'scar' | 'stubble';
+  mark?: 'none' | 'moustache' | 'freckles' | 'scar' | 'stubble' | 'whiskers';
+  /**
+   * Animal styles only — the pale muzzle field that fills the bottom
+   * `ANIMAL_MUZZLE_SPLIT` of the cell. The head geometry puts a second face
+   * panel over the snout, so the mouth lands on the muzzle and not the skull.
+   */
+  snout?: string;
+  /** Nose colour for the animal styles (also painted as the nose-bridge shade). */
+  nose?: string;
+  /**
+   * Expression to wear when the kart is parked and the race has not started.
+   * This is what gives `thoughtful` / `sleepy` something to do.
+   */
+  idle?: FaceExpression;
 }
 
-export const FACE_EXPRESSIONS = ['neutral', 'determined', 'hit', 'happy'] as const;
+/**
+ * Columns of the face atlas.
+ *
+ * The first four are the gameplay states `KartManager` selects from and their
+ * cell art is unchanged — a driver authored before this list grew renders
+ * identically. `thoughtful` and `sleepy` were added for the animal roster: the
+ * reference sheets ask for four *personality* faces per character and only three
+ * of them (curious / focused / amused for the fox, content / surprised / happy
+ * for the capybara) map onto a state the race actually produces. Rather than
+ * hijack `hit` — a fox that has just been shelled should not look pensive — the
+ * union grew by two idle states, driven off `FaceSpec.idle` when parked.
+ */
+export const FACE_EXPRESSIONS = [
+  'neutral', 'determined', 'hit', 'happy', 'thoughtful', 'sleepy',
+] as const;
 export type FaceExpression = (typeof FACE_EXPRESSIONS)[number];
 
+/** Where the pale muzzle field starts, as a texture `v`. Shared with Driver.ts. */
+export const ANIMAL_MUZZLE_SPLIT = 0.45;
+
 /**
- * 4x2 atlas: columns = expression, rows = [eyes open, eyes blinking].
+ * Nx2 atlas: columns = expression, rows = [eyes open, eyes blinking].
  * The background is the character's skin colour so the patch blends into the
  * head mesh with no alpha sorting at all.
  */
 function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
-  const W = cell * 4, H = cell * 2;
+  const COLS = FACE_EXPRESSIONS.length;
+  const W = cell * COLS, H = cell * 2;
   const { c, g } = canvas2d(W, H);
   g.fillStyle = spec.style === 'robot' ? '#16181d' : spec.skin;
   g.fillRect(0, 0, W, H);
+  const animal = spec.style === 'fox' || spec.style === 'capy';
 
   const eyeSize = spec.eyeSize ?? 1;
+
+  // -------------------------------------------------------------------------
+  //  Animal cell (fox / capybara)
+  // -------------------------------------------------------------------------
+  //  Split layout: the top `1 - ANIMAL_MUZZLE_SPLIT` of the cell is pelt and
+  //  carries the eyes, the bottom is the pale muzzle and carries the nose bridge
+  //  and mouth. Driver.ts puts a second face panel over the snout geometry
+  //  covering exactly that lower band, so the mouth sits on the muzzle instead
+  //  of being painted onto the forehead.
+  //
+  //  Storybook vs MK8: the *albedo* keeps the reference art's hand-drawn feel —
+  //  stippled fur strokes, a soft pencil-shaded muzzle, muted tones — while the
+  //  material underneath supplies the sheen and the strand normal. Flat colour
+  //  is never written anywhere in this cell.
+  // -------------------------------------------------------------------------
+  const drawAnimalCell = (expr: FaceExpression, blink: boolean) => {
+    const capy = spec.style === 'capy';
+    const fur = spec.skin;
+    const snout = spec.snout ?? '#efe0c8';
+    const nose = spec.nose ?? '#3a241b';
+    const splitY = cell * (1 - ANIMAL_MUZZLE_SPLIT);
+
+    // --- pelt field --------------------------------------------------------
+    g.fillStyle = fur;
+    g.fillRect(0, 0, cell, cell);
+    const pelt = g.createRadialGradient(
+      cell * 0.5, cell * 0.30, cell * 0.06, cell * 0.5, cell * 0.46, cell * 0.66,
+    );
+    pelt.addColorStop(0, 'rgba(255,246,232,0.16)');
+    pelt.addColorStop(0.62, 'rgba(0,0,0,0)');
+    pelt.addColorStop(1, 'rgba(20,10,4,0.34)');
+    g.fillStyle = pelt;
+    g.fillRect(0, 0, cell, cell);
+
+    // --- muzzle field: a rounded pad, not a horizontal seam ----------------
+    g.save();
+    g.beginPath();
+    const mw = cell * (capy ? 0.46 : 0.34);
+    g.moveTo(cell * 0.5 - mw, cell * 1.02);
+    g.quadraticCurveTo(cell * 0.5 - mw, splitY - cell * 0.02, cell * 0.5, splitY - cell * 0.05);
+    g.quadraticCurveTo(cell * 0.5 + mw, splitY - cell * 0.02, cell * 0.5 + mw, cell * 1.02);
+    g.closePath();
+    g.clip();
+    g.fillStyle = snout;
+    g.fillRect(0, 0, cell, cell);
+    const mg = g.createLinearGradient(0, splitY - cell * 0.06, 0, cell);
+    mg.addColorStop(0, 'rgba(255,255,255,0.16)');
+    mg.addColorStop(0.45, 'rgba(0,0,0,0)');
+    mg.addColorStop(1, 'rgba(60,36,20,0.28)');
+    g.fillStyle = mg;
+    g.fillRect(0, 0, cell, cell);
+    g.restore();
+
+    // --- fur stipple: the reference sheet's pencil texture, in albedo ------
+    for (let i = 0; i < 420; i++) {
+      const sx = hash2(i, 1, 331) * cell;
+      const sy = hash2(i, 2, 337) * cell;
+      const onMuzzle = sy > splitY;
+      const len = cell * (0.010 + hash2(i, 3, 347) * 0.020);
+      const ang = (hash2(i, 4, 353) - 0.5) * 0.9 + (sx < cell * 0.5 ? 1.9 : 1.25);
+      g.strokeStyle = hash2(i, 5, 359) > 0.5
+        ? (onMuzzle ? 'rgba(255,252,244,0.16)' : 'rgba(255,240,214,0.15)')
+        : (onMuzzle ? 'rgba(96,62,38,0.11)' : 'rgba(52,26,10,0.14)');
+      g.lineWidth = cell * 0.0055;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(sx, sy);
+      g.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
+      g.stroke();
+    }
+
+    // --- expression dials --------------------------------------------------
+    // lid: 0 = wide open, 1 = shut. squint: lids close as upward arcs (joy).
+    let lid = 0.10;
+    let squint = false;
+    let browY = 0;
+    let browTilt = 0;
+    let browLift = 0;
+    let gazeY = 0;
+    let eyeMul = 1;
+    let mouth: 'smile' | 'flat' | 'open' | 'round' | 'soft' | 'purse' | 'ouch' = 'smile';
+    switch (expr) {
+      case 'neutral': // fox: curious | capy: content
+        lid = capy ? 0.44 : 0.02;
+        browLift = capy ? 0.0 : 0.030;
+        eyeMul = capy ? 1 : 1.06;
+        mouth = capy ? 'soft' : 'smile';
+        break;
+      case 'determined': // focused
+        lid = capy ? 0.50 : 0.44;
+        browY = 0.036; browTilt = 0.40;
+        mouth = 'flat';
+        break;
+      case 'hit': // fox: ouch | capy: surprised
+        if (capy) { lid = -0.18; eyeMul = 1.38; browLift = 0.05; mouth = 'round'; }
+        else { lid = 0.94; browY = -0.022; browTilt = -0.5; mouth = 'ouch'; }
+        break;
+      case 'happy': // fox: amused | capy: eyes squeezed with joy
+        lid = capy ? 1 : 0.18;
+        squint = capy;
+        browLift = 0.026;
+        mouth = 'open';
+        break;
+      case 'thoughtful': // eyes up and away
+        lid = 0.24; gazeY = -0.34; browLift = 0.040; browTilt = 0.16;
+        mouth = 'purse';
+        break;
+      case 'sleepy': // lids down, softer smile
+        lid = 1; browLift = 0.014; mouth = 'soft';
+        break;
+    }
+    if (blink) { lid = 1; squint = false; }
+
+    // --- eyes --------------------------------------------------------------
+    const ey = cell * (capy ? 0.300 : 0.352);
+    const exL = cell * (capy ? 0.250 : 0.312);
+    const exR = cell - exL;
+    const rx = cell * (capy ? 0.070 : 0.112) * eyeSize * eyeMul;
+    const ryFull = cell * (capy ? 0.074 : 0.120) * eyeSize * eyeMul;
+
+    const drawAnimalEye = (x: number, mirror: number) => {
+      // Socket shadow: a fur-coloured well so the eye is set INTO the head.
+      const sock = g.createRadialGradient(x, ey, rx * 0.4, x, ey, rx * 2.0);
+      sock.addColorStop(0, 'rgba(40,20,8,0.34)');
+      sock.addColorStop(1, 'rgba(40,20,8,0)');
+      g.fillStyle = sock;
+      g.beginPath();
+      g.ellipse(x, ey, rx * 2.0, ryFull * 2.0, 0, 0, Math.PI * 2);
+      g.fill();
+
+      if (lid >= 0.9 || squint) {
+        // Shut / squinting: a lid line. Curving it up is joy, down is sleep.
+        const bend = squint || expr === 'happy' ? -1 : expr === 'hit' ? -1 : 1;
+        g.strokeStyle = spec.brow;
+        g.lineWidth = cell * 0.026;
+        g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(x - rx, ey + (bend < 0 ? ryFull * 0.36 : 0));
+        g.quadraticCurveTo(x, ey + bend * ryFull * 0.92, x + rx, ey + (bend < 0 ? ryFull * 0.36 : 0));
+        g.stroke();
+        if (expr === 'hit') {
+          // Squeezed-shut crease.
+          g.lineWidth = cell * 0.013;
+          g.beginPath();
+          g.moveTo(x - rx * 0.7, ey - ryFull * 0.6);
+          g.quadraticCurveTo(x, ey - ryFull * 0.1, x + rx * 0.7, ey - ryFull * 0.6);
+          g.stroke();
+        }
+        return;
+      }
+
+      const ry = ryFull * (1 - clamp01(lid) * 0.72);
+      // Sclera. Small dark animal eyes keep only a sliver of white.
+      g.fillStyle = capy ? 'rgba(248,242,232,0.55)' : '#fbf7f0';
+      g.beginPath();
+      g.ellipse(x, ey, rx, Math.max(ry, cell * 0.010), 0, 0, Math.PI * 2);
+      g.fill();
+
+      // Iris + pupil, gaze-shifted.
+      const gx = mirror * rx * (expr === 'thoughtful' ? 0.20 : expr === 'determined' ? 0.18 : 0);
+      const gy = ryFull * gazeY;
+      g.fillStyle = spec.eye;
+      g.beginPath();
+      g.ellipse(x + gx, ey + gy, rx * (capy ? 0.86 : 0.70), Math.min(ry, rx * 0.86), 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#120d0a';
+      g.beginPath();
+      g.ellipse(x + gx, ey + gy, rx * (capy ? 0.60 : 0.36), Math.min(ry * 0.86, rx * 0.5), 0, 0, Math.PI * 2);
+      g.fill();
+      // Two catchlights — the single biggest "alive" cue on a stylised face.
+      g.fillStyle = 'rgba(255,255,255,0.95)';
+      g.beginPath();
+      g.ellipse(x + gx - rx * 0.30, ey + gy - ryFull * 0.34, rx * 0.20, rx * 0.20, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      g.beginPath();
+      g.ellipse(x + gx + rx * 0.26, ey + gy + ryFull * 0.24, rx * 0.10, rx * 0.10, 0, 0, Math.PI * 2);
+      g.fill();
+
+      // Upper lid as a fur-coloured cap, so narrowing reads as a lid not a crop.
+      if (lid > 0.06) {
+        g.fillStyle = fur;
+        g.beginPath();
+        g.moveTo(x - rx * 1.12, ey - ryFull * 1.15);
+        g.lineTo(x + rx * 1.12, ey - ryFull * 1.15);
+        g.lineTo(x + rx * 1.12, ey - ry * 0.98);
+        g.quadraticCurveTo(x, ey - ry * 0.98 + ryFull * 0.22 * lid, x - rx * 1.12, ey - ry * 0.98);
+        g.closePath();
+        g.fill();
+        g.strokeStyle = 'rgba(48,24,10,0.35)';
+        g.lineWidth = cell * 0.009;
+        g.beginPath();
+        g.moveTo(x - rx * 1.05, ey - ry * 0.98);
+        g.quadraticCurveTo(x, ey - ry * 0.98 + ryFull * 0.22 * lid, x + rx * 1.05, ey - ry * 0.98);
+        g.stroke();
+      }
+    };
+    drawAnimalEye(exL, 1);
+    drawAnimalEye(exR, -1);
+
+    // --- brows: fur tufts, not pencil lines --------------------------------
+    const drawBrow = (x: number, mirror: number) => {
+      g.save();
+      g.translate(x, ey - cell * (0.145 + browLift) + cell * browY);
+      g.rotate(mirror * browTilt);
+      g.fillStyle = spec.brow;
+      g.beginPath();
+      g.moveTo(-rx * 1.05, cell * 0.016);
+      g.quadraticCurveTo(0, -cell * 0.030, rx * 1.05, cell * 0.004);
+      g.quadraticCurveTo(0, cell * 0.014, -rx * 1.05, cell * 0.016);
+      g.fill();
+      g.restore();
+    };
+    drawBrow(exL, 1);
+    drawBrow(exR, -1);
+
+    // --- nose bridge shade, under the geometric nose -----------------------
+    const ny = splitY + cell * (capy ? 0.045 : 0.020);
+    const nw = cell * (capy ? 0.115 : 0.075);
+    g.fillStyle = nose;
+    g.globalAlpha = 0.30;
+    g.beginPath();
+    g.ellipse(cell * 0.5, ny, nw, nw * (capy ? 0.42 : 0.56), 0, 0, Math.PI * 2);
+    g.fill();
+    g.globalAlpha = 1;
+
+    // --- mouth -------------------------------------------------------------
+    const my = cell * (capy ? 0.845 : 0.815);
+    const half = cell * (capy ? 0.105 : 0.088);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.strokeStyle = 'rgba(74,40,26,0.92)';
+    g.lineWidth = cell * 0.024;
+    // Every animal mouth starts from the philtrum, which is what makes a muzzle
+    // read as a muzzle instead of a painted-on grin.
+    g.beginPath();
+    g.moveTo(cell * 0.5, my - cell * 0.055);
+    g.lineTo(cell * 0.5, my - cell * 0.006);
+    g.stroke();
+
+    if (mouth === 'flat') {
+      g.beginPath();
+      g.moveTo(cell * 0.5 - half, my + cell * 0.004);
+      g.quadraticCurveTo(cell * 0.5, my - cell * 0.012, cell * 0.5 + half, my + cell * 0.004);
+      g.stroke();
+    } else if (mouth === 'round' || mouth === 'ouch') {
+      const rr = cell * (mouth === 'round' ? 0.052 : 0.062);
+      g.fillStyle = '#57262a';
+      g.beginPath();
+      g.ellipse(cell * 0.5, my + cell * 0.016, rr, rr * (mouth === 'round' ? 1.0 : 0.82), 0, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+    } else if (mouth === 'open') {
+      // Open smile with the tongue just visible.
+      g.fillStyle = '#57262a';
+      g.beginPath();
+      g.moveTo(cell * 0.5 - half, my - cell * 0.006);
+      g.quadraticCurveTo(cell * 0.5, my + cell * 0.098, cell * 0.5 + half, my - cell * 0.006);
+      g.quadraticCurveTo(cell * 0.5, my + cell * 0.014, cell * 0.5 - half, my - cell * 0.006);
+      g.fill();
+      g.stroke();
+      g.fillStyle = '#d3707a';
+      g.beginPath();
+      g.ellipse(cell * 0.5, my + cell * 0.058, half * 0.44, cell * 0.026, 0, 0, Math.PI * 2);
+      g.fill();
+    } else if (mouth === 'purse') {
+      g.beginPath();
+      g.moveTo(cell * 0.5 - half * 0.66, my + cell * 0.012);
+      g.quadraticCurveTo(cell * 0.5 - half * 0.1, my - cell * 0.020, cell * 0.5 + half * 0.5, my + cell * 0.016);
+      g.stroke();
+    } else {
+      // 'smile' | 'soft' — two mirrored lifts off the philtrum.
+      const drop = mouth === 'soft' ? 0.030 : 0.046;
+      for (const sgn of [-1, 1]) {
+        g.beginPath();
+        g.moveTo(cell * 0.5, my - cell * 0.004);
+        g.quadraticCurveTo(
+          cell * 0.5 + sgn * half * 0.55, my + cell * drop,
+          cell * 0.5 + sgn * half, my + cell * (drop * 0.25),
+        );
+        g.stroke();
+      }
+    }
+
+    // --- whiskers + cheek freckle dots ------------------------------------
+    if (spec.mark === 'whiskers') {
+      g.strokeStyle = 'rgba(60,38,24,0.32)';
+      g.lineWidth = cell * 0.007;
+      for (const sgn of [-1, 1]) {
+        for (let i = 0; i < 3; i++) {
+          const y0 = my - cell * (0.062 - i * 0.030);
+          g.beginPath();
+          g.moveTo(cell * 0.5 + sgn * half * 0.85, y0);
+          g.quadraticCurveTo(
+            cell * 0.5 + sgn * (half + cell * 0.10), y0 - cell * 0.020 + i * cell * 0.014,
+            cell * 0.5 + sgn * (half + cell * 0.185), y0 - cell * 0.030 + i * cell * 0.030,
+          );
+          g.stroke();
+        }
+        g.fillStyle = 'rgba(60,38,24,0.28)';
+        for (let i = 0; i < 3; i++) {
+          g.beginPath();
+          g.arc(
+            cell * 0.5 + sgn * half * (0.42 + i * 0.20),
+            my - cell * (0.070 - (i % 2) * 0.024),
+            cell * 0.0085, 0, Math.PI * 2,
+          );
+          g.fill();
+        }
+      }
+    }
+
+    if (spec.blush) {
+      g.fillStyle = spec.blush;
+      for (const bx of [0.20, 0.80]) {
+        g.beginPath();
+        g.ellipse(cell * bx, cell * 0.52, cell * 0.080, cell * 0.046, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  };
 
   const drawCell = (col: number, row: number) => {
     const ox = col * cell, oy = row * cell;
@@ -520,6 +958,11 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     const expr = FACE_EXPRESSIONS[col];
     g.save();
     g.translate(ox, oy);
+    if (animal) {
+      drawAnimalCell(expr, blink);
+      g.restore();
+      return;
+    }
 
     // --- soft shading so the face isn't flat -------------------------------
     if (spec.style !== 'robot') {
@@ -543,14 +986,17 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     const ey = cell * 0.44;
     const exL = cell * 0.33, exR = cell * 0.67;
     const rx = cell * 0.105 * eyeSize;
-    const ry = cell * (blink ? 0.012 : 0.125) * eyeSize;
+    // `sleepy` is drawn exactly like a blink — lids down. For the original four
+    // columns `shut === blink`, so nothing about them changes.
+    const shut = blink || expr === 'sleepy';
+    const ry = cell * (shut ? 0.012 : 0.125) * eyeSize;
 
     const drawEye = (x: number, mirror: number) => {
       if (spec.style === 'robot') {
         g.fillStyle = spec.glow ?? spec.eye;
         g.shadowColor = spec.glow ?? spec.eye;
         g.shadowBlur = cell * 0.09;
-        if (blink) {
+        if (shut) {
           g.fillRect(x - rx, ey - cell * 0.012, rx * 2, cell * 0.024);
         } else if (expr === 'hit') {
           // X eyes
@@ -559,7 +1005,7 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
           g.fillRect(-cell * 0.02, -rx, cell * 0.04, rx * 2);
           g.restore();
         } else {
-          const h = expr === 'determined' ? ry * 0.6 : ry;
+          const h = expr === 'determined' ? ry * 0.6 : expr === 'thoughtful' ? ry * 0.82 : ry;
           g.beginPath();
           g.ellipse(x, ey, rx, h, 0, 0, Math.PI * 2);
           g.fill();
@@ -574,7 +1020,7 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
       g.ellipse(x, ey, rx, Math.max(ry, cell * 0.012), 0, 0, Math.PI * 2);
       g.fill();
 
-      if (!blink) {
+      if (!shut) {
         if (expr === 'hit') {
           g.strokeStyle = '#2a2029';
           g.lineWidth = cell * 0.028;
@@ -584,18 +1030,21 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
           g.beginPath(); g.moveTo(x + s, ey - s); g.lineTo(x - s, ey + s); g.stroke();
         } else {
           // iris + pupil + specular
-          const look = expr === 'determined' ? mirror * rx * 0.22 : 0;
+          const look = expr === 'determined' ? mirror * rx * 0.22
+            : expr === 'thoughtful' ? mirror * rx * 0.30 : 0;
+          // `thoughtful` is "eyes up and away" — the gaze offset IS the read.
+          const lookY = expr === 'thoughtful' ? -ry * 0.44 : 0;
           g.fillStyle = spec.eye;
           g.beginPath();
-          g.ellipse(x + look, ey + ry * 0.1, rx * 0.62, Math.min(ry, rx * 0.72), 0, 0, Math.PI * 2);
+          g.ellipse(x + look, ey + ry * 0.1 + lookY, rx * 0.62, Math.min(ry, rx * 0.72), 0, 0, Math.PI * 2);
           g.fill();
           g.fillStyle = '#141018';
           g.beginPath();
-          g.ellipse(x + look, ey + ry * 0.1, rx * 0.3, Math.min(ry * 0.72, rx * 0.36), 0, 0, Math.PI * 2);
+          g.ellipse(x + look, ey + ry * 0.1 + lookY, rx * 0.3, Math.min(ry * 0.72, rx * 0.36), 0, 0, Math.PI * 2);
           g.fill();
           g.fillStyle = 'rgba(255,255,255,0.95)';
           g.beginPath();
-          g.ellipse(x + look - rx * 0.22, ey - ry * 0.32, rx * 0.16, rx * 0.16, 0, 0, Math.PI * 2);
+          g.ellipse(x + look - rx * 0.22, ey - ry * 0.32 + lookY, rx * 0.16, rx * 0.16, 0, 0, Math.PI * 2);
           g.fill();
         }
       }
@@ -609,6 +1058,8 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
       if (expr === 'determined') { by += cell * 0.035; tilt = mirror * 0.42; }
       if (expr === 'hit') { by -= cell * 0.02; tilt = -mirror * 0.5; }
       if (expr === 'happy') { by -= cell * 0.025; tilt = mirror * 0.1; }
+      if (expr === 'thoughtful') { by -= cell * 0.048; tilt = mirror * 0.20; }
+      if (expr === 'sleepy') { by -= cell * 0.006; tilt = mirror * 0.06; }
       g.save();
       g.translate(x, by);
       g.rotate(tilt);
@@ -641,7 +1092,8 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
       const n = 7;
       for (let i = 0; i <= n; i++) {
         const t = i / n;
-        const amp = expr === 'hit' ? 0.05 : expr === 'happy' ? 0.035 : 0.018;
+        const amp = expr === 'hit' ? 0.05 : expr === 'happy' ? 0.035
+          : expr === 'sleepy' ? 0.006 : 0.018;
         const x = cell * (0.33 + t * 0.34);
         const y = my + Math.sin(t * Math.PI * 3 + (expr === 'determined' ? 0 : 1.2)) * cell * amp;
         if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
@@ -671,6 +1123,15 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
         g.beginPath();
         g.ellipse(cell * 0.5, my + cell * 0.01, cell * 0.075, cell * 0.055, 0, 0, Math.PI * 2);
         g.fill();
+      } else if (expr === 'thoughtful') {
+        // Pursed and pulled to one side.
+        g.moveTo(cell * 0.43, my + cell * 0.008);
+        g.quadraticCurveTo(cell * 0.50, my - cell * 0.018, cell * 0.575, my + cell * 0.012);
+        g.stroke();
+      } else if (expr === 'sleepy') {
+        g.moveTo(cell * 0.44, my);
+        g.quadraticCurveTo(cell * 0.5, my + cell * 0.030, cell * 0.56, my);
+        g.stroke();
       } else {
         g.moveTo(cell * 0.42, my);
         g.quadraticCurveTo(cell * 0.5, my + cell * 0.04, cell * 0.58, my);
@@ -723,12 +1184,12 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     g.restore();
   };
 
-  for (let r = 0; r < 2; r++) for (let col = 0; col < 4; col++) drawCell(col, r);
+  for (let r = 0; r < 2; r++) for (let col = 0; col < COLS; col++) drawCell(col, r);
 
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-  t.repeat.set(0.25, 0.5);
+  t.repeat.set(1 / COLS, 0.5);
   t.offset.set(0, 0.5);
   t.anisotropy = 4;
   t.needsUpdate = true;
@@ -774,13 +1235,18 @@ export class FaceMaterial {
   private blink = false;
   private blinkTimer = 1 + Math.random() * 3;
 
-  constructor(spec: FaceSpec, quality: QualitySettings) {
-    const cell = quality.tier === 'low' ? 128 : quality.tier === 'medium' ? 192 : 256;
+  constructor(spec: FaceSpec, quality: QualitySettings, furNormal?: THREE.Texture) {
+    // The atlas grew from four columns to six, so the cell shrinks to keep the
+    // canvas the same total area — a face atlas is per-kart, not shared, so at
+    // twelve racers this is ~3 MB of texture either way. 208 px is still 2x
+    // oversampled against the biggest a driver's head ever gets on screen.
+    const cell = quality.tier === 'low' ? 112 : quality.tier === 'medium' ? 160 : 208;
     this.map = makeFaceAtlas(spec, cell);
     this.emissiveMap = makeFaceEmissive(spec, this.map);
+    const animal = spec.style === 'fox' || spec.style === 'capy';
     this.material = new THREE.MeshStandardMaterial({
       map: this.map,
-      roughness: spec.style === 'robot' ? 0.28 : 0.72,
+      roughness: spec.style === 'robot' ? 0.28 : animal ? 0.88 : 0.72,
       metalness: spec.style === 'robot' ? 0.55 : 0.0,
       vertexColors: true,
       emissive: this.emissiveMap ? new THREE.Color(spec.glow ?? '#ffffff') : new THREE.Color(0x000000),
@@ -789,12 +1255,18 @@ export class FaceMaterial {
     // Assigned after construction: passing `undefined` for an absent map makes
     // three.js warn about an unknown parameter value.
     if (this.emissiveMap) this.material.emissiveMap = this.emissiveMap;
+    // A muzzle wants the same strand relief as the rest of the pelt, otherwise
+    // the face panel reads as a decal stuck onto a furry head.
+    if (animal && furNormal) {
+      this.material.normalMap = furNormal;
+      this.material.normalScale.set(0.55, 0.55);
+    }
     this.material.name = 'kart-face';
   }
 
   setExpression(e: FaceExpression | number): void {
     const i = typeof e === 'number' ? e : FACE_EXPRESSIONS.indexOf(e);
-    this.expr = Math.max(0, Math.min(3, i));
+    this.expr = Math.max(0, Math.min(FACE_EXPRESSIONS.length - 1, i));
     this.applyUv();
   }
 
@@ -809,7 +1281,7 @@ export class FaceMaterial {
   }
 
   private applyUv(): void {
-    const ox = this.expr * 0.25;
+    const ox = this.expr / FACE_EXPRESSIONS.length;
     const oy = this.blink ? 0.0 : 0.5;
     this.map.offset.set(ox, oy);
     if (this.emissiveMap) this.emissiveMap.offset.set(ox, oy);
@@ -841,6 +1313,15 @@ export interface PaintSpec {
   flake?: number;
   /** Slightly matte body (buggy / offroad). */
   matte?: boolean;
+  /** Animal drivers: primary pelt, light markings, dark extremities. */
+  fur?: THREE.ColorRepresentation;
+  furAlt?: THREE.ColorRepresentation;
+  furDark?: THREE.ColorRepresentation;
+  /**
+   * Swap the fine woven-cloth normal for chunky knitwear on `cloth`/`clothAlt`.
+   * Opt-in so the eight racing suits keep the weave they were authored with.
+   */
+  knit?: boolean;
 }
 
 export type KartMaterialSet = Record<MaterialSlot, THREE.Material>;
@@ -861,6 +1342,8 @@ export class KartMaterialLibrary {
   readonly seatMap: THREE.CanvasTexture;
   readonly seatNormal: THREE.DataTexture;
   readonly clothNormal: THREE.DataTexture;
+  readonly knitNormal: THREE.DataTexture;
+  readonly furNormal: THREE.DataTexture;
   readonly contactShadow: THREE.CanvasTexture;
   readonly billboard: THREE.CanvasTexture;
 
@@ -883,11 +1366,16 @@ export class KartMaterialLibrary {
     this.seatMap = seat.map;
     this.seatNormal = seat.normal;
     this.clothNormal = makeClothNormal(small);
+    this.knitNormal = makeKnitNormal(small);
+    this.furNormal = makeFurNormal(big);
     this.contactShadow = makeContactShadowTexture(quality.tier === 'low' ? 64 : 128);
     this.billboard = makeBillboardTexture(64);
 
     const aniso = Math.max(1, quality.anisotropy);
-    for (const t of [this.panelNormal, this.tyreMap, this.seatMap, this.brushedNormal, this.rubberNormal]) {
+    for (const t of [
+      this.panelNormal, this.tyreMap, this.seatMap, this.brushedNormal,
+      this.rubberNormal, this.furNormal, this.knitNormal,
+    ]) {
       t.anisotropy = aniso;
     }
     this.flakeNormal.repeat.set(28, 28);
@@ -895,6 +1383,9 @@ export class KartMaterialLibrary {
     this.brushedNormal.repeat.set(4, 4);
     this.rubberNormal.repeat.set(6, 3);
     this.clothNormal.repeat.set(5, 5);
+    // Knit is a coarse, physically-sized stitch; fur is much finer than cloth.
+    this.knitNormal.repeat.set(3, 3);
+    this.furNormal.repeat.set(7, 7);
   }
 
   // -------------------------------------------------------------------------
@@ -1043,16 +1534,20 @@ export class KartMaterialLibrary {
     });
     skin.name = 'skin';
 
+    // Knitwear is rougher, fuzzier and much more strongly sheened than a racing
+    // suit: the fibre ends scatter light at grazing angles, which is the entire
+    // reason a woolly jumper reads as wool and not as painted vinyl.
+    const knit = spec.knit === true;
     const cloth = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(spec.cloth ?? spec.color),
-      roughness: 0.68,
+      roughness: knit ? 0.86 : 0.68,
       metalness: 0.0,
-      normalMap: this.clothNormal,
-      normalScale: new THREE.Vector2(0.7, 0.7),
-      sheen: 0.45,
-      sheenRoughness: 0.5,
+      normalMap: knit ? this.knitNormal : this.clothNormal,
+      normalScale: knit ? new THREE.Vector2(1.5, 1.5) : new THREE.Vector2(0.7, 0.7),
+      sheen: knit ? 0.85 : 0.45,
+      sheenRoughness: knit ? 0.78 : 0.5,
       sheenColor: new THREE.Color(0xffffff),
-      envMapIntensity: 0.8,
+      envMapIntensity: knit ? 0.62 : 0.8,
       vertexColors: true,
     });
     cloth.name = 'cloth';
@@ -1060,6 +1555,35 @@ export class KartMaterialLibrary {
     const clothAlt = cloth.clone();
     clothAlt.color = new THREE.Color(spec.clothAlt ?? spec.secondary);
     clothAlt.name = 'clothAlt';
+
+    // --- fur ---------------------------------------------------------------
+    // Deliberately NOT a re-tinted `skin`: no clearcoat (fur has no oily
+    // specular layer), a much broader sheen lobe tinted toward the pelt so the
+    // rim light picks out the silhouette, and the strand normal at full strength.
+    const furTone = (c: THREE.ColorRepresentation, sheenTint: number, rough: number) => {
+      const m = new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(c),
+        roughness: rough,
+        metalness: 0.0,
+        normalMap: this.furNormal,
+        normalScale: new THREE.Vector2(1.25, 1.25),
+        sheen: 1.0,
+        sheenRoughness: 0.62,
+        sheenColor: new THREE.Color(sheenTint),
+        envMapIntensity: 0.7,
+        vertexColors: true,
+      });
+      return m;
+    };
+    const fur = furTone(spec.fur ?? spec.skin ?? 0xc08040, 0xffd9a8, 0.86);
+    fur.name = 'fur';
+    const furAlt = furTone(spec.furAlt ?? 0xf0e2cc, 0xfff4e2, 0.88);
+    furAlt.name = 'furAlt';
+    // Dark extremities: a warmer, tighter sheen so paws don't turn to black holes
+    // under a bright sky — they need a visible edge or the silhouette loses its
+    // "gloves and boots" read entirely.
+    const furDark = furTone(spec.furDark ?? 0x4a2e20, 0xc79a72, 0.80);
+    furDark.name = 'furDark';
 
     // 'face' is replaced per-kart by a FaceMaterial; this is the fallback.
     const face = new THREE.MeshStandardMaterial({
@@ -1072,6 +1596,7 @@ export class KartMaterialLibrary {
     return {
       paint, paint2, chrome, metal, plastic, rubber, glass,
       lightFront, lightRear, glow, seat, skin, cloth, clothAlt, face,
+      fur, furAlt, furDark,
     };
   }
 
@@ -1149,7 +1674,7 @@ export class KartMaterialLibrary {
 
   /** Build a per-kart face material (tracked for disposal). */
   createFace(spec: FaceSpec): FaceMaterial {
-    const f = new FaceMaterial(spec, this.quality);
+    const f = new FaceMaterial(spec, this.quality, this.furNormal);
     this.faces.push(f);
     return f;
   }
@@ -1208,6 +1733,8 @@ export class KartMaterialLibrary {
     this.seatMap.dispose();
     this.seatNormal.dispose();
     this.clothNormal.dispose();
+    this.knitNormal.dispose();
+    this.furNormal.dispose();
     this.contactShadow.dispose();
     this.billboard.dispose();
   }

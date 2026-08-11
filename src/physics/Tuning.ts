@@ -143,10 +143,33 @@ export function buildTuning(stats: Partial<KartStats>): KartTuning {
 }
 
 // ---------------------------------------------------------------------------
-//  The roster. Eight genuinely different chassis.
+//  The roster. Ten genuinely different chassis.
 // ---------------------------------------------------------------------------
 
 export const CHARACTER_STATS: Record<string, KartStats> = {
+  /**
+   * The mascot. A light, sure-footed corner-exit specialist: high mini-turbo and
+   * high traction, average acceleration, modest top speed.
+   *
+   * Distinct from the two spreads it could have collided with. `vex` is the pure
+   * drift god — 1.0 handling but 0.48 traction, so it slides everywhere and has
+   * to be caught. `pip` is the comeback machine — 0.96 acceleration but a 0.24
+   * top speed, so it is only ever recovering. `foxy` is neither: 0.78 traction
+   * means it simply does not lose the back end, 0.84 miniTurbo means every
+   * corner pays, and 0.58 acceleration means a mistake actually costs.
+   */
+  foxy: { speed: 0.52, acceleration: 0.58, weight: 0.2, handling: 0.72, traction: 0.78, miniTurbo: 0.84 },
+  /**
+   * The heavyweight. Maximum traction, near-maximum weight, and the worst
+   * acceleration on the roster.
+   *
+   * Distinct from the other two heavies, both of which are *fast*: `torque` runs
+   * 0.78 speed and `strata` 0.86, so both are straight-line threats that pay for
+   * it in the corners. `capy` inverts that — 0.4 speed is the lowest of any kart
+   * over 0.7 weight — and buys 1.0 traction and 0.5 miniTurbo with the change.
+   * It is the only heavy that is genuinely happier off-road than on the straight.
+   */
+  capy: { speed: 0.4, acceleration: 0.18, weight: 0.92, handling: 0.3, traction: 1.0, miniTurbo: 0.5 },
   /** The default. Nothing to complain about, nothing to exploit. */
   nova: { speed: 0.55, acceleration: 0.55, weight: 0.5, handling: 0.55, traction: 0.55, miniTurbo: 0.55 },
   /** Straight-line missile. Corners like a fridge. */

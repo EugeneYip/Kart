@@ -8,7 +8,8 @@
  *
  *   - Studio three-point lighting + a PMREM environment so the clearcoat,
  *     chrome and glass read the same way they will in the game.
- *   - All twelve racers (= all six chassis, all eight drivers) on a row.
+ *   - All twelve racers (= all six chassis, all ten drivers) on a row. Foxy and
+ *     Capy lead the roster, so karts 0 and 1 are the two animal drivers.
  *   - Keys force drift / boost / stun / hop / finish so the pose blends and the
  *     squash spring can be inspected in isolation.
  *

@@ -28,7 +28,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { QualitySettings } from '@/core/Types';
 import type { KartMaterialSet, MaterialSlot } from './KartMaterials';
 import {
-  DEG, consolidateParts, lathe, loft, mirrorX, prepGeometry, smoothNormals, superShape,
+  DEG, consolidateParts, lathe, loft, mirrorX, prepGeometry, shadeColor, smoothNormals,
+  superShape,
 } from './KartBodies';
 
 export const TYRE_IDS = ['slick', 'standard', 'knobbly', 'hover'] as const;
@@ -172,10 +173,17 @@ function latheX(profile: THREE.Vector2[], seg = 20, phiStart = 0, phiLength = Ma
 
 interface Bucket { slot: MaterialSlot; geoms: THREE.BufferGeometry[] }
 
-function push(list: Bucket[], slot: MaterialSlot, g: THREE.BufferGeometry, tint?: number): void {
+/**
+ * `shade` is a greyscale vertex-colour multiplier (see `shadeColor`). Wheels was
+ * the one caller that already spelled it correctly — as the three-argument
+ * `new THREE.Color(t, t, t)`, which is `setRGB` and therefore a real multiplier
+ * rather than the scalar `new THREE.Color(t)` that floors to black. It now
+ * shares the single helper so there is nothing left to get wrong.
+ */
+function push(list: Bucket[], slot: MaterialSlot, g: THREE.BufferGeometry, shade?: number): void {
   let b = list.find((x) => x.slot === slot);
   if (!b) { b = { slot, geoms: [] }; list.push(b); }
-  prepGeometry(g, tint !== undefined ? new THREE.Color(tint, tint, tint) : undefined);
+  prepGeometry(g, shade !== undefined ? shadeColor(shade) : undefined);
   b.geoms.push(g);
 }
 

@@ -117,6 +117,31 @@ export function segs(n: number, min = 6): number {
   return v < min ? Math.min(n, min) : v;
 }
 
+const _shadeCol = new THREE.Color();
+
+/**
+ * The one and only scalar → vertex-colour multiplier.
+ *
+ * ⚠️ NEVER write `new THREE.Color(s)` for a brightness. three.js reads a single
+ * numeric argument as a **hex value** and routes it to `setHex()`, which floors:
+ * `new THREE.Color(0.85)` is `#000000`, and `new THREE.Color(1.35)` is `#000001`.
+ * Every scalar `tint:` place-option in this file and in `Driver.ts` used to do
+ * exactly that, so belts, boots, gloves, necks, panel gaps, engine blocks and
+ * roll hoops were all multiplied to **pure black** rather than shaded — the
+ * measured vertex-colour minimum was exactly 0.000 on all eight human drivers
+ * and all six chassis. `setScalar()` is the correct call and is what this does.
+ *
+ * The range is **not** clamped to 1: values above 1 are load-bearing. Chrome
+ * fins (`1.15`), number plates (`1.35`) and brake rotors (`1.3`) deliberately
+ * brighten their slot's base colour, so the ceiling only exists to catch a typo.
+ *
+ * Returns a shared scratch colour, valid until the next call — `prepGeometry`
+ * consumes it synchronously, which is the only intended use.
+ */
+export function shadeColor(s: number): THREE.Color {
+  return _shadeCol.setScalar(s < 0 ? 0 : s > 4 ? 4 : s);
+}
+
 /** Give a geometry the full attribute set so it can be merged with any other. */
 export function prepGeometry(g: THREE.BufferGeometry, tint?: THREE.Color): THREE.BufferGeometry {
   if (!g.index) {
@@ -423,6 +448,25 @@ export function loft(sections: LoftSection[], opts: LoftOptions = {}): THREE.Buf
 /**
  * Superellipsoid — a rounded box whose chamfer radius is a continuous dial.
  * `eXZ`/`eY` around 4 gives the MK8 "2 mm bevel on everything" read.
+ *
+ * ⚠️ FIXED: this was wound INSIDE-OUT — the `HANDOFF.md` §0 bug, in the kart
+ * library rather than `Props.ts`. Measured signed volume was **−6286 cm³** for a
+ * 20 cm rounded cube (correct magnitude, wrong sign) against `THREE.Sphere`'s
+ * +4101 cm³ by the same measurement, and `computeVertexNormals` then produced
+ * matching *inward* normals, so it scored 100 % normal/winding agreement — which
+ * is precisely why it was never caught.
+ *
+ * It survived review because `superShape` builds the *secondary* volumes —
+ * shoulder caps, elbow balls, gloves, knuckles, knee pads, noses, engine blocks,
+ * headrests — while the primary masses come from `loft`, which was always
+ * correct. So the symptom was never "a hole in the kart", it was "that pad looks
+ * flat and oddly dark", which reads as an art problem. Same signature as the
+ * grandstand-as-a-white-box and black-void-roofs entries in §0.
+ *
+ * `roundedBox` wraps this, so it was affected too. `mirrorX` reverses winding
+ * correctly, so mirrored copies were consistently wrong and are now consistently
+ * right. Triangle and vertex counts are untouched by the fix — only the index
+ * order within each quad changes.
  */
 export function superShape(
   rx: number, ry: number, rz: number,
@@ -456,7 +500,9 @@ export function superShape(
     for (let i = 0; i < segU; i++) {
       const a = j * cols + i, b = j * cols + i + 1;
       const c = (j + 1) * cols + i + 1, d = (j + 1) * cols + i;
-      idx.push(a, b, c, a, c, d);
+      // `+i` sweeps theta from +X toward +Z and `+j` sweeps phi upward, so
+      // (a, b, c) has its normal pointing INWARD. Reversed here.
+      idx.push(a, c, b, a, d, c);
     }
   }
   const g = new THREE.BufferGeometry();
@@ -584,8 +630,15 @@ export interface PlaceOptions {
   rot?: [number, number, number];
   scale?: [number, number, number] | number;
   detail?: DetailLevel;
-  /** Multiplied into the vertex colour — free per-part shade variation. */
-  tint?: number;
+  /**
+   * Greyscale vertex-colour multiplier — free per-part shade variation.
+   * `0.5` is half brightness, `1` is untouched, `1.35` brightens.
+   *
+   * Named `shade`, not `tint`, on purpose: the old name invited
+   * `new THREE.Color(tint)`, which floors a scalar to black. Everything goes
+   * through `shadeColor()` now — see the warning on that function.
+   */
+  shade?: number;
 }
 
 export class PartBucket {
@@ -607,7 +660,7 @@ export class PartBucket {
       );
       geom.applyMatrix4(_mat4);
     }
-    prepGeometry(geom, o.tint !== undefined ? new THREE.Color(o.tint) : undefined);
+    prepGeometry(geom, o.shade !== undefined ? shadeColor(o.shade) : undefined);
     this.entries.push({ slot, geom, detail: o.detail ?? 1 });
     return this;
   }
@@ -1023,7 +1076,7 @@ function exhaust(
   const inner = disc(tipR * 0.78, 0.01, 0, 16);
   inner.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir));
   inner.translate(end.x + dir.x * 0.03, end.y + dir.y * 0.03, end.z + dir.z * 0.03);
-  b.add('plastic', inner, { tint: 0.12, detail });
+  b.add('plastic', inner, { shade: 0.12, detail });
   return new THREE.Vector3(end.x + dir.x * 0.055, end.y + dir.y * 0.055, end.z + dir.z * 0.055);
 }
 
@@ -1033,7 +1086,7 @@ function headlight(b: PartBucket, x: number, y: number, z: number, r: number, de
     new THREE.Vector2(r * 1.04, 0.028), new THREE.Vector2(r * 0.9, 0.05), new THREE.Vector2(0, 0.052),
   ], 16);
   housing.rotateX(90 * DEG);
-  b.pair('chrome', housing, { pos: [x, y, z], tint: 0.9, detail });
+  b.pair('chrome', housing, { pos: [x, y, z], shade: 0.9, detail });
   const lens = lathe([
     new THREE.Vector2(1e-4, -0.030), new THREE.Vector2(r * 0.8, -0.022),
     new THREE.Vector2(r * 0.86, 0.0), new THREE.Vector2(1e-4, 0.0),
@@ -1052,7 +1105,7 @@ function tailLight(b: PartBucket, x: number, y: number, z: number, w: number, h:
     { z: -0.014, y: 0, hw: w / 2 + 0.014, hUp: h / 2 + 0.014, hDown: h / 2 + 0.014, eSide: 3.4 },
     { z: 0.006, y: 0, hw: w / 2 + 0.010, hUp: h / 2 + 0.010, hDown: h / 2 + 0.010, eSide: 3.4 },
   ], { segments: 16 });
-  b.pair('plastic', bezel, { pos: [x, y, z], tint: 0.35, detail: 2 });
+  b.pair('plastic', bezel, { pos: [x, y, z], shade: 0.35, detail: 2 });
 }
 
 function mirror(b: PartBucket, x: number, y: number, z: number, detail: DetailLevel = 2): void {
@@ -1071,7 +1124,7 @@ function numberPlate(b: PartBucket, x: number, y: number, z: number, w = 0.22, d
     new THREE.Vector2(-w / 2, -w * 0.34), new THREE.Vector2(w / 2, -w * 0.34),
     new THREE.Vector2(w / 2, w * 0.34), new THREE.Vector2(-w / 2, w * 0.34),
   ], 0.018, 0.008);
-  b.add('plastic', plate, { pos: [x, y, z], tint: 1.35, detail });
+  b.add('plastic', plate, { pos: [x, y, z], shade: 1.35, detail });
   const ring = new THREE.TorusGeometry(w * 0.29, 0.006, 6, 20);
   b.add('metal', ring, { pos: [x, y, z - 0.012], detail });
 }
@@ -1198,7 +1251,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     { z: 0.10, y: floor + 0.105, hw: 0.265, hUp: 0.075, hDown: 0.060, eSide: 3.8 },
     { z: rz - 0.20, y: floor + 0.11, hw: 0.250, hUp: 0.070, hDown: 0.055, eSide: 3.6 },
   ], { segments: 20 });
-  b.add('plastic', inner, { tint: 0.55, detail: 1 });
+  b.add('plastic', inner, { shade: 0.55, detail: 1 });
 
   // --- nose cone ----------------------------------------------------------
   const nose = loft([
@@ -1247,7 +1300,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.058, 0.034), new THREE.Vector2(0.030, 0.038),
   ], 14);
   intake.rotateX(90 * DEG);
-  b.pair('plastic', intake, { pos: [tw * 0.80, floor + 0.128, fz + 0.20], tint: 0.3, detail: 2 });
+  b.pair('plastic', intake, { pos: [tw * 0.80, floor + 0.128, fz + 0.20], shade: 0.3, detail: 2 });
 
   // --- floor pan ----------------------------------------------------------
   const pan = loft([
@@ -1255,7 +1308,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     { z: 0, y: 0, hw: 0.40, hUp: 0.018, hDown: 0.016, eSide: 5.0 },
     { z: rz + 0.10, y: 0, hw: 0.36, hUp: 0.018, hDown: 0.016, eSide: 4.4 },
   ], { segments: 16 });
-  b.add('metal', pan, { pos: [0, floor - 0.028, 0], tint: 0.7, detail: 1 });
+  b.add('metal', pan, { pos: [0, floor - 0.028, 0], shade: 0.7, detail: 1 });
 
   // --- roll bar behind the seat ------------------------------------------
   const bar = tube([
@@ -1277,10 +1330,10 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
 
   // --- engine block behind the driver -----------------------------------
   const engine = superShape(0.175, 0.135, 0.185, 4.2, 4.0, 18, 12);
-  b.add('metal', engine, { pos: [0.0, floor + 0.215, rz + 0.08], tint: 0.85, detail: 0 });
+  b.add('metal', engine, { pos: [0.0, floor + 0.215, rz + 0.08], shade: 0.85, detail: 0 });
   for (let i = 0; i < 5; i++) {
     const fin = roundedBox(0.34, 0.020, 0.016, 3.0);
-    b.add('metal', fin, { pos: [0, floor + 0.14 + i * 0.058, rz + 0.08], tint: 1.15, detail: 2 });
+    b.add('metal', fin, { pos: [0, floor + 0.14 + i * 0.058, rz + 0.08], shade: 1.15, detail: 2 });
   }
   const airbox = lathe([
     new THREE.Vector2(0, 0), new THREE.Vector2(0.058, 0.006), new THREE.Vector2(0.062, 0.052),
@@ -1307,7 +1360,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     const louvre = roundedBox(0.20, 0.014, 0.030, 3.0);
     b.pair('plastic', louvre, {
       pos: [0.115, floor + 0.348 - i * 0.004, rz - 0.10 + i * 0.058],
-      rot: [-18, 0, 0], tint: 0.22, detail: 2,
+      rot: [-18, 0, 0], shade: 0.22, detail: 2,
     });
   }
 
@@ -1319,7 +1372,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
   b.add('paint2', diffuser, { pos: [0, floor - 0.010, 0], detail: 0 });
   for (let i = -1; i <= 1; i++) {
     const fin = roundedBox(0.014, 0.052, 0.185, 3.2);
-    b.add('plastic', fin, { pos: [i * 0.105, floor + 0.014, rz + 0.30], rot: [-8, 0, 0], tint: 0.3, detail: 2 });
+    b.add('plastic', fin, { pos: [i * 0.105, floor + 0.014, rz + 0.30], rot: [-8, 0, 0], shade: 0.3, detail: 2 });
   }
 
   // --- seat ---------------------------------------------------------------
@@ -1327,8 +1380,8 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
 
   // --- grille, lights, plate, mirrors ------------------------------------
   const gr = grille(0.30, 0.115, 6, 0.06);
-  b.add('metal', gr.frame, { pos: [0, floor + 0.115, fz - 0.315], tint: 0.55, detail: 1 });
-  b.add('plastic', gr.slats, { pos: [0, floor + 0.115, fz - 0.315], tint: 0.28, detail: 2 });
+  b.add('metal', gr.frame, { pos: [0, floor + 0.115, fz - 0.315], shade: 0.55, detail: 1 });
+  b.add('plastic', gr.slats, { pos: [0, floor + 0.115, fz - 0.315], shade: 0.28, detail: 2 });
   headlight(b, 0.155, floor + 0.145, fz - 0.245, 0.052, 1);
   tailLight(b, 0.185, floor + 0.135, rz + 0.275, 0.145, 0.070);
   numberPlate(b, 0, floor + 0.185, fz - 0.32, 0.20, 2);
@@ -1338,10 +1391,10 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
   for (let i = 0; i < 7; i++) {
     const z = fz + 0.1 + i * 0.16;
     const r = rivet(0.013, 0.007);
-    b.pair('chrome', r, { pos: [0.352, floor + 0.02 + 0.005 * i, z], rot: [0, 0, -90], detail: 2, tint: 0.9 });
+    b.pair('chrome', r, { pos: [0.352, floor + 0.02 + 0.005 * i, z], rot: [0, 0, -90], detail: 2, shade: 0.9 });
   }
   // panel gap along the tub shoulder
-  b.pair('plastic', panelGapStrip(0.9), { pos: [0.30, floor + 0.175, 0.05], tint: 0.15, detail: 2 });
+  b.pair('plastic', panelGapStrip(0.9), { pos: [0.30, floor + 0.175, 0.05], shade: 0.15, detail: 2 });
 
   // --- sponsor stripe (paint2 inlay) -------------------------------------
   const stripe = loft([
@@ -1363,7 +1416,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.334, floor + 0.328, rz - 0.22),
     new THREE.Vector3(0.300, floor + 0.300, rz + 0.02),
     new THREE.Vector3(0.262, floor + 0.262, rz + 0.20),
-  ], 0.0135), { detail: 0, tint: 1.05 });
+  ], 0.0135), { detail: 0, shade: 1.05 });
 
   // Matching bead along the outer lip of each side pod.
   b.pair('paint2', edgeBead([
@@ -1387,7 +1440,7 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0, 0, 0),
     new THREE.Vector3(-0.055, 0.050, 0.055),
     new THREE.Vector3(-0.098, 0.070, 0.115),
-  ], 0.014, 7), { pos: [tw * 0.62, floor + 0.026, fz - 0.42], tint: 0.85, detail: 1 });
+  ], 0.014, 7), { pos: [tw * 0.62, floor + 0.026, fz - 0.42], shade: 0.85, detail: 1 });
 
   // --- rear wing ---------------------------------------------------------
   // The biggest single silhouette win on the kart: a real aerofoil on two
@@ -1410,19 +1463,19 @@ function buildStandard(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(-wingHalf, wingY + 0.012, wingZ + 0.092),
     new THREE.Vector3(0, wingY + 0.014, wingZ + 0.094),
     new THREE.Vector3(wingHalf, wingY + 0.012, wingZ + 0.092),
-  ], 0.0105), { detail: 1, tint: 1.08 });
+  ], 0.0105), { detail: 1, shade: 1.08 });
   // Twin pylons down to the engine cover.
   b.pair('metal', tube([
     new THREE.Vector3(0, 0, 0),
     new THREE.Vector3(0, 0.105, -0.014),
     new THREE.Vector3(0, 0.210, -0.022),
-  ], 0.019, 8), { pos: [0.115, floor + 0.335, wingZ + 0.010], tint: 0.85, detail: 0 });
+  ], 0.019, 8), { pos: [0.115, floor + 0.335, wingZ + 0.010], shade: 0.85, detail: 0 });
 
   // --- extra panel definition -------------------------------------------
   // Two more gaps: across the nose and along the engine cover shoulder.
   const noseGap = roundedBox(0.30, 0.018, 0.011, 3.0);
-  b.add('plastic', noseGap, { pos: [0, floor + 0.150, fz - 0.155], tint: 0.15, detail: 2 });
-  b.pair('plastic', panelGapStrip(0.42), { pos: [0.148, floor + 0.345, rz + 0.02], tint: 0.15, detail: 2 });
+  b.add('plastic', noseGap, { pos: [0, floor + 0.150, fz - 0.155], shade: 0.15, detail: 2 });
+  b.pair('plastic', panelGapStrip(0.42), { pos: [0.148, floor + 0.345, rz + 0.02], shade: 0.15, detail: 2 });
 
   const steer = steeringWheelGeom(0.125);
   return {
@@ -1490,7 +1543,7 @@ function buildBike(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.20, base + 0.18, 0.10),
     new THREE.Vector3(0.24, base + 0.06, rz - 0.05),
   ], 0.026, 8);
-  b.pair('metal', spar, { detail: 0, tint: 0.9 });
+  b.pair('metal', spar, { detail: 0, shade: 0.9 });
   const swing = tube([
     new THREE.Vector3(0.13, base + 0.06, 0.16),
     new THREE.Vector3(f.trackHalfRear * 0.92, 0.0, rz),
@@ -1521,7 +1574,7 @@ function buildBike(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.026, 0.085), new THREE.Vector2(0.021, 0.095),
   ], 12);
   grip.rotateZ(78 * DEG);
-  b.pair('rubber', grip, { pos: [0.135, base + 0.345, fz + 0.005], detail: 1, tint: 0.6 });
+  b.pair('rubber', grip, { pos: [0.135, base + 0.345, fz + 0.005], detail: 1, shade: 0.6 });
 
   // --- exhaust cans ------------------------------------------------------
   const can = lathe([
@@ -1532,20 +1585,20 @@ function buildBike(c: BuildCtx): Partial<BodyBuildResult> {
   can.rotateX(96 * DEG);
   b.pair('chrome', can, { pos: [0.145, base + 0.12, rz - 0.02], rot: [0, -5, 0], detail: 0 });
   const canTip = disc(0.030, 0.012, 0, 14);
-  b.pair('plastic', canTip, { pos: [0.152, base + 0.155, rz + 0.315], tint: 0.10, detail: 1 });
+  b.pair('plastic', canTip, { pos: [0.152, base + 0.155, rz + 0.315], shade: 0.10, detail: 1 });
   const header = tube([
     new THREE.Vector3(0.06, base + 0.20, fz + 0.52),
     new THREE.Vector3(0.12, base + 0.14, 0.05),
     new THREE.Vector3(0.145, base + 0.115, rz - 0.06),
   ], 0.019, 8);
-  b.pair('chrome', header, { detail: 1, tint: 0.8 });
+  b.pair('chrome', header, { detail: 1, shade: 0.8 });
 
   // --- engine block ------------------------------------------------------
   const eng = superShape(0.115, 0.100, 0.145, 4.0, 3.8, 16, 10);
-  b.add('metal', eng, { pos: [0, base + 0.10, fz + 0.55], tint: 0.8, detail: 1 });
+  b.add('metal', eng, { pos: [0, base + 0.10, fz + 0.55], shade: 0.8, detail: 1 });
   for (let i = 0; i < 4; i++) {
     const fin = roundedBox(0.235, 0.014, 0.024, 3.0);
-    b.add('chrome', fin, { pos: [0, base + 0.045 + i * 0.042, fz + 0.55], tint: 1.05, detail: 2 });
+    b.add('chrome', fin, { pos: [0, base + 0.045 + i * 0.042, fz + 0.55], shade: 1.05, detail: 2 });
   }
 
   // --- lights ------------------------------------------------------------
@@ -1607,7 +1660,7 @@ function buildCruiser(c: BuildCtx): Partial<BodyBuildResult> {
   ];
   for (const sgn of [-1, 1]) {
     const jug = lathe(jugProfile, 16);
-    b.add('metal', jug, { pos: [0, base + 0.02, fz + 0.34 + sgn * 0.0], rot: [sgn * 34, 0, 0], tint: 0.9, detail: 0 });
+    b.add('metal', jug, { pos: [0, base + 0.02, fz + 0.34 + sgn * 0.0], rot: [sgn * 34, 0, 0], shade: 0.9, detail: 0 });
     for (let i = 0; i < 6; i++) {
       const fin = lathe([
         new THREE.Vector2(0.060, 0), new THREE.Vector2(0.086, 0.004),
@@ -1616,7 +1669,7 @@ function buildCruiser(c: BuildCtx): Partial<BodyBuildResult> {
       const m = new THREE.Matrix4().makeRotationX(sgn * 34 * DEG);
       fin.translate(0, 0.055 + i * 0.028, 0);
       fin.applyMatrix4(m);
-      b.add('chrome', fin, { pos: [0, base + 0.02, fz + 0.34], tint: 1.1, detail: 2 });
+      b.add('chrome', fin, { pos: [0, base + 0.02, fz + 0.34], shade: 1.1, detail: 2 });
     }
     const head = superShape(0.070, 0.036, 0.070, 3.4, 3.2, 14, 8);
     const hm = new THREE.Matrix4().makeRotationX(sgn * 34 * DEG);
@@ -1661,7 +1714,7 @@ function buildCruiser(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.030, 0.10), new THREE.Vector2(0.024, 0.112),
   ], 12);
   grip.rotateZ(70 * DEG);
-  b.pair('rubber', grip, { pos: [0.20, base + 0.40, fz - 0.02], detail: 1, tint: 0.6 });
+  b.pair('rubber', grip, { pos: [0.20, base + 0.40, fz - 0.02], detail: 1, shade: 0.6 });
 
   // --- chrome pipes ------------------------------------------------------
   for (const sgn of [-1, 1]) {
@@ -1680,7 +1733,7 @@ function buildCruiser(c: BuildCtx): Partial<BodyBuildResult> {
     tip.rotateX(90 * DEG);
     b.add('chrome', tip, { pos: [sgn * 0.375, base + 0.075, rz + 0.30], detail: 1 });
     const inner = disc(0.036, 0.01, 0, 14);
-    b.add('plastic', inner, { pos: [sgn * 0.375, base + 0.075, rz + 0.385], tint: 0.10, detail: 1 });
+    b.add('plastic', inner, { pos: [sgn * 0.375, base + 0.075, rz + 0.385], shade: 0.10, detail: 1 });
   }
 
   // --- bench seat + backrest --------------------------------------------
@@ -1764,7 +1817,7 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.09, 0.006), new THREE.Vector2(-0.09, 0.012),
   ], f.trackHalfFront * 1.6, 0.006);
   flap.rotateY(90 * DEG);
-  b.add('plastic', flap, { pos: [0, low + 0.055, fz - 0.66], rot: [-10, 0, 0], tint: 0.3, detail: 1 });
+  b.add('plastic', flap, { pos: [0, low + 0.055, fz - 0.66], rot: [-10, 0, 0], shade: 0.3, detail: 1 });
   for (const sgn of [-1, 1]) {
     const plate = extrude([
       new THREE.Vector2(-0.115, -0.02), new THREE.Vector2(0.10, -0.02),
@@ -1789,7 +1842,7 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.056, 0.040), new THREE.Vector2(0.026, 0.046),
   ], 16);
   mouth.rotateX(90 * DEG);
-  b.pair('plastic', mouth, { pos: [f.trackHalfFront * 0.82, low + 0.095, fz + 0.10], tint: 0.22, detail: 1 });
+  b.pair('plastic', mouth, { pos: [f.trackHalfFront * 0.82, low + 0.095, fz + 0.10], shade: 0.22, detail: 1 });
 
   // --- airbox behind the head -------------------------------------------
   const airbox = loft([
@@ -1804,7 +1857,7 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.056, 0.034), new THREE.Vector2(0.030, 0.040),
   ], 16);
   inlet.rotateX(-90 * DEG);
-  b.add('plastic', inlet, { pos: [0, low + 0.245, rz - 0.50], tint: 0.2, detail: 1 });
+  b.add('plastic', inlet, { pos: [0, low + 0.245, rz - 0.50], shade: 0.2, detail: 1 });
 
   // --- rear wing ---------------------------------------------------------
   const wingMain = extrude([
@@ -1818,7 +1871,7 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(0.055, 0.008), new THREE.Vector2(-0.055, 0.014),
   ], f.trackHalfRear * 1.5, 0.005);
   wingFlap.rotateY(90 * DEG);
-  b.add('plastic', wingFlap, { pos: [0, low + 0.425, rz + 0.35], rot: [-18, 0, 0], tint: 0.3, detail: 1 });
+  b.add('plastic', wingFlap, { pos: [0, low + 0.425, rz + 0.35], rot: [-18, 0, 0], shade: 0.3, detail: 1 });
   for (const sgn of [-1, 1]) {
     const ep = extrude([
       new THREE.Vector2(-0.12, -0.075), new THREE.Vector2(0.13, -0.055),
@@ -1830,17 +1883,17 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector2(-0.09, 0), new THREE.Vector2(0.09, 0),
     new THREE.Vector2(0.05, 0.20), new THREE.Vector2(-0.05, 0.20),
   ], 0.030, 0.006);
-  b.add('metal', pylon, { pos: [0, low + 0.16, rz + 0.26], detail: 0, tint: 0.6 });
+  b.add('metal', pylon, { pos: [0, low + 0.16, rz + 0.26], detail: 0, shade: 0.6 });
 
   // --- diffuser ----------------------------------------------------------
   const diff = loft([
     { z: rz - 0.14, y: 0, hw: 0.20, hUp: 0.014, hDown: 0.012, eSide: 4.0 },
     { z: rz + 0.20, y: 0.038, hw: 0.235, hUp: 0.016, hDown: 0.014, eSide: 4.4 },
   ], { segments: 16 });
-  b.add('plastic', diff, { pos: [0, low - 0.010, 0], tint: 0.25, detail: 1 });
+  b.add('plastic', diff, { pos: [0, low - 0.010, 0], shade: 0.25, detail: 1 });
   for (let i = -2; i <= 2; i++) {
     const strake = roundedBox(0.012, 0.055, 0.30, 3.0);
-    b.add('plastic', strake, { pos: [i * 0.085, low + 0.012, rz + 0.04], rot: [-7, 0, 0], tint: 0.18, detail: 2 });
+    b.add('plastic', strake, { pos: [i * 0.085, low + 0.012, rz + 0.04], rot: [-7, 0, 0], shade: 0.18, detail: 2 });
   }
 
   // --- exposed pushrods --------------------------------------------------
@@ -1850,7 +1903,7 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
         new THREE.Vector3(sgn * 0.10, low + 0.10, z),
         new THREE.Vector3(sgn * len * 0.92, low - 0.005, z),
       ], 0.015, 7);
-      b.add('metal', rod, { detail: 1, tint: 0.8 });
+      b.add('metal', rod, { detail: 1, shade: 0.8 });
     }
   }
 
@@ -1863,12 +1916,12 @@ function buildSpeedster(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.205, low + 0.245, fz + 0.42),
     new THREE.Vector3(0.235, low + 0.115, rz - 0.60),
   ], 0.023, 8, 34);
-  b.add('metal', halo, { detail: 0, tint: 0.5 });
+  b.add('metal', halo, { detail: 0, shade: 0.5 });
   const haloStrut = tube([
     new THREE.Vector3(0, low + 0.26, fz + 0.24),
     new THREE.Vector3(0, low + 0.16, fz + 0.10),
   ], 0.018, 7);
-  b.add('metal', haloStrut, { detail: 1, tint: 0.5 });
+  b.add('metal', haloStrut, { detail: 1, shade: 0.5 });
 
   headlight(b, 0.10, low + 0.075, fz - 0.46, 0.034, 2);
   tailLight(b, 0.075, low + 0.10, rz + 0.24, 0.070, 0.040);
@@ -1915,7 +1968,7 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
     { z: 0.10, y: 0.0, hw: 0.29, hUp: 0.018, hDown: 0.016, eSide: 4.4 },
     { z: rz + 0.10, y: 0.02, hw: 0.25, hUp: 0.016, hDown: 0.014, eSide: 3.8 },
   ], { segments: 16 });
-  b.add('metal', skid, { pos: [0, deck - 0.035, 0], tint: 0.62, detail: 1 });
+  b.add('metal', skid, { pos: [0, deck - 0.035, 0], shade: 0.62, detail: 1 });
 
   // --- tube roll cage ----------------------------------------------------
   const cageR = 0.030;
@@ -1928,7 +1981,7 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.345, deck + 0.36, rz - 0.34),
     new THREE.Vector3(0.325, deck + 0.06, rz - 0.30),
   ], cageR, 9, 42);
-  b.add('metal', hoopMain, { detail: 0, tint: 0.95 });
+  b.add('metal', hoopMain, { detail: 0, shade: 0.95 });
   const hoopFront = tube([
     new THREE.Vector3(-0.30, deck + 0.06, fz + 0.12),
     new THREE.Vector3(-0.31, deck + 0.28, fz + 0.10),
@@ -1938,36 +1991,36 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.31, deck + 0.28, fz + 0.10),
     new THREE.Vector3(0.30, deck + 0.06, fz + 0.12),
   ], cageR * 0.92, 9, 40);
-  b.add('metal', hoopFront, { detail: 0, tint: 0.95 });
+  b.add('metal', hoopFront, { detail: 0, shade: 0.95 });
   for (const sgn of [-1, 1]) {
     const rail = tube([
       new THREE.Vector3(sgn * 0.245, deck + 0.435, fz + 0.06),
       new THREE.Vector3(sgn * 0.275, deck + 0.55, rz - 0.36),
     ], cageR * 0.85, 8);
-    b.add('metal', rail, { detail: 0, tint: 0.9 });
+    b.add('metal', rail, { detail: 0, shade: 0.9 });
     const backStay = tube([
       new THREE.Vector3(sgn * 0.32, deck + 0.44, rz - 0.35),
       new THREE.Vector3(sgn * 0.30, deck + 0.10, rz + 0.16),
     ], cageR * 0.8, 8);
-    b.add('metal', backStay, { detail: 1, tint: 0.85 });
+    b.add('metal', backStay, { detail: 1, shade: 0.85 });
     const doorBar = tube([
       new THREE.Vector3(sgn * 0.305, deck + 0.08, fz + 0.14),
       new THREE.Vector3(sgn * 0.345, deck + 0.20, 0.0),
       new THREE.Vector3(sgn * 0.325, deck + 0.09, rz - 0.30),
     ], cageR * 0.75, 8, 22);
-    b.add('metal', doorBar, { detail: 1, tint: 0.9 });
+    b.add('metal', doorBar, { detail: 1, shade: 0.9 });
   }
 
   // --- light bar ---------------------------------------------------------
   const barBody = roundedBox(0.60, 0.070, 0.070, 3.6);
-  b.add('plastic', barBody, { pos: [0, deck + 0.50, fz + 0.02], tint: 0.35, detail: 0 });
+  b.add('plastic', barBody, { pos: [0, deck + 0.50, fz + 0.02], shade: 0.35, detail: 0 });
   for (let i = -2; i <= 2; i++) {
     const lampHousing = lathe([
       new THREE.Vector2(0, 0), new THREE.Vector2(0.048, 0.002), new THREE.Vector2(0.052, 0.024),
       new THREE.Vector2(0.040, 0.040), new THREE.Vector2(0, 0.042),
     ], 14);
     lampHousing.rotateX(90 * DEG);
-    b.add('metal', lampHousing, { pos: [i * 0.118, deck + 0.50, fz + 0.02], tint: 0.7, detail: 1 });
+    b.add('metal', lampHousing, { pos: [i * 0.118, deck + 0.50, fz + 0.02], shade: 0.7, detail: 1 });
     const lens = lathe([
       new THREE.Vector2(1e-4, -0.026), new THREE.Vector2(0.036, -0.020),
       new THREE.Vector2(0.042, 0), new THREE.Vector2(1e-4, 0),
@@ -1982,12 +2035,12 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
       new THREE.Vector3(sgn * 0.20, deck + 0.06, fz + 0.04),
       new THREE.Vector3(sgn * 0.235, deck + 0.30, fz + 0.02),
     ], 0.026, 8);
-    b.add('metal', tower, { detail: 1, tint: 0.8 });
+    b.add('metal', tower, { detail: 1, shade: 0.8 });
     const towerR = tube([
       new THREE.Vector3(sgn * 0.22, deck + 0.06, rz - 0.24),
       new THREE.Vector3(sgn * 0.255, deck + 0.34, rz - 0.28),
     ], 0.026, 8);
-    b.add('metal', towerR, { detail: 1, tint: 0.8 });
+    b.add('metal', towerR, { detail: 1, shade: 0.8 });
   }
 
   // --- spare wheel carrier + jerrycan ------------------------------------
@@ -1997,14 +2050,14 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.22, deck + 0.34, rz + 0.28),
     new THREE.Vector3(0.20, deck + 0.10, rz + 0.16),
   ], 0.022, 8, 24);
-  b.add('metal', carrier, { detail: 1, tint: 0.8 });
+  b.add('metal', carrier, { detail: 1, shade: 0.8 });
   const can = superShape(0.075, 0.115, 0.045, 4.4, 4.0, 14, 10);
   b.add('paint2', can, { pos: [0.16, deck + 0.20, rz + 0.24], detail: 2 });
 
   // --- mud flaps ---------------------------------------------------------
   for (const sgn of [-1, 1]) {
     const flap = roundedBox(0.16, 0.14, 0.012, 3.0);
-    b.add('rubber', flap, { pos: [sgn * f.trackHalfRear * 0.86, deck * 0.42, rz + 0.30], rot: [-8, 0, 0], tint: 0.55, detail: 2 });
+    b.add('rubber', flap, { pos: [sgn * f.trackHalfRear * 0.86, deck * 0.42, rz + 0.30], rot: [-8, 0, 0], shade: 0.55, detail: 2 });
   }
 
   // --- snorkel -----------------------------------------------------------
@@ -2013,13 +2066,13 @@ function buildBuggy(c: BuildCtx): Partial<BodyBuildResult> {
     new THREE.Vector3(0.315, deck + 0.30, fz + 0.16),
     new THREE.Vector3(0.315, deck + 0.46, fz + 0.10),
   ], 0.032, 9);
-  b.add('plastic', snorkel, { tint: 0.35, detail: 1 });
+  b.add('plastic', snorkel, { shade: 0.35, detail: 1 });
   const snorkelMouth = lathe([
     new THREE.Vector2(0.024, 0), new THREE.Vector2(0.046, 0.006),
     new THREE.Vector2(0.046, 0.048), new THREE.Vector2(0.024, 0.054),
   ], 14);
   snorkelMouth.rotateX(-96 * DEG);
-  b.add('plastic', snorkelMouth, { pos: [0.315, deck + 0.47, fz + 0.09], tint: 0.22, detail: 2 });
+  b.add('plastic', snorkelMouth, { pos: [0.315, deck + 0.47, fz + 0.09], shade: 0.22, detail: 2 });
 
   seatAssembly(b, 0, deck + 0.09, -0.02, 0.30, 0.30, -8, 1);
   tailLight(b, 0.20, deck + 0.10, rz + 0.20, 0.10, 0.075);
@@ -2074,7 +2127,7 @@ function buildHover(c: BuildCtx): Partial<BodyBuildResult> {
     { z: 0.05, y: 0, hw: 0.235, hUp: 0.034, hDown: 0.055, eSide: 3.6, eBot: 3.0 },
     { z: rz, y: 0, hw: 0.205, hUp: 0.032, hDown: 0.048, eSide: 3.2, eBot: 2.8 },
   ], { segments: 20 });
-  b.add('metal', keel, { pos: [0, mid - 0.055, 0], tint: 0.45, detail: 0 });
+  b.add('metal', keel, { pos: [0, mid - 0.055, 0], shade: 0.45, detail: 0 });
 
   // --- underglow strip ---------------------------------------------------
   const glowStrip = loft([
@@ -2114,7 +2167,7 @@ function buildHover(c: BuildCtx): Partial<BodyBuildResult> {
     { z: rz - 0.02, y: mid + 0.05, hw: 0.235, hUp: 0.090, hDown: 0.070, eSide: 4.0, eTop: 3.4 },
     { z: rz + 0.20, y: mid + 0.05, hw: 0.215, hUp: 0.082, hDown: 0.062, eSide: 4.0, eTop: 3.4 },
   ], { segments: 20 });
-  b.add('metal', block, { tint: 0.5, detail: 0 });
+  b.add('metal', block, { shade: 0.5, detail: 0 });
   for (const sgn of [-1, 1]) {
     const nozzle = lathe([
       new THREE.Vector2(0.030, 0), new THREE.Vector2(0.062, 0.01),
