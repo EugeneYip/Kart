@@ -28,7 +28,7 @@ import { ItemType } from '@/core/Types';
 import { bus } from '@/core/EventBus';
 import { clamp, clamp01, lerp, Rng, wrap } from '@/core/MathUtils';
 import { ItemModels, TRIPLE_ITEMS, ITEM_NAMES, type IconRect } from './ItemModels';
-import { ItemBoxField, type BoxSpawn } from './ItemBox';
+import { ItemBoxField, ITEM_BOX_LIFT, type BoxSpawn } from './ItemBox';
 import {
   ItemRoulette, itemUses, rollItem, tableRow, weightsFor,
   BLUE_SHELL_COOLDOWN, LIGHTNING_COOLDOWN, type RollContext,
@@ -190,19 +190,30 @@ export class ItemSystem implements ISubsystem {
 
     const lap = typeof this.track.lapLength === 'number' ? this.track.lapLength : 0;
     if (lap < 10 || typeof this.track.sampleAtDistance !== 'function') return out;
-    const rows = Math.max(3, Math.min(9, Math.round(lap / 200)));
+    // Fallback rows, used only when the track has no authored spawns yet.
+    //
+    // Two bugs lived here. The lift was 1.35 m, but the box is BOX_SIZE = 1.72
+    // and it tumbles and bobs, so its lowest corner sits ~1.47 m below centre —
+    // at 1.35 m every fallback box cut ~12 cm through the tarmac, which is the
+    // "item box half buried in the ground" a playtester reported. The authored
+    // path in TrackBuilder already uses 1.70 m; these must agree.
+    //
+    // It also emitted lap/200 rows (8 on a 1610 m lap) of 5, i.e. 40 boxes —
+    // more than the authored layout. Density is now deliberately sparse: a
+    // fallback is a safety net, not a level design.
+    const rows = Math.max(2, Math.min(3, Math.round(lap / 550)));
     for (let r = 0; r < rows; r++) {
       const d = ((r + 0.5) / rows) * lap;
       const s = this.track.sampleAtDistance(wrap(d, lap));
       if (!s) continue;
       const halfW = Math.max(4, s.halfWidth - 2.6);
-      for (let i = 0; i < 5; i++) {
-        const lat = ((i - 2) / 2) * halfW;
+      for (let i = 0; i < 3; i++) {
+        const lat = ((i - 1) / 1) * halfW * 0.6;
         out.push({
           position: new THREE.Vector3()
             .copy(s.position)
             .addScaledVector(s.binormal, lat)
-            .addScaledVector(s.normal, 1.35),
+            .addScaledVector(s.normal, ITEM_BOX_LIFT),
           normal: s.normal.clone(),
         });
       }

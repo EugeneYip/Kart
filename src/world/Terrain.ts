@@ -26,7 +26,7 @@ import type { FrameContext, ISubsystem, QualitySettings } from '@/core/Types';
 import { RENDER_ORDER } from '@/core/Config';
 import { Rng } from '@/core/MathUtils';
 import {
-  GLSL_FIELD, GLSL_FIELD_SHADOW_LOD, GLSL_NOISE, GLSL_SRGB,
+  GLSL_FIELD, GLSL_FIELD_EDGE, GLSL_FIELD_SHADOW_LOD, GLSL_NOISE, GLSL_SRGB,
   fieldUniforms, makeDetailNormal, makeTerrainLayers,
   type TerrainField, type TerrainLayerSet, type WorldTheme,
   worldFogUniforms,
@@ -40,6 +40,14 @@ interface ThemeSurface {
   rough: THREE.Vector4;
   /** layer weight bias: grass, dirt, rock, sand */
   bias: THREE.Vector4;
+  /**
+   * Per-layer normal amplitude: grass, dirt, rock, sand. Multiplied by
+   * `uNormalStrength` on top of the bake-time Sobel strength (`LAYER_SOBEL` in
+   * WorldTextures). Dirt and sand are pulled down hard here — a review measured
+   * the off-road shoulder at roughly 5x too strong, reading as corduroy at noon
+   * and as orange tiger stripes at sunset.
+   */
+  normalScale: THREE.Vector4;
   /** sand appears below sandTop and fades over sandFade metres */
   sandTop: number;
   sandFade: number;
@@ -49,27 +57,39 @@ interface ThemeSurface {
 const THEME_SURFACE: Record<WorldTheme, ThemeSurface> = {
   meadow: {
     tile: 9, rough: new THREE.Vector4(0.86, 0.90, 0.74, 0.92),
-    bias: new THREE.Vector4(0.55, 0.18, 0.0, -0.9), sandTop: -1e5, sandFade: 6, detailScale: 4,
+    bias: new THREE.Vector4(0.55, 0.18, 0.0, -0.9),
+    normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.5),
+    sandTop: -1e5, sandFade: 6, detailScale: 4,
   },
   coastal: {
     tile: 8.5, rough: new THREE.Vector4(0.84, 0.90, 0.70, 0.86),
-    bias: new THREE.Vector4(0.42, 0.14, 0.0, 0.15), sandTop: 3.2, sandFade: 5.5, detailScale: 4.5,
+    bias: new THREE.Vector4(0.42, 0.14, 0.0, 0.15),
+    normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.45),
+    sandTop: 3.2, sandFade: 5.5, detailScale: 4.5,
   },
   city: {
     tile: 7.5, rough: new THREE.Vector4(0.88, 0.92, 0.76, 0.92),
-    bias: new THREE.Vector4(0.48, 0.34, 0.0, -0.8), sandTop: -1e5, sandFade: 6, detailScale: 4,
+    bias: new THREE.Vector4(0.48, 0.34, 0.0, -0.8),
+    normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.5),
+    sandTop: -1e5, sandFade: 6, detailScale: 4,
   },
   volcano: {
     tile: 8, rough: new THREE.Vector4(0.78, 0.86, 0.56, 0.84),
-    bias: new THREE.Vector4(0.30, 0.34, 0.22, -0.5), sandTop: -1e5, sandFade: 6, detailScale: 5,
+    bias: new THREE.Vector4(0.30, 0.34, 0.22, -0.5),
+    normalScale: new THREE.Vector4(0.85, 0.65, 1.15, 0.55),
+    sandTop: -1e5, sandFade: 6, detailScale: 5,
   },
   desert: {
     tile: 10, rough: new THREE.Vector4(0.90, 0.92, 0.74, 0.88),
-    bias: new THREE.Vector4(-0.35, 0.30, 0.0, 0.85), sandTop: 1e5, sandFade: 40, detailScale: 5,
+    bias: new THREE.Vector4(-0.35, 0.30, 0.0, 0.85),
+    normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.55),
+    sandTop: 1e5, sandFade: 40, detailScale: 5,
   },
   snow: {
     tile: 9.5, rough: new THREE.Vector4(0.62, 0.90, 0.70, 0.70),
-    bias: new THREE.Vector4(0.85, 0.05, 0.05, -0.9), sandTop: -1e5, sandFade: 6, detailScale: 4,
+    bias: new THREE.Vector4(0.85, 0.05, 0.05, -0.9),
+    normalScale: new THREE.Vector4(0.7, 0.55, 1.0, 0.45),
+    sandTop: -1e5, sandFade: 6, detailScale: 4,
   },
 };
 

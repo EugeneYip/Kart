@@ -304,12 +304,19 @@ export class Weather implements ISubsystem {
         this.wetTarget = 0;
         break;
       case 'leaves':
+        // Readability pass after playtest: a playtester reported the leaves were
+        // "too thick", took up a lot of visual space, and made the track hard to
+        // read. Ambient weather must never compete with the racing line for
+        // attention. Count cut ~3.5x (620 -> 180), the spawn box widened so the
+        // same eye is spread over more volume rather than concentrated in front
+        // of the camera, and opacity dropped so any leaf that does cross the
+        // road reads as a hint of motion rather than an occluder.
         this.addSystem('leaves', {
-          count: Math.round(Math.min(620, budget * 0.4) * b),
-          box: new THREE.Vector3(40, 22, 40),
-          fall: 1.5, size: 0.2, mode: 4,
+          count: Math.round(Math.min(180, budget * 0.12) * b),
+          box: new THREE.Vector3(56, 26, 56),
+          fall: 1.5, size: 0.16, mode: 4,
           color: 0xc8a03c, intensity: 1.0, additive: false, shape: 2,
-          opacity: 0.95,
+          opacity: 0.62,
         });
         this.wetTarget = 0;
         break;

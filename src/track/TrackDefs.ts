@@ -571,18 +571,22 @@ export const TRACKS: Record<string, TrackDef> = {
       // ~1613 m lap, so the pad has to sit inside t=0.692..0.703.
       { t: 0.698, lat: 0, width: 12, length: 16 },
     ],
+    // Three rows per lap, MK8-style. Was six (26 boxes); a playtester reported
+    // constant attacks made a normal race impossible. Rows sit before the
+    // overtaking spots, not on every straight.
     itemRows: [
-      { t: 0.075, count: 5 },
       { t: 0.30, count: 5 },
-      { t: 0.455, count: 3, spread: 10 },
       { t: 0.60, count: 3, spread: 11 },
-      { t: 0.79, count: 5 },
       { t: 0.885, count: 5 },
     ],
+    // Difficulty pass after playtest: NOTHING sits on the racing line any more.
+    // `lat: 0` put a 40 m traffic sweep dead centre, which a playtester called
+    // out as an obstacle in the middle of the road. Hazards now live off-line
+    // where they punish a bad line rather than blocking the good one, and
+    // speeds are down ~35%.
     hazards: [
-      { kind: 'oil', t: 0.436, lat: -3.5 },
-      { kind: 'boulder', t: 0.20, lat: 6, span: 16, speed: 6 },
-      { kind: 'traffic', t: 0.57, lat: 0, span: 40, speed: 9 },
+      { kind: 'oil', t: 0.436, lat: -8.5 },
+      { kind: 'boulder', t: 0.20, lat: 9.5, span: 12, speed: 4 },
       { kind: 'snapper', t: 0.83, lat: -13 },
     ],
   },
@@ -651,21 +655,18 @@ export const TRACKS: Record<string, TrackDef> = {
       { t: 0.762, lat: 0, width: 9, length: 16 },
       { t: 0.30, lat: 0, width: 10, length: 14 },
     ],
+    // Three rows per lap (was seven / 31 boxes).
     itemRows: [
-      { t: 0.05, count: 5 },
       { t: 0.245, count: 5 },
-      { t: 0.335, count: 5 },
       { t: 0.50, count: 3, spread: 14 },
-      { t: 0.665, count: 3, spread: 12 },
       { t: 0.775, count: 5 },
-      { t: 0.93, count: 3, spread: 11 },
     ],
+    // `slider` was at lat 0 (dead centre). Traffic sweeps halved in span and
+    // slowed; one of the two dropped entirely.
     hazards: [
-      { kind: 'oil', t: 0.72, lat: 4 },
-      { kind: 'oil', t: 0.745, lat: -6 },
-      { kind: 'traffic', t: 0.29, lat: 6, span: 60, speed: 12 },
-      { kind: 'traffic', t: 0.36, lat: -6, span: 60, speed: 10 },
-      { kind: 'slider', t: 0.155, lat: 0, span: 12, speed: 5 },
+      { kind: 'oil', t: 0.72, lat: 7 },
+      { kind: 'traffic', t: 0.29, lat: 9, span: 30, speed: 8 },
+      { kind: 'slider', t: 0.155, lat: -9, span: 10, speed: 3 },
     ],
   },
 
@@ -729,21 +730,18 @@ export const TRACKS: Record<string, TrackDef> = {
       { t: 0.545, lat: 4, width: 7, length: 14 },
       { t: 0.79, lat: 0, width: 8, length: 14 },
     ],
+    // Three rows per lap (was seven / 31 boxes).
     itemRows: [
-      { t: 0.06, count: 5 },
-      { t: 0.185, count: 3, spread: 11 },
       { t: 0.33, count: 5 },
-      { t: 0.44, count: 5 },
       { t: 0.575, count: 3, spread: 12 },
-      { t: 0.735, count: 3, spread: 10 },
       { t: 0.90, count: 5 },
     ],
+    // The lat-0 boulder at 8 m/s over a 20 m span was the worst offender
+    // reported — a fast heavy object crossing the racing line. Removed.
     hazards: [
-      { kind: 'fireball', t: 0.355, lat: 8, span: 22, speed: 7 },
-      { kind: 'fireball', t: 0.41, lat: -6, span: 18, speed: 6 },
-      { kind: 'boulder', t: 0.155, lat: 0, span: 20, speed: 8 },
-      { kind: 'boulder', t: 0.50, lat: -14, span: 26, speed: 7 },
-      { kind: 'oil', t: 0.845, lat: 3 },
+      { kind: 'fireball', t: 0.355, lat: 10, span: 16, speed: 5 },
+      { kind: 'boulder', t: 0.50, lat: -15, span: 18, speed: 4 },
+      { kind: 'oil', t: 0.845, lat: 7 },
     ],
   },
 };

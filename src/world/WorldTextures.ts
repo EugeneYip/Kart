@@ -335,16 +335,20 @@ function terrainLayerFns(): LayerFn[] {
       const b = (0.14 + dry * 0.10) * l + 0.02;
       return { r, g, b, h: fine * 0.55 + blades * 0.45 };
     },
-    // 1 — dirt: warm brown, pebbles, dry cracks
+    // 1 — dirt: warm brown, scattered aggregate, dry patches.
+    // The pebble term used to be pow(n,5)*3 contributing 0.6 of the height
+    // field: flat-topped clipped blobs whose edges Sobel'd into hard walls, which
+    // is most of why the shoulder read as ridged plastic. Now it is a gentle
+    // aggregate speckle that shows in the albedo more than in the relief.
     (u, v) => {
       const macro = fbmTile(u, v, 4, 4, 177);
       const grain = fbmTile(u, v, 32, 3, 6607);
-      const peb = Math.pow(fbmTile(u, v, 14, 2, 3313), 5) * 3;
+      const peb = Math.pow(fbmTile(u, v, 14, 2, 3313), 4) * 1.7;
       const l = 0.5 + macro * 0.3 + grain * 0.25;
-      const r = 0.46 * l + peb * 0.14 + 0.04;
-      const g = 0.32 * l + peb * 0.13 + 0.028;
-      const b = 0.20 * l + peb * 0.11 + 0.018;
-      return { r, g, b, h: grain * 0.4 + macro * 0.35 + peb * 0.6 };
+      const r = 0.46 * l + peb * 0.13 + 0.04;
+      const g = 0.32 * l + peb * 0.12 + 0.028;
+      const b = 0.20 * l + peb * 0.10 + 0.018;
+      return { r, g, b, h: grain * 0.46 + macro * 0.40 + peb * 0.22 };
     },
     // 2 — rock: grey stratified stone with cracks
     (u, v) => {
@@ -357,19 +361,37 @@ function terrainLayerFns(): LayerFn[] {
       const b = 0.575 * l + 0.058;
       return { r, g, b, h: strat * 0.5 + grain * 0.2 - crack * 0.55 + 0.5 };
     },
-    // 3 — sand: pale gold with ripples
+    // 3 — sand: pale gold, wind-curved ripples, shell grit.
+    // The old form was `sin(v * 34 + n * 6)`: 34 straight ripples per tile, all
+    // parallel to world Z, carrying 0.55 of the height field. Sobel'd at strength
+    // 2 that is literal corduroy, and at sunset it strobes orange. The crests now
+    // bend through a two-scale domain warp, are 4x coarser, and carry a third of
+    // the relief — the grain and the patchiness do the texturing instead.
     (u, v) => {
-      const rip = fbmTile(u * 1.0, v * 1.0, 6, 3, 401);
-      const ripple = 0.5 + 0.5 * Math.sin((v * 34 + rip * 6) * Math.PI * 2);
+      const warp = fbmTile(u, v, 3, 3, 401);
+      const warp2 = fbmTile(u, v, 7, 2, 4093);
+      const ripple = 0.5 + 0.5 * Math.sin((v * 8 + u * 2.6 + warp * 5.5 + warp2 * 1.7) * Math.PI * 2);
       const grain = fbmTile(u, v, 56, 2, 7717);
-      const l = 0.68 + ripple * 0.13 + grain * 0.14;
+      const patch = fbmTile(u, v, 5, 3, 1223);
+      const l = 0.70 + ripple * 0.06 + grain * 0.12 + patch * 0.11;
       const r = 0.86 * l;
       const g = 0.74 * l;
       const b = 0.52 * l;
-      return { r, g, b, h: ripple * 0.55 + grain * 0.45 };
+      return { r, g, b, h: ripple * 0.26 + grain * 0.40 + patch * 0.34 };
     },
   ];
 }
+
+/**
+ * Per-layer Sobel strength for the baked normal slices: grass, dirt, rock, sand.
+ *
+ * These were a flat 2.0 (3.0 for rock). At that strength the off-road layers read
+ * as ridged plastic — a review measured the shoulder as roughly 5x too strong —
+ * and the per-layer figure matters because grass and rock genuinely want relief
+ * while dirt and sand want almost none. Terrain scales these again per layer at
+ * runtime (`uNormalScale`) so the balance can be tuned without a re-bake.
+ */
+const LAYER_SOBEL: readonly number[] = [1.3, 1.1, 2.2, 0.85];
 
 export function makeTerrainLayers(size = 256, theme: WorldTheme = 'meadow'): TerrainLayerSet {
   const fns = terrainLayerFns();
@@ -399,7 +421,7 @@ export function makeTerrainLayers(size = 256, theme: WorldTheme = 'meadow'): Ter
       }
     }
     // Sobel this layer's height into the normal array slice.
-    const n = heightToNormal(height, size, size, L === 2 ? 3.0 : 2.0);
+    const n = heightToNormal(height, size, size, LAYER_SOBEL[L] ?? 1.2);
     const src = n.image.data as Uint8Array;
     nrm.set(src, off);
     n.dispose();
@@ -432,16 +454,24 @@ export function makeTerrainLayers(size = 256, theme: WorldTheme = 'meadow'): Ter
   };
 }
 
-/** High-frequency detail normal that kills the "plastic" look when overlaid. */
+/**
+ * High-frequency detail normal that kills the "plastic" look when overlaid.
+ *
+ * The old form was `fbmTile(base 16, 4 octaves)` on a 256 texture, i.e. octaves
+ * at 16/32/64/128 cycles — the top octave sits exactly at Nyquist, so it aliased
+ * into a shimmering weave rather than reading as grain, and it mipped straight to
+ * grey. Base 5 puts the finest octave at 40 cycles (≈5 cm at Terrain's 2.2 m
+ * detail tile), which survives mipping and does not strobe.
+ */
 export function makeDetailNormal(size = 256): THREE.DataTexture {
   const h = new Float32Array(size * size);
   const inv = 1 / size;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      h[y * size + x] = fbmTile(x * inv, y * inv, 16, 4, 5077);
+      h[y * size + x] = fbmTile(x * inv, y * inv, 5, 4, 5077);
     }
   }
-  return heightToNormal(h, size, size, 1.4);
+  return heightToNormal(h, size, size, 0.8);
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +695,14 @@ export interface TerrainFieldOptions {
 
 const INF = 1e9;
 
+/**
+ * Metres of road-edge signed distance stored in `TerrainField.edge.r`, each way.
+ * ±24 m at ~2.4 m per texel is ten texels of gradient, so the reconstructed
+ * boundary is smooth at any width the shader asks for. Exported because the
+ * shader has to undo the mapping.
+ */
+export const EDGE_RANGE = 24;
+
 export class TerrainField {
   readonly extent: number;
   readonly res: number;
@@ -684,9 +722,24 @@ export class TerrainField {
   readonly roadDistance: Float32Array;
   /** res*res packed RGBA8 data. */
   readonly data: Uint8Array;
+  /**
+   * res*res packed RGBA8 surfacing field. Deliberately separate from `data`
+   * because it means something different:
+   *   R — signed distance to the road *edge*, remapped over ±EDGE_RANGE metres
+   *   G — wide-scale concavity (0.5 flat, >0.5 valley floor, <0.5 ridge)
+   *
+   * `data.r` is a near-binary road mask with a 3.4 m ramp, and at 2.4 m per texel
+   * that ramp is 1.4 texels wide — bilinear reconstruction of it is a staircase of
+   * 2.4 m blocks, which is exactly the "hard sawtooth material boundary" defect.
+   * A signed distance spread over ±24 m is ~10 texels per unit of ramp, so the
+   * shader can put the transition anywhere, at any width, and break it with noise.
+   * `data.r` is kept unchanged because Foliage keys grass density off it.
+   */
+  readonly edge: Uint8Array;
 
   readonly heightTex: THREE.DataTexture;
   readonly dataTex: THREE.DataTexture;
+  readonly edgeTex: THREE.DataTexture;
 
   minHeight = 0;
   maxHeight = 0;
@@ -725,6 +778,7 @@ export class TerrainField {
     this.height = new Float32Array(n);
     this.roadDistance = new Float32Array(n);
     this.data = new Uint8Array(n * 4);
+    this.edge = new Uint8Array(n * 4);
 
     this.bake();
 
@@ -756,6 +810,19 @@ export class TerrainField {
     d.colorSpace = THREE.NoColorSpace;
     d.needsUpdate = true;
     this.dataTex = d;
+
+    // No mipmaps: this one is a signed distance sampled at ~2.4 m per texel and
+    // read at metre scale near the camera. Mip-averaging a distance field pulls
+    // the zero crossing around, which would put a wobble in the boundary that
+    // moves with camera distance.
+    const e = new THREE.DataTexture(this.edge, opts.res, opts.res, THREE.RGBAFormat);
+    e.wrapS = e.wrapT = THREE.ClampToEdgeWrapping;
+    e.minFilter = THREE.LinearFilter;
+    e.magFilter = THREE.LinearFilter;
+    e.generateMipmaps = false;
+    e.colorSpace = THREE.NoColorSpace;
+    e.needsUpdate = true;
+    this.edgeTex = e;
   }
 
   // --- natural (pre-road) height ---------------------------------------------
@@ -857,6 +924,7 @@ export class TerrainField {
     const SINK = 0.16;   // terrain sits this far under the road surface
     const INNER = 2.2;   // metres past the road edge that stay dead flat
     const BAND = 30.0;   // blend distance back to natural terrain
+    const edgeSdf = new Float32Array(n);
     let lo = INF, hi = -INF;
     for (let ty = 0; ty < res; ty++) {
       const wz = this.originZ + (ty + 0.5) * mpt;
@@ -865,18 +933,45 @@ export class TerrainField {
         const i = ty * res + tx;
         let h = this.naturalHeightAt(wx, wz);
         const d = dist[i];
+        let sdf = -EDGE_RANGE;
         if (d < INF) {
-          const edge = halfW[i] + INNER;
+          // Wander the corridor edge at two scales. Without this the edge is an
+          // exact constant offset of the centreline, so both the flat-shoulder
+          // boundary *and* the surfacing transition that follows it are perfectly
+          // parallel to the road — the straight chain of vertices the review
+          // flagged. ±3 m of wander over ~12 m and ~48 m features breaks the
+          // silhouette while changing off-road height by at most a few cm (the
+          // blend runs over 30 m, so the weight barely moves).
+          const wander =
+            (fbm2D(wx * 0.085, wz * 0.085, 2, this.seed + 404) - 0.5) * 2.6 +
+            (fbm2D(wx * 0.021, wz * 0.021, 2, this.seed + 811) - 0.5) * 3.4;
+          const edge = halfW[i] + INNER + wander;
+          sdf = edge - d;
           const w = 1 - smootherstep((d - edge) / BAND);
           if (w > 0) h = h + (roadH[i] - SINK - h) * w;
         }
         this.height[i] = h;
+        edgeSdf[i] = sdf;
         if (h < lo) lo = h;
         if (h > hi) hi = h;
       }
     }
     this.minHeight = lo;
     this.maxHeight = hi;
+
+    // ---- surfacing field ----------------------------------------------------
+    // R is the signed distance above; G is concavity at ~29 m, which is what
+    // makes dirt collect in hollows and dry aggregate sit on ridges. That kind of
+    // macro variation reads at any distance, unlike a tiled texture, and it is
+    // far too wide a kernel to evaluate per fragment.
+    const wide = boxBlur(this.height, res, Math.max(3, Math.round(29 / mpt)));
+    for (let i = 0; i < n; i++) {
+      const o = i * 4;
+      this.edge[o] = (clamp01(0.5 + edgeSdf[i] / (2 * EDGE_RANGE)) * 255) | 0;
+      this.edge[o + 1] = (clamp01(0.5 + (wide[i] - this.height[i]) * 0.055) * 255) | 0;
+      this.edge[o + 2] = 0;
+      this.edge[o + 3] = 255;
+    }
 
     // ---- data channels ------------------------------------------------------
     // AO from a wide box blur of the height field: concavity darkens.
@@ -981,6 +1076,7 @@ export class TerrainField {
   dispose(): void {
     this.heightTex.dispose();
     this.dataTex.dispose();
+    this.edgeTex.dispose();
   }
 }
 
@@ -1126,6 +1222,23 @@ float fieldShadow(vec3 wp, vec3 sd){
   occ = clamp(occ, 0.0, 1.0);
   return 1.0 - occ * occ * (3.0 - 2.0 * occ);
 }
+`;
+
+/**
+ * Road-edge signed distance + wide concavity. Separate from GLSL_FIELD so that
+ * only the materials that want it (Terrain) declare the extra sampler — Foliage
+ * and Water are untouched.
+ *
+ * `roadEdgeMetres` is positive inside the road corridor, negative outside, in
+ * metres, saturating at ±EDGE_RANGE. Sample it in the *vertex* shader and
+ * interpolate: it is a distance field baked at 2.4 m per texel and the terrain
+ * grid is finer than that near the camera, so the interpolant is exact where it
+ * matters and free in the fragment shader.
+ */
+export const GLSL_FIELD_EDGE = /* glsl */ `
+uniform sampler2D uFieldEdge;
+vec2 fieldEdgeRaw(vec2 wxz){ return texture2D(uFieldEdge, fieldUv(wxz)).rg; }
+float roadEdgeMetres(vec2 wxz){ return (texture2D(uFieldEdge, fieldUv(wxz)).r - 0.5) * ${(EDGE_RANGE * 2).toFixed(1)}; }
 `;
 
 export interface FieldUniforms {

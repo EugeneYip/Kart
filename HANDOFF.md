@@ -2,6 +2,61 @@
 
 ---
 
+## 🔴 P0b — SECOND HUMAN PLAYTEST (current priority)
+
+The through-line is explicit and should be treated as a **design direction, not
+six separate bugs**: *the game is too punishing and too cluttered.* When in
+doubt on anything below, choose forgiving and legible.
+
+### Fixed directly by the integrator (config/numeric, verified by typecheck)
+
+| # | Report | What it actually was |
+|---|---|---|
+| ~~P0b-1~~ | Items far too dense, "impossible to have a normal race" | **26–31 boxes/lap across 6–7 rows**, respawning every 3 s. Now **3 rows/lap** (11–13 boxes) and `BOX_RESPAWN` 3.0 → **6.0 s**. MK8 uses 2–3 rows. |
+| ~~P0b-2~~ | Item box half buried at the start | `ItemSystem`'s **fallback** spawn path lifted boxes only **1.35 m**, but a tumbling+bobbing 1.72 m box reaches **1.47 m** below centre — so it cut ~12 cm through the tarmac. The authored `TrackBuilder` path correctly used 1.70 m; the two disagreed. Now both use the new exported `ITEM_BOX_LIFT`. The fallback also emitted **40 boxes** (8 rows × 5), more than the authored layout — now 2–3 rows × 3. |
+| ~~P0b-3~~ | Boulders/obstacles in the middle of the road | Three hazards were authored at **`lat: 0`, dead centre**: a 40 m traffic sweep (coastal), a slider (neon), and an 8 m/s boulder over a 20 m span (volcano — the worst). **Nothing sits on the racing line now**; hazards 14 → 9, speeds down ~35–50 %, spans cut. |
+| ~~P0b-4~~ | Fallen leaves too thick, hard to see the track | 620 leaves in a 40×22×40 box at 0.95 opacity. Now **180** in a wider 56×26×56 box at **0.62** opacity, size 0.20 → 0.16. Ambient weather must never compete with the racing line for attention. |
+
+### 🔴 Still open — these need an agent
+
+**P0b-5 — Edge contact should be FRICTION, not a collision. Owner: `src/physics/KartCollision.ts`**
+
+The playtester's own model, and it is a better design than what we have:
+> *"Touching the edge of the track should not be considered a collision penalty.
+> Perhaps it could instead cause friction and slow the player down. Only when the
+> player goes outside the boundary should they need to be pulled back."*
+
+The previous pass made walls *forgiving* (5° graze now retains 97.7 %) but kept
+them **collisions**. This asks for a different model entirely:
+- **Edge/verge contact** → a continuous friction/drag term while touching. No
+  impulse, no yaw kick, no spark-and-scrub event, no discrete penalty at all.
+- **Only leaving the playable surface** triggers the recovery/pull-back path.
+- Reserve genuine collision response for real solid geometry (barriers, walls,
+  buildings), and even there see P0b-6.
+
+**P0b-6 — Buildings should slow you, not penalise you. Owner: `src/physics/*`**
+> *"Even outside the tunnel, buildings should perhaps only slow the player down
+> when touched; having contact immediately result in a penalty would reduce the
+> gameplay experience."*
+
+Introduce a **soft-collider** class: scenery you can scrape along with a drag
+cost, distinct from track-boundary walls. Same spirit as P0b-5.
+
+**P0b-7 — Tunnel scene clipping. Owner: `src/world/Props.ts`**
+> *"During the tunnel section, buildings were clipping through the walls and
+> appearing inside the tunnel. This creates unnecessary additional obstacles."*
+
+The road-clearance test added last round checks lateral distance from the spline
+but evidently **not tunnel interiors** — a building outside the tunnel wall still
+clears the road laterally while poking through into the bore. Add a volume test
+against tunnel/bridge segments and reject or push props out. Verify numerically
+by walking the tunnel arc-length range and testing prop bounding boxes against
+the tunnel's interior volume.
+
+---
+
+---
+
 ## ✅ P0 — HUMAN PLAYTEST REPORT — ALL 7 FIXED
 
 All seven defects from the play session are resolved and measured. Two of them

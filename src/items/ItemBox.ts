@@ -32,7 +32,27 @@ const SHARDS_PER_BREAK = 14;
 
 export const BOX_SIZE = 1.72;
 export const BOX_PICKUP_RADIUS = 1.55;
-export const BOX_RESPAWN = 3.0;
+
+/**
+ * Seconds before a collected box returns.
+ *
+ * Raised from 3.0: with 26–31 authored boxes per lap a 3 s respawn meant a
+ * player was holding an item almost continuously, and a playtester reported it
+ * was "impossible to have a normal race". Rows were thinned at the same time;
+ * this is the second half of that change.
+ */
+export const BOX_RESPAWN = 6.0;
+
+/**
+ * Height of a box's centre above the road, metres.
+ *
+ * NOT a free parameter. The box tumbles (±0.32 rad) and bobs (±0.10 m), so its
+ * lowest corner reaches ~1.47 m below centre; 1.70 m leaves ~0.23 m of
+ * clearance over the road crown. Anything that positions a box — the authored
+ * path in TrackBuilder and the fallback in ItemSystem alike — must use this,
+ * or boxes clip through the tarmac.
+ */
+export const ITEM_BOX_LIFT = 1.7;
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
