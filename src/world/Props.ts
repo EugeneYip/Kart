@@ -1394,7 +1394,12 @@ export class Props implements ISubsystem {
       });
       const b = this.builder();
       // Board face + frame + feet, one merged geometry drawn with the atlas.
-      b.plate(0, 1.55, 0.06, 6.4, 2.1, 0, 0xffffff, { single: false, uvRect: [0.02, 0.06, 0.98, 0.94] });
+      // v TOP-FIRST — see the `V_TOP_FIRST` note above `atlasRect()`. `plate()`
+      // sends the geometry's top edge to the rect's *first* v, and
+      // `canvasTexture()` keeps three's `flipY = true` so v = 1 is the canvas
+      // top. Passing an ascending v range here rendered the text upside down
+      // (verified on screen: "CHAMPIONSHIP" appeared vertically mirrored).
+      b.plate(0, 1.55, 0.06, 6.4, 2.1, 0, 0xffffff, { single: false, uvRect: [0.02, 0.94, 0.98, 0.06] });
       this.emit('sponsorBoard', b.build('sponsorBoard'), this.atlas, anchors,
         { cull: CULL_NEAR, atlasCells: 8, shadow: true });
 
@@ -1447,7 +1452,8 @@ export class Props implements ISubsystem {
         }
       }
       const b = this.builder();
-      b.plate(0, 2.3, 0, 6.1, 4.2, 0, 0xdfe4ea, { single: true, uvRect: [0, 0, 1, 1] });
+      // v top-first (see `atlasRect()` note) so the artwork isn't flipped.
+      b.plate(0, 2.3, 0, 6.1, 4.2, 0, 0xdfe4ea, { single: true, uvRect: [0, 1, 1, 0] });
       this.emit('catchFence', b.build('catchFence'), this.fence, anchors,
         { cull: CULL_NEAR, shadow: false });
       const p = this.builder();
@@ -1600,7 +1606,8 @@ export class Props implements ISubsystem {
       const anchors = roadside(ctx, rng, { spacing: 95, min: 4, max: 6.5, limit: this.count(18) });
       const b = this.builder();
       b.prism(0, 0, 0, 0.08, 2.4, 6, 0x8f959d, { capBottom: true });
-      b.plate(0, 2.6, 0.05, 1.5, 1.0, 0, 0xffffff, { uvRect: [0.05, 0.1, 0.95, 0.9] });
+      // v top-first (see `atlasRect()` note) so the sign face isn't flipped.
+      b.plate(0, 2.6, 0.05, 1.5, 1.0, 0, 0xffffff, { uvRect: [0.05, 0.9, 0.95, 0.1] });
       this.emit('roadSign', b.build('roadSign'), this.atlas, anchors,
         { cull: 200, atlasCells: 8 });
     }

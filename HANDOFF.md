@@ -27,21 +27,45 @@ stacks.
    ~10-line test: sum the signed volume of the triangle fan and confirm it is
    positive, and confirm face normals agree with winding.
 
-## ⚠️ 0b. PENDING ONE SCREENSHOT — the `v` axis in `plate()`/`banner()`
+## 0b. The `v` axis — RESOLVED. The `u` axis on old signs — STILL OPEN.
 
-`banner()` has **no `u` inversion** (it already carries the corrected mapping).
-But **both `plate()` and `banner()` invert `v`**: they send the geometry's top
-edge to the rect's *first* `v`, while `canvasTexture()` leaves three's default
-`flipY = true`, so `v = 1` is the canvas top. Net effect: atlas text is **upside
-down**.
+**Owner: `src/world/Props.ts` (world agent)**
 
-The shared helpers were deliberately **left unchanged** pending one observation.
-New signage routes through a documented `atlasRect(cell)` that orders `v`
-top-first, so it is upright by construction. **The test:** if the grandstand's
-sponsor band reads upright while the trackside boards read upside down, then flip
-the `v` range in `plate()`/`banner()` and set `V_TOP_FIRST = false`.
+Screenshot test done. Result differed from the prediction, so read this before
+acting.
 
-Resolve this with a single screenshot before anyone touches the helpers.
+**`plate()`'s `v` convention is CORRECT and `V_TOP_FIRST` should stay `true`.**
+Do not flip the shared helper. The bug was in three **callers** passing an
+ascending `v` range, which sends the geometry's top edge to the canvas bottom:
+
+| line | sign | was | now |
+|---|---|---|---|
+| ~1397 | `sponsorBoard` | `[0.02, 0.06, 0.98, 0.94]` | `[0.02, 0.94, 0.98, 0.06]` |
+| ~1450 | (billboard face) | `[0, 0, 1, 1]` | `[0, 1, 1, 0]` |
+| ~1603 | `roadSign` | `[0.05, 0.1, 0.95, 0.9]` | `[0.05, 0.9, 0.95, 0.1]` |
+
+**Verified by observation:** before the change the small "APEX KART
+CHAMPIONSHIP" caption rendered at the **top** of the board; it is drawn at
+`y + ch * 0.82`, i.e. near the cell **bottom**. After the change it renders at
+the bottom. Vertical layout is now correct. `atlasRect()` was already right —
+new signage built through it needs no change.
+
+**STILL OPEN — `u` on `sponsorBoard` specifically.** Its glyphs still read
+horizontally mirrored after the `v` fix. Note this is *not* a general `plate()`
+`u` bug: the `u` swap in `plate()` was verified earlier by a runtime `u` mirror
+that made the trackside boards read "TORQUE"/"AXP"/"EMBER" correctly, and
+`banner()` already carries the corrected mapping. So suspect **the instance
+anchor's yaw for `sponsorBoard` being 180° out** — i.e. we are looking at the
+plate's back face and reading its (correctly) mirrored reverse — rather than a
+UV bug. Two checks that will settle it:
+1. Emit the board with `single: true` temporarily. If it then disappears when
+   viewed from the track, the anchor yaw is backwards.
+2. Compare against `Prop:grandstandSign:46x6`, which goes through `atlasRect`
+   and should read correctly from the track — if that one is fine and only
+   `sponsorBoard` is mirrored, it is placement, not UV.
+
+Reproduce at: camera `(-6, 2.2, 2.3)` looking at `(-17, 1.5, 2.3)`, fov 32,
+`day` sky, HUD off. `sponsorBoard` instance 0 sits at `(-17, -0.2, 2.3)`.
 
 ---
 
