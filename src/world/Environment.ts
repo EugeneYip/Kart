@@ -31,7 +31,7 @@ import { Rng, clamp, clamp01, damp } from '@/core/MathUtils';
 import {
   TerrainField, worldRegistry,
   type DecorationHints, type DecorationProp, type PathStation,
-  type WorldContext, type WorldTheme,
+  type PropSurfaceHint, type WorldContext, type WorldTheme,
 } from './WorldTextures';
 import { Terrain } from './Terrain';
 import { Foliage } from './Foliage';
@@ -369,6 +369,7 @@ export class Environment implements ISubsystem {
           position: _v.copy(pos).clone(),
           rotation: (p as DecorationProp).rotation,
           scale: (p as DecorationProp).scale,
+          surface: readSurfaceHint((p as DecorationProp).surface),
         });
       }
     }
@@ -714,6 +715,27 @@ function defaultWaterLevel(theme: WorldTheme): number {
     case 'city': return -9;
     default: return -7;
   }
+}
+
+/**
+ * Validate a `PropSurfaceHint`-ish object. Optional the whole way down: a track
+ * that publishes nothing gets `undefined`, and `Props` then takes the authored
+ * position exactly as given (the pre-existing behaviour). A track that publishes
+ * a partial or nonsense hint must not be able to teleport a prop, so every field
+ * has to arrive finite before any of it is trusted.
+ */
+function readSurfaceHint(raw: unknown): PropSurfaceHint | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const s = raw as Partial<PropSurfaceHint>;
+  if (!Number.isFinite(s.up) || !Number.isFinite(s.lat) || !Number.isFinite(s.corridor)) {
+    return undefined;
+  }
+  return {
+    up: clamp(s.up as number, -400, 400),
+    lat: s.lat as number,
+    corridor: Math.max(0, s.corridor as number),
+    elevated: s.elevated === true,
+  };
 }
 
 /** Validate a TrackSample-ish object into something we can trust. */

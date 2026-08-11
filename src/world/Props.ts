@@ -132,6 +132,13 @@ interface Anchor {
    * reject a lamp post's mast and keep its lit head hanging in the tunnel.
    */
   blocked?: boolean;
+  /**
+   * Authored offset from the surface, metres — only set for authored anchors that
+   * `collectAuthored()` re-seated. Kept so anything that re-seats the anchor
+   * again (the road-volume push in `clearAuthored()`) preserves it instead of
+   * planting a prop authored to hang below grade flat on the ground.
+   */
+  up?: number;
 }
 
 // ===========================================================================
@@ -1194,6 +1201,74 @@ const CORRIDOR_PROPS = new Set([
   'bridgepylon', 'spiralpylon', 'monorailpylon', 'agpylon', 'energypylon',
 ]);
 
+/**
+ * ======================= RE-SEATING AUTHORED PROPS =========================
+ *
+ * `Track.getDecorationHints()` resolves every authored prop's Y from the ROAD
+ * surface plane, because that is the only surface Track has: the heightfield is
+ * baked *from* the centreline, so Track cannot ask it anything. For a prop
+ * authored beyond the shoulder it clamps the lateral offset into the corridor and
+ * evaluates the cross-section there, so the prop keeps its true lateral position
+ * but takes a height from the corridor edge — it sinks wherever the ground rises
+ * above the road and floats wherever the ground falls away. `towerBlock` at
+ * lat 46 came out 5.9 m underground; on the other side of the same corner another
+ * one hung 6.2 m in the air, the neon `skyscraper` run at lat 74 was 29 m under
+ * on one flank and 27 m over on the other, and `arcologyTower` at lat -62 floated
+ * 27 m — all of them seated on a plane extrapolated 60 m sideways.
+ *
+ * We DO have the heightfield, and `PropSurfaceHint` carries the terms of Track's
+ * calculation rather than only its total, so the answer can be redone here
+ * without losing the authored `up`. Five conditions, all of them necessary:
+ *
+ *  1. `|lat| > corridor` — the prop is outside the drawn road surface, which is
+ *     exactly when Track's clamp fired and its answer became an extrapolation.
+ *     Inside the corridor the prop stands on the road mesh and Track's height is
+ *     the definition of that surface; re-seating it there would replace a correct
+ *     answer with a bake residual.
+ *  2. not a `CORRIDOR_PROPS` type. A gate, portal or pylon has a vertical
+ *     relationship with the carriageway that the ground knows nothing about, and
+ *     several are authored at lat 0 with a deliberate `up` (holoAd floats 11-13 m
+ *     over the asphalt, bridgePylon/spiralPylon hang 12-22 m BELOW the deck).
+ *     Belt and braces with (1) — a lat-0 prop can never trip (1) anyway — but
+ *     `holoAd` also appears at lat -20, which would.
+ *  3. not a `PLINTH_PROPS` type — see below.
+ *  4. not `elevated`. On a bridge deck or inside a tunnel bore the road is a
+ *     structure: at volcano t=0.565 the carriageway is 46.9 m up with the basin
+ *     floor at 7.2 m. A prop authored beside a deck was authored in the deck's
+ *     frame, so dropping it 40 m to natural ground would move it out of the
+ *     composition entirely and usually out of sight. Deliberately unchanged.
+ *     Without this gate an `obsidianSpire` beside the volcano helix falls 44 m.
+ *  5. the ground is above water. Below the waterline the heightfield is a seabed,
+ *     which is not a surface anything stands on — coastal's `sailboat` at lat -74
+ *     would go 28 m down onto it and its `buoy` run 16 m, and neither is even
+ *     visible from the circuit once it is under the sea. Same test the procedural
+ *     scatterers make (`roadside()` refuses a wet anchor outright); here it means
+ *     "leave Track's answer alone", which at least keeps the hull near the
+ *     surface. Sea dressing wants the water plane, and nothing in this pass knows
+ *     that, so it is left as it was found.
+ *
+ * There is no seam at the corridor edge, which is the reason this is safe: the
+ * bake flattens the terrain onto the road plane out to `halfWidth + 2.2 m` and
+ * blends back to natural ground over the following 30 m, so just outside the
+ * corridor `heightAt()` *is* the road plane, and the two answers agree to
+ * centimetres. Re-seating only starts to move a prop as the terrain genuinely
+ * departs from the road.
+ */
+
+/**
+ * Authored types that must keep the road datum even though they stand outside the
+ * corridor, because their recipe already solves the cross-fall: `standParts()`
+ * builds the terrace plinth down to -3.2 m for exactly that reason. A stand is
+ * 25-46 m wide — wider than the blend ramp it straddles — so a single point
+ * sample of the ramp is not a height it can stand on: seating its centre on the
+ * ramp digs its road-facing terrace into the bank while the outboard end still
+ * hangs over the fall. The corridor edge is the datum the terraces were drawn
+ * from and the one the crowd is seated against. (`.probe-tmp/buried.ts` reaches
+ * the same conclusion from the other side: `DESIGNED_SKIRT` measures these from
+ * their origin instead of their lowest vertex.)
+ */
+const PLINTH_PROPS = new Set(['grandstand', 'crowdstand']);
+
 const SHADOW_MIN_RADIUS = 0.95;
 
 /**
@@ -1546,7 +1621,9 @@ export class Props implements ISubsystem {
         a.z += dir.z * stepOut;
         moved += stepOut;
         // Re-seat on the ground it has moved onto, else a pushed prop floats.
-        a.y = this.field.heightAt(a.x, a.z);
+        // `a.up` keeps an authored below-grade offset (volcano's lavaFountain is
+        // authored 6 m under the surface so it erupts out of it).
+        a.y = this.field.heightAt(a.x, a.z) + (a.up ?? 0);
         if (iter === 7) { a.blocked = true; dropped++; }
       }
       if (moved > 0 && a.blocked !== true) { pushed++; a.blocked = false; }
@@ -2562,6 +2639,8 @@ export class Props implements ISubsystem {
     if (!props || !props.length) return;
     const byType = this.authored;
     const unknown = new Set<string>();
+    let reseated = 0;
+    let worstReseat = 0;
 
     for (const p of props) {
       const key = normaliseType(p.type);
@@ -2582,14 +2661,52 @@ export class Props implements ISubsystem {
       let scale = 1;
       if (typeof p.scale === 'number') scale = p.scale;
       else if (p.scale && typeof (p.scale as THREE.Vector3).y === 'number') scale = (p.scale as THREE.Vector3).y;
+      // See the RE-SEATING block above for why these five conditions and no
+      // others. `up` is added back on top of the new surface so a prop authored
+      // to hang below grade (volcano's `lavaFountain` at lat 44, `up: -6`) still
+      // hangs the same distance below the ground it is now standing on.
+      let y = p.position.y;
+      const surf = p.surface;
+      // `groundUp` stays undefined unless we re-seated: only then is the offset
+      // known to be measured from the GROUND. Volcano's `lavaFountain` at lat 0
+      // is `up: -26` under a bridge DECK, and handing that to `clearAuthored()`'s
+      // push would bury it 26 m under the basin floor instead.
+      let groundUp: number | undefined;
+      if (
+        surf !== undefined
+        && Math.abs(surf.lat) > surf.corridor
+        && !surf.elevated
+        && !CORRIDOR_PROPS.has(key)
+        && !PLINTH_PROPS.has(key)
+      ) {
+        // The ground, not the ground plus `up`: a prop authored to sit below
+        // grade still needs the grade itself to be dry land.
+        const ground = this.field.heightAt(p.position.x, p.position.z);
+        if (ground >= this.ctx.waterLevel) {
+          const seated = ground + surf.up;
+          if (Math.abs(seated - y) > 1e-3) {
+            worstReseat = Math.max(worstReseat, Math.abs(seated - y));
+            reseated++;
+            y = seated;
+          }
+          groundUp = surf.up;
+        }
+      }
       list.push({
-        x: p.position.x, y: p.position.y, z: p.position.z,
+        x: p.position.x, y, z: p.position.z,
         yaw, side: 0, arc: 0, scale: clamp(scale, 0.15, 12), seed: this.rng.next(),
+        up: groundUp,
       });
     }
 
     if (unknown.size) {
       console.info('[Props] track requested prop types with no builder:', [...unknown].join(', '));
+    }
+    if (reseated) {
+      console.info(
+        `[Props] re-seated ${reseated} authored props onto the heightfield`
+        + ` (outside the road corridor; worst correction ${worstReseat.toFixed(2)} m)`,
+      );
     }
   }
 

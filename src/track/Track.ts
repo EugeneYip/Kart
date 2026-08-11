@@ -107,10 +107,42 @@ interface BoostZone {
   lat1: number;
 }
 
+/**
+ * How `place()` below resolved a prop's world Y. Published because Track can
+ * only ever answer with the ROAD surface plane: it has no terrain field, and the
+ * terrain field is baked *from* the track, so the dependency cannot be inverted.
+ * A prop authored beyond the shoulder therefore comes out at its true lateral
+ * offset but at a height extrapolated from the corridor edge — which sinks it
+ * where the ground falls away and floats it where the ground rises.
+ *
+ * The world dresser owns the heightfield and can fix that, but only if it can
+ * still tell the authored `up` offset apart from the surface height it was added
+ * to. Once both are folded into `position.y` that is unrecoverable, so hand over
+ * the terms instead of just the total. Mirrors `PropSurfaceHint` in
+ * `src/world/WorldTextures.ts` — structural, not imported, because Track must not
+ * depend on a subsystem.
+ */
+export interface PropSurfaceHint {
+  /** Authored offset along the road normal, metres. Already inside `position`. */
+  up: number;
+  /** Authored lateral offset from the centreline, metres. + = driver's right. */
+  lat: number;
+  /** Half-width of the drawn surface here: asphalt + kerb + shoulder. */
+  corridor: number;
+  /** Road here is a bridge deck / tunnel bore, not natural ground. */
+  elevated: boolean;
+}
+
 export interface DecorationHints {
   theme: string;
   skyPreset: string;
-  props: Array<{ type: string; position: THREE.Vector3; rotation: number; scale: number }>;
+  props: Array<{
+    type: string;
+    position: THREE.Vector3;
+    rotation: number;
+    scale: number;
+    surface: PropSurfaceHint;
+  }>;
   terrainSeed: number;
   waterLevel: number | null;
 }
@@ -644,13 +676,19 @@ export class Track implements ITrackService, ISubsystem {
       const s = this.spline.sampleAtDistance(d, _work);
       this.spline.attribsAtDistance(s.distance, _at);
       const sh = lat < 0 ? _at.shoulderL : _at.shoulderR;
+      // The drawn road surface stops at the shoulder edge; there is no surface
+      // function past it, and no terrain here to ask instead.
+      const corridor = _at.halfWidth + CROSS.kerbW + sh;
       // Props outside the corridor sit on the shoulder plane extended outward.
-      const clampedLat = clamp(lat, -(_at.halfWidth + CROSS.kerbW + sh), _at.halfWidth + CROSS.kerbW + sh);
+      // That is a placeholder, not an answer — `surface` below tells the world
+      // dresser as much, so it can re-seat them on the heightfield it owns.
+      const clampedLat = clamp(lat, -corridor, corridor);
       const h = surfaceHeight(clampedLat, _at.halfWidth, sh, s.distance, false);
+      const up = spec.up ?? 0;
       const pos = new THREE.Vector3()
         .copy(s.position)
         .addScaledVector(s.binormal, lat)
-        .addScaledVector(s.normal, h + (spec.up ?? 0));
+        .addScaledVector(s.normal, h + up);
       // See the PROP ORIENTATION block above: gates span the road (local +X
       // along the binormal), everything else faces it (local +Z at the road).
       // A "gate" type authored *outside* the asphalt is not straddling anything —
@@ -667,7 +705,21 @@ export class Track implements ITrackService, ISubsystem {
         yaw = Math.atan2(_v0.x, _v0.z);
       }
       yaw += spec.yaw ?? 0;
-      props.push({ type: spec.type, position: pos, rotation: yaw, scale: spec.scale ?? 1 });
+      props.push({
+        type: spec.type,
+        position: pos,
+        rotation: yaw,
+        scale: spec.scale ?? 1,
+        surface: {
+          up,
+          lat,
+          corridor,
+          // A deck or a bore is a structure, not ground: at volcano t=0.565 the
+          // carriageway is 40 m above the basin floor. Anything authored beside
+          // it was authored in the deck's frame and must stay there.
+          elevated: (_at.flags & (TF.Bridge | TF.Tunnel)) !== 0,
+        },
+      });
     };
 
     for (const spec of this.def.props) {

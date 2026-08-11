@@ -20,6 +20,43 @@ import { clamp01, smootherstep } from '@/core/MathUtils';
 
 export type WorldTheme = 'coastal' | 'city' | 'volcano' | 'meadow' | 'desert' | 'snow';
 
+/**
+ * How `Track` arrived at an authored prop's world Y — enough of it that a
+ * consumer which owns the real ground can redo the answer.
+ *
+ * `Track` has no heightfield (the heightfield is baked *from* the track, so the
+ * dependency cannot run the other way) and can only offer the road surface
+ * plane. For a prop authored beyond the shoulder it therefore extrapolates that
+ * plane outward: `position` is at the true lateral offset but at a height taken
+ * from the corridor edge. Where the terrain falls away from the road those props
+ * sink and where it rises they float. Publishing the pieces of the calculation —
+ * rather than only its result — is what lets the world dresser re-seat them on
+ * the heightfield *without losing the author's `up`*, which is otherwise
+ * unrecoverable once it has been folded into `position`.
+ */
+export interface PropSurfaceHint {
+  /**
+   * Authored offset along the road normal, metres, ALREADY included in
+   * `position`. Subtract it to recover the surface height that was used, or add
+   * it back on top of a different surface.
+   */
+  up: number;
+  /** Authored lateral offset from the centreline, metres. + = driver's right. */
+  lat: number;
+  /**
+   * Half-width of the *drawn* road surface at this station: asphalt + kerb +
+   * shoulder. `|lat| > corridor` means `position.y` is an extrapolation, not the
+   * surface the prop actually stands on.
+   */
+  corridor: number;
+  /**
+   * The road here is a bridge deck or a tunnel bore, i.e. `position.y` is a
+   * structure height that may be tens of metres off natural ground. A consumer
+   * re-seating props must leave these alone.
+   */
+  elevated: boolean;
+}
+
 /** One authored prop placement coming out of `track.getDecorationHints()`. */
 export interface DecorationProp {
   type: string;
@@ -27,6 +64,11 @@ export interface DecorationProp {
   /** Y rotation in radians, or a full euler. */
   rotation?: number | THREE.Euler;
   scale?: number | THREE.Vector3;
+  /**
+   * Optional. Absent for any track that does not publish it, in which case
+   * `position` is taken exactly as given — see `PropSurfaceHint`.
+   */
+  surface?: PropSurfaceHint;
 }
 
 export interface DecorationHints {
