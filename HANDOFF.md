@@ -2,6 +2,55 @@
 
 ---
 
+## 🔴 P0f — VERIFIED ON SCREEN, plus a regression the sweep missed
+
+First pane session since `cd390f5`. Captured at 800×450 (the only 1:1 size).
+
+### Confirmed FIXED, seen with my own eyes
+- **Boot screen** reads cleanly: "FOXY KART / GRAND PRIX / PRESS START", gold
+  logotype, SVG busts gone, and **no hairline artifacts** in the text.
+- **`renderPortrait` works.** Returns real 220×220 canvases — 5000+ distinct
+  colours, 100 % opaque, mean luminance 112–128 — and they are *recognisable*:
+  Foxy is a fox with round spectacles and a beret, Capy a capybara in a bucket
+  hat, and the eight humans are distinct helmets. E2 is closed.
+- **The card grid uses them.** `.ak-card--char` inner elements carry real
+  `url("data:image/png;base64,…")` backgrounds, and all ten portraits render on
+  CHOOSE YOUR RACER. The owner's "avatar isn't displayed" is closed.
+- **Coin counter gone** from the HUD.
+
+### 🔴 F1 — TEXT OVERFLOW REGRESSION from the `--u-min: 11px` floor in `ccabb50`
+
+The floor fixed unreadably small menu text but **broke layouts that were sized
+for the old small text.** Seen clearly on two screens:
+
+- CHOOSE YOUR RACER: the gold badge reads **"MASCO"** — the T is clipped off.
+  Stat labels are clipped AND overlapped by their bars: **"WEIGH"**, **"HANDLI"**,
+  **"TRACTI"** instead of WEIGHT / HANDLING / TRACTION.
+- CHOOSE YOUR KART: card tags clip badly — **"HEAVYWE"**, **"SPEEDSTEI"** — and
+  "OFF-ROAD TRAIL BUGGY" / "ANTI-GRAV HOVER RACER" wrap out of their cards.
+
+**Why the 396-configuration sweep in `ccabb50` reported 0 overflow and this got
+through anyway** — worth understanding before re-running it as proof:
+the sweep asserted `scrollWidth <= clientWidth` and rect containment, but these
+elements clip *horizontally inside flex rows* where the parent is sized from
+content, so `scrollWidth` never exceeds `clientWidth` — the row just squeezes its
+siblings. Whatever fix lands must assert something that can actually catch this:
+compare each label's `getBoundingClientRect()` against its *sibling's* rect for
+overlap, and compare rendered text width (canvas `measureText` or a range rect)
+against the element's own width, not the scroll box.
+
+The fix is layout, not the floor: give the stat-label column a `--u`-derived width
+that holds 11 px "MINI-TURBO", let the badge size to its content, and let the kart
+cards wrap on two lines at a floor-aware height.
+
+### 🔴 F2 — the main-menu heading renders twice: "MAIN MENUMAIN MENU"
+
+Minor but visible. Reproduced by calling `menus.showMainMenu()` when the main
+menu is already built — the title text is appended rather than replaced. Likely a
+missing clear in `makeScreen`/`showMainMenu`.
+
+---
+
 ## 🔴 P0e — FOURTH PLAYTEST: what is still open after `cd390f5`
 
 ### Fixed and verified in `cd390f5`
