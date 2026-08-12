@@ -128,6 +128,27 @@ several AI karts genuinely finish on the same tick. Check `Results.ts` / the
 
 ---
 
+## ✅ TWO OWNER DECISIONS — settled, do not re-litigate
+
+**Drift stays. Make it EASY, do not delete it.** The owner clarified their reason:
+*"it is really hard to perform, it'd be better to have it removed unless it's easier
+to activate."* So the complaint is the input barrier, not the mechanic. Today drift
+is a two-stage timed input — press the button, wait out ~0.32 s of hop, and be
+holding `|steer| >= 0.26` at the exact instant of touchdown, or nothing happens with
+no feedback. Fix the entry, keep the skill in the hold and release. Removing it
+would take the hop, the mini-turbo, the charge tiers and the primary boost source
+with it, and would invalidate the AI overtaking tune in `184ac0e` and the trick
+arming in `8191fd9`.
+
+**Split-screen two-player is CANCELLED.** The owner: *"If a split screen two players
+mode will cost the smoothness of the game, cancel this plan."* It would. There are
+currently **5.83 passes over the scene per frame** and **77 % of triangles are
+uncullable** (G5), so a second viewport roughly doubles an already-over-budget
+frame. Revisit only if G5 lands and the frame has real headroom. The narrow-screen
+support and the GitHub Pages goal are unaffected and still wanted.
+
+---
+
 ## 🟡 Owner's wishlist — after the above
 
 - **Billboards: ALREADY DONE** (`32a1408`). CAPY LAB and TINY TRIP CLUB are in,

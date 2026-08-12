@@ -283,7 +283,12 @@ export interface RoadMaterials {
   shoulder: Map<SurfaceType, THREE.MeshStandardMaterial>;
   /** Guardrail / barrier / rock face, keyed by wall style. */
   wall: Map<WallStyle, THREE.Material>;
-  /** Metal for instanced guardrail posts + swept rail. */
+  /**
+   * Metal for the INSTANCED guardrail posts only. Deliberately *not* the same
+   * object as `wall.get('guardrail')`: the post geometry has no `color`
+   * attribute, so it must not carry `vertexColors` (see the comment beside
+   * `apx-rail-post` in `createRoadMaterials`).
+   */
   rail: THREE.MeshStandardMaterial;
   /** Emissive energy rail (anti-gravity). */
   energy: THREE.MeshStandardMaterial;
@@ -454,9 +459,55 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
   shoulder.set(SurfaceType.Glider, shoulder.get(SurfaceType.Dirt)!);
 
   // ---- walls --------------------------------------------------------------
+  /**
+   * ⚠️ EVERY BARRIER IS `DoubleSide` + `flipVertexNormals`, AND NEITHER IS A
+   *    STYLE CHOICE. Removing either one puts a black or missing barrier back.
+   *
+   * `TrackBuilder`'s wall sweep winds its strips so the front face points AWAY
+   * from the road while the authored vertex normals (`ProfilePoint.nx/ny`) point
+   * AT it. Measured with `.probe-tmp/road-black-audit.ts` on all three circuits:
+   * 90–100 % of the triangles of `trackWall_guardrail / _rock / _building /
+   * _concrete / _wood / _energy / _fence` have `dot(faceNormal, vertexNormal)
+   * < 0`, 0 % of their front faces point at a driver's eye, and 100 % of their
+   * vertex normals do. Roughly 19–23 k triangles per circuit — the entire
+   * barrier ribbon.
+   *
+   * Two separate consequences, and they need two separate fixes:
+   *
+   *  1. Under `FrontSide` the visible side is the BACK face, so every barrier
+   *     was back-face culled from the track. You could look straight through the
+   *     guardrail at the terrain and props behind it — which is very likely what
+   *     P0g/G3 ("driving close to the edges, the visuals are affected by
+   *     off-track decorations or terrain") is actually describing. `DoubleSide`
+   *     draws it. A thin, open barrier you can be knocked to either side of
+   *     wants to be two-sided anyway.
+   *
+   *  2. `DoubleSide` alone is NOT enough, and this is the subtle half.
+   *     `normal_fragment_begin` does `normal *= faceDirection`, which assumes
+   *     the invariant above. On a back-facing fragment `faceDirection` is -1, so
+   *     the inward-pointing stored normal is turned OUTWARD — away from the
+   *     driver. The barrier would go from invisible to visible-and-black.
+   *     `flipVertexNormals` restores `dot(faceNormal, vertexNormal) > 0`, and
+   *     `faceDirection` then resolves correctly from BOTH sides.
+   *
+   * `fence` was already `DoubleSide`, which is why it was the only barrier style
+   * that rendered at all — but by (2) it was rendering unlit, which is the
+   * control that proves the diagnosis.
+   *
+   * ROOT CAUSE is the `wStrip.quad(...)` index order in `TrackBuilder` (owned
+   * elsewhere; reported). When that is fixed, drop every `flipVertexNormals`
+   * call here in the same commit and keep `DoubleSide`. The audit probe asserts
+   * the pairing and fails if only one side of it changes.
+   */
   const wall = new Map<WallStyle, THREE.Material>();
+  /** Barrier strips: two-sided, and normals repaired to match the winding. */
+  const barrier = (m: THREE.Material): THREE.Material => {
+    m.side = THREE.DoubleSide;
+    MX.flipVertexNormals(m);
+    return m;
+  };
 
-  const railMat = MX.standardFromPbr(cloneSet(TX.makeMetalPanel(mid, { painted: true, color: style.rail }), ownedTex), {
+  const railWall = MX.standardFromPbr(cloneSet(TX.makeMetalPanel(mid, { painted: true, color: style.rail }), ownedTex), {
     name: 'apx-rail',
     repeat: new THREE.Vector2(3, 1),
     roughness: 0.42,
@@ -466,8 +517,40 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     anisotropy: quality.anisotropy,
     detail: { scale: 6, strength: 0.5 },
   });
-  owned.push(railMat);
-  wall.set('guardrail', railMat);
+  owned.push(railWall);
+  wall.set('guardrail', barrier(railWall));
+
+  /**
+   * ⚠️ SEPARATE MATERIAL FOR THE INSTANCED POSTS — DO NOT MERGE IT BACK.
+   *
+   * `TrackBuilder` drives the guardrail/fence posts as an `InstancedMesh` over
+   * `makePostGeometry()`, an `ExtrudeGeometry` with only position/normal/uv —
+   * **no `color` attribute.** The swept rail strip above needs
+   * `vertexColors: true` for its baked AO gradient, but sharing one material
+   * with the posts is the exact "black grass" bug from `f350e37`: three defines
+   * `USE_COLOR` from `material.vertexColors` ALONE (WebGLProgram.js:567), the
+   * vertex prefix declares `attribute vec3 color`, `<color_vertex>` runs
+   * `vColor.rgb *= color`, and an unbound generic attribute reads the GL
+   * default `(0,0,0,1)`. `MeshStandardMaterial` has no
+   * `defaultAttributeValues`, so there is no white fallback: every post on
+   * every circuit rendered PURE BLACK (metalness 0.9 makes it worse — the
+   * specular colour is `mix(0.04, diffuse, metalness)`, so zeroing the albedo
+   * takes the reflection out too). Hundreds of black posts, at road level,
+   * along both edges of every lap.
+   *
+   * `.probe-tmp/road-black-audit.ts` fails if these are ever merged again.
+   */
+  const railPost = MX.standardFromPbr(cloneSet(TX.makeMetalPanel(mid, { painted: true, color: style.rail }), ownedTex), {
+    name: 'apx-rail-post',
+    repeat: new THREE.Vector2(3, 1),
+    roughness: 0.42,
+    metalness: 0.9,
+    envMapIntensity: 1.25,
+    vertexColors: false,
+    anisotropy: quality.anisotropy,
+    detail: { scale: 6, strength: 0.5 },
+  });
+  owned.push(railPost);
 
   const concreteWall = MX.standardFromPbr(cloneSet(TX.makeConcrete(mid), ownedTex), {
     name: 'apx-wall-concrete',
@@ -479,7 +562,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     detail: { scale: 4, strength: 0.55 },
   });
   owned.push(concreteWall);
-  wall.set('concrete', concreteWall);
+  wall.set('concrete', barrier(concreteWall));
 
   const rockWall = MX.standardFromPbr(cloneSet(TX.makeRock(mid), ownedTex), {
     name: 'apx-wall-rock',
@@ -491,7 +574,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     detail: { scale: 3, strength: 0.7 },
   });
   owned.push(rockWall);
-  wall.set('rock', rockWall);
+  wall.set('rock', barrier(rockWall));
 
   const brickWall = MX.standardFromPbr(cloneSet(TX.makeBrick(mid), ownedTex), {
     name: 'apx-wall-building',
@@ -502,7 +585,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     detail: { scale: 4, strength: 0.5 },
   });
   owned.push(brickWall);
-  wall.set('building', brickWall);
+  wall.set('building', barrier(brickWall));
 
   const woodWall = MX.standardFromPbr(cloneSet(TX.makeWoodPlank(mid), ownedTex), {
     name: 'apx-wall-wood',
@@ -514,7 +597,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     detail: { scale: 4, strength: 0.55 },
   });
   owned.push(woodWall);
-  wall.set('wood', woodWall);
+  wall.set('wood', barrier(woodWall));
 
   const fenceTex = chainLink(512);
   ownedTex.push(fenceTex);
@@ -532,16 +615,41 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
   });
   fenceTex.repeat.set(6, 1.2);
   owned.push(fenceMat);
-  wall.set('fence', fenceMat);
+  wall.set('fence', barrier(fenceMat));
 
   const energy = MX.emissiveGlow(style.energy, 3.4, { base: 0x0a1420, name: 'apx-energy' });
   energy.roughness = 0.25;
   energy.metalness = 0.4;
   owned.push(energy);
-  wall.set('energy', energy);
+  // Same inverted winding as every other barrier — see the block comment above.
+  // The emissive term survived the cull; the lit base colour did not.
+  wall.set('energy', barrier(energy));
   wall.set('none', concreteWall); // never instantiated, keeps lookups total
 
   // ---- tunnel / deck / boost ---------------------------------------------
+  /**
+   * ⚠️ THE BORE'S NORMALS ARE REPAIRED HERE, AND THAT IS WHY TUNNELS ARE NOT
+   *    BLACK ANY MORE.
+   *
+   * `TrackBuilder`'s arch sweep authors `_n2` pointing INTO the bore (correct
+   * for the surface a driver sees) but winds the ring so the front face points
+   * OUT of it — `.probe-tmp/road-black-audit.ts` measures 2208/2208 triangles
+   * with `dot(faceNormal, vertexNormal) < 0` on every circuit. `side: BackSide`
+   * is right (the interior IS the back face), but `FLIP_SIDED` then negates the
+   * stored normal on the assumption that it agreed with the winding, turning the
+   * lining's normals outward: `dotNL <= 0` for every light inside or above the
+   * bore, so the direct term is zero and the lining renders on ambient alone.
+   * Measured through the shipping AgX + `day` grade: sRGB8 3 -> 0 on coastal,
+   * 10 -> 0 on neon, 11 -> 0 on volcano — 81-87 % of the radiance.
+   *
+   * P0d already fought this symptom from the wrong end: `TrackBuilder.shadeRoad`
+   * and the arch's own vertex-colour floor were both lifted because "a bore you
+   * cannot see the floor of is not moody, it is a hole". The albedo was never the
+   * problem. This is.
+   *
+   * Same deal as the barriers: when the arch winding is fixed in `TrackBuilder`,
+   * delete this call in the same commit.
+   */
   const tunnel = MX.standardFromPbr(cloneSet(TX.makeRock(mid), ownedTex), {
     name: 'apx-tunnel',
     repeat: new THREE.Vector2(2.2, 1.4),
@@ -552,6 +660,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     anisotropy: quality.anisotropy,
     detail: { scale: 3, strength: 0.75 },
   });
+  MX.flipVertexNormals(tunnel);
   owned.push(tunnel);
 
   const deck = MX.standardFromPbr(cloneSet(TX.makeConcrete(mid), ownedTex), {
@@ -577,7 +686,7 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     kerb,
     shoulder,
     wall,
-    rail: railMat,
+    rail: railPost,
     energy,
     tunnel,
     deck,

@@ -725,7 +725,18 @@ export class Decals {
     const pos = new Float32Array(n * 4 * 3);
     const nrm = new Float32Array(n * 4 * 3);
     const uv = new Float32Array(n * 4 * 2);
-    const col = new Float32Array(n * 4 * 3);
+    // ⚠️ FOUR components, not three. `DecalQuad.opacity` is a FADE, and three
+    // only routes a vertex colour into the alpha channel when the attribute is
+    // RGBA: `WebGLPrograms.js:309` sets `vertexAlphas` from
+    // `color.itemSize === 4`, which is what promotes `<color_vertex>` from
+    // `vColor.rgb *= color` to `vColor *= color`. With itemSize 3 the opacity
+    // field multiplied the ALBEDO and left the alpha at 1 — so a decal authored
+    // at `opacity: 0.5` did not fade toward the road, it rendered as a fully
+    // opaque HALF-BRIGHTNESS copy of itself. Painted white at 0.5 over a
+    // linear-0.01 asphalt is grey; the lane arrows (0.7), grid numbers (0.8),
+    // sector bands (0.75) and crack patches (0.5) were all being darkened
+    // rather than blended, which is exactly the "the text goes dark" reading.
+    const col = new Float32Array(n * 4 * 4);
     const idx = new Uint32Array(n * 6);
     const L = spline.length;
     const cw = 1 / ATLAS_COLS;
@@ -771,9 +782,10 @@ export class Decals {
         nrm[(b + k) * 3 + 2] = _n.z;
         uv[(b + k) * 2 + 0] = uvs[k * 2];
         uv[(b + k) * 2 + 1] = uvs[k * 2 + 1];
-        col[(b + k) * 3 + 0] = o;
-        col[(b + k) * 3 + 1] = o;
-        col[(b + k) * 3 + 2] = o;
+        col[(b + k) * 4 + 0] = 1;
+        col[(b + k) * 4 + 1] = 1;
+        col[(b + k) * 4 + 2] = 1;
+        col[(b + k) * 4 + 3] = o;
       }
       const io = i * 6;
       idx[io + 0] = b + 0;
@@ -788,7 +800,7 @@ export class Decals {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 4));
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.computeBoundingSphere();
     return g;

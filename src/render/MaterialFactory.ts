@@ -217,6 +217,53 @@ ${NORMAL_BLEND_GLSL}`,
 }
 
 // ---------------------------------------------------------------------------
+// Shading-normal repair
+// ---------------------------------------------------------------------------
+
+/**
+ * Negate the shading normal of a material whose GEOMETRY has its winding and its
+ * vertex normals disagreeing.
+ *
+ * three has exactly one invariant here: `dot(faceNormal, vertexNormal) > 0`.
+ * `FLIP_SIDED` (`side: BackSide`) negates the normal on the assumption that it
+ * held, and `DOUBLE_SIDED` multiplies by `faceDirection` on the same assumption.
+ * Break it and BOTH mechanisms resolve the wrong way: the surface you are
+ * looking at is shaded with a normal pointing away from you, `dotNL` clamps to
+ * zero for every light on your side, and only ambient survives. That is a black
+ * surface, and no `side` value can rescue it — the normal itself has to move.
+ *
+ * The injection goes in right after `<defaultnormal_vertex>` (which is where
+ * `transformedNormal` is established, and where `FLIP_SIDED` is applied) and
+ * before `<normal_vertex>` (which publishes `vNormal`). It is fragment-shader
+ * agnostic, so it composes with {@link addDetailNormal} and with the road
+ * shader; and if three ever renames the chunk the replace is a silent no-op
+ * rather than a broken program.
+ *
+ * ⚠️ THIS IS A REPAIR, NOT A FEATURE. It exists because
+ * `.probe-tmp/road-black-audit.ts` measured the barrier and tunnel strips built
+ * by `TrackBuilder` as 90–100 % inconsistent. When that geometry is fixed at
+ * source, every call to this function must be removed in the same commit — the
+ * audit probe asserts the pairing in both directions and will fail loudly if
+ * one is fixed without the other.
+ */
+export function flipVertexNormals(material: THREE.Material): void {
+  if (material.userData.apxFlipNormals === true) return;
+  material.userData.apxFlipNormals = true;
+
+  const prevHook = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prevHook?.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <defaultnormal_vertex>',
+      '#include <defaultnormal_vertex>\ntransformedNormal = - transformedNormal;',
+    );
+  };
+  const prevKey = material.customProgramCacheKey?.bind(material);
+  material.customProgramCacheKey = () => `${prevKey ? prevKey() : ''}|apxFlipN`;
+  material.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------------------
 // standardFromPbr
 // ---------------------------------------------------------------------------
 
@@ -584,6 +631,7 @@ export const materialFactory = {
   standardFromPbr,
   triplanarMaterial,
   addDetailNormal,
+  flipVertexNormals,
   emissiveGlow,
   markBloom,
   getSharedDetailNormal,
