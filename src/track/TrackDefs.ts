@@ -544,15 +544,25 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'signChevron', t: 0.215, lat: -14, step: 0.006, end: 0.245 },
       // clifftop chute
       { type: 'cypress', t: 0.28, lat: 19, step: 0.014, end: 0.34 },
-      { type: 'brakeBoard', t: 0.345, lat: 13 },
-      { type: 'brakeBoard', t: 0.352, lat: 13 },
+      // 13 left only 0.75 m of verge against a 10.5 m half-width (the board is
+      // 3.5 m wide and `lat` is its centre). 14.5 clears it.
+      { type: 'brakeBoard', t: 0.345, lat: 14.5 },
+      { type: 'brakeBoard', t: 0.352, lat: 14.5 },
       // hairpin: tyre stacks and chevrons
       { type: 'tyreStack', t: 0.372, lat: 12.5, step: 0.004, end: 0.40 },
       { type: 'signChevron', t: 0.375, lat: -12, step: 0.005, end: 0.40 },
       { type: 'tunnelPortal', t: 0.408, lat: 0 },
       { type: 'tunnelPortal', t: 0.505, lat: 0, yaw: Math.PI },
       // beach town
-      { type: 'townHouse', t: 0.52, lat: 15, step: 0.009, end: 0.63, mirror: true },
+      // P0d "overly thick decorative structures covering the track". Measured
+      // (`.probe-tmp/crowding.ts`): `authored:townhouse` + its glow pass filled
+      // **8.5 % of the whole frame** across 42 of 202 chase stations and the
+      // worst instance came 0.5 m INSIDE the tarmac — by far the biggest single
+      // offender on this circuit, and the cause of the five worst stations
+      // (38-41 % of frame each, t=0.56-0.61). The house is 9.8 m across and was
+      // centred 15 m out against an 8.5-9.0 m half-width, i.e. 1.1 m of verge.
+      // Pushed to 18 (4.1 m of verge) and thinned 26 -> 18 instances.
+      { type: 'townHouse', t: 0.52, lat: 20, step: 0.013, end: 0.63, mirror: true },
       { type: 'streetLamp', t: 0.525, lat: -12, step: 0.014, end: 0.63 },
       { type: 'planter', t: 0.56, lat: 11, step: 0.008, end: 0.60 },
       // promenade + cove
@@ -631,34 +641,49 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'tyreStack', t: 0.086, lat: 12.5, step: 0.004, end: 0.105 },
       // the alley
       // `lat` is the block's CENTRE, and the recipe randomises its own half-width
-      // to 4.5–6.5 m plus a 0.4 m roof cap. At the old `lat: 10.5` the near wall
-      // landed at 3.6 m against a 7.5–8.5 m road half-width, so these stood up to
-      // 5.3 m INSIDE the drivable road and hid 40 %+ of the road ahead on 18 of
-      // 259 stations through the alley S-bend. No building width fits at 10.5.
-      // 17 clears the widest variant with margin; `Props.clearRoadSurface` is the
-      // runtime backstop and should now find nothing to push here.
-      { type: 'alleyBlock', t: 0.115, lat: 17, step: 0.006, end: 0.20, mirror: true },
-      { type: 'ventStack', t: 0.13, lat: 10, step: 0.012, end: 0.195 },
-      { type: 'barrelStack', t: 0.145, lat: -10, step: 0.017, end: 0.19 },
+      // (now 3.8–5.2 m plus a 0.4 m roof cap; it was 4.5–6.5 m). At the original
+      // `lat: 10.5` the near wall landed at 3.6 m against a 7.5–8.5 m road half
+      // width, so these stood up to 5.3 m INSIDE the drivable road and hid 40 %+
+      // of the road ahead on 18 of 259 stations through the alley S-bend.
+      //
+      // ---- P0d, second pass. `lat: 17` fixed the OCCLUSION (sightline: neon is
+      // now 1.8 % of road-ahead hidden, 0 stations over 40 %) but not the BULK,
+      // which is what the owner actually complained about. Measured with
+      // `.probe-tmp/crowding.ts`: the body pass filled 8.56 % of the frame and
+      // the `:metal` pass another 5.23 % — **13.8 % of every frame was alley
+      // block**, the largest single figure anywhere in the game, over 38 of 194
+      // stations, with 30 instances at 0.6 m of clear verge. Pushed to 21 and
+      // thinned 30 -> 18. Slimmer recipe + wider offset + half the count.
+      { type: 'alleyBlock', t: 0.115, lat: 21, step: 0.010, end: 0.20, mirror: true },
+      // 10 left 0.19 m of verge against an 8.9 m half-width; the vent stack is
+      // 1.8 m across. Same story for the barrels at 0.15 m.
+      { type: 'ventStack', t: 0.13, lat: 12, step: 0.014, end: 0.195 },
+      { type: 'barrelStack', t: 0.145, lat: -12, step: 0.017, end: 0.19 },
       { type: 'holoAd', t: 0.16, lat: 0, up: 11 },
       // boulevard
-      { type: 'streetLamp', t: 0.21, lat: 16, step: 0.011, end: 0.40, mirror: true },
+      // `streetlight` filled 2.03 % of frame across 108 of 194 stations at 1.2 m
+      // of verge — not thick, but relentless. Thinned ~25 %.
+      { type: 'streetLamp', t: 0.21, lat: 17, step: 0.015, end: 0.40, mirror: true },
       { type: 'holoAd', t: 0.235, lat: 0, up: 13, step: 0.035, end: 0.39 },
       { type: 'skyscraper', t: 0.22, lat: 74, step: 0.03, end: 0.42, mirror: true, scale: 1.6 },
       { type: 'brakeBoard', t: 0.395, lat: -15 },
       // the tower
       { type: 'arcologyTower', t: 0.455, lat: -62, scale: 2.4 },
-      { type: 'energyPylon', t: 0.415, lat: -13.5, step: 0.005, end: 0.53 },
+      { type: 'energyPylon', t: 0.415, lat: -15, step: 0.005, end: 0.53 },
       // anti-grav / wall ride
-      { type: 'agPylon', t: 0.545, lat: 12, step: 0.006, end: 0.645, mirror: true },
+      { type: 'agPylon', t: 0.545, lat: 13.5, step: 0.006, end: 0.645, mirror: true },
       { type: 'holoAd', t: 0.58, lat: -20, up: 4, step: 0.02, end: 0.64 },
       // wet straight
-      { type: 'streetLamp', t: 0.70, lat: 17, step: 0.012, end: 0.79, mirror: true },
+      { type: 'streetLamp', t: 0.70, lat: 18, step: 0.016, end: 0.79, mirror: true },
       { type: 'billboard', t: 0.725, lat: -22, scale: 1.3 },
       { type: 'billboard', t: 0.765, lat: 22, scale: 1.3 },
       // flyover + monorail
       { type: 'bridgePylon', t: 0.80, lat: 0, up: -12, step: 0.012, end: 0.835 },
-      { type: 'monorailPylon', t: 0.885, lat: -15, step: 0.011, end: 0.945 },
+      // The pylon carries a 25.4 m wide beam yoke, so `lat: -15` put its far arm
+      // 2.5 m over the tarmac and 2.09 % of the frame across 31 stations. -19
+      // keeps the monorail crossing the sky above the road without the yoke
+      // hanging into it.
+      { type: 'monorailPylon', t: 0.885, lat: -19, step: 0.013, end: 0.945 },
       { type: 'trafficLight', t: 0.90, lat: 12 },
       { type: 'crowdStand', t: 0.965, lat: -23, step: 0.018, end: 0.998 },
     ],
@@ -694,27 +719,69 @@ export const TRACKS: Record<string, TrackDef> = {
     fogColor: 0x3a1c18,
     fogDensity: 0.0042,
     road: {
+      // P0d "the volcano track is too dark". `tint` multiplies the asphalt
+      // albedo map, so this line is a direct scale on every lighting term.
+      // Measured (`.probe-tmp/volcdark.ts`): at 0xbdb6b2 the resolved road
+      // albedo was lum 0.0321 against coastal's 0.0544 and neon's 0.0524 —
+      // volcano's tarmac was authored 41 % darker than either of the circuits
+      // nobody complained about, and then lit by a sun at 11 deg elevation that
+      // delivers only sin(11) = 0.19 of the key to an up-facing plane. The two
+      // compounded. 0xdcd8d2 brings the albedo to lum 0.0480, still the darkest
+      // of the three (basalt, not concrete) but no longer a special case.
+      // Held near-neutral rather than warm: the key is a saturated #ff7a45 and
+      // the env is an orange sky, and per the ROAD_FRAG note in RoadMaterial.ts
+      // warmth in the albedo compounds with both into gold.
       asphalt: 'clean',
-      tint: 0xbdb6b2,
+      tint: 0xdcd8d2,
       kerbA: 0x3a2320,
       kerbB: 0xe4b98a,
       line: 0xf0e2c8,
-      verge: 0x4b3a33,
+      // `verge` is a MULTIPLIER on the asphalt albedo over the outer quarter of
+      // the road (see `shadeRoad` in TrackBuilder). At 0x4b3a33 that was a 0.29x
+      // darkening of exactly the band the driver reads the road edge from, on the
+      // darkest circuit in the game. Lifted so the edge stays visible; it is
+      // still clearly dust-tinted.
+      verge: 0x6f5a4e,
       rail: 0x8b7d74,
       energy: 0xff7328,
       racingLine: 0.8,
-      ao: 1.0,
+      ao: 0.9,
     },
     defaults: { wallL: 'rock', wallR: 'rock', shoulderSurface: S.Dirt },
     nodes: VOLCANO_NODES,
+    // =======================================================================
+    //  P0d — "overly thick decorative structures ... especially noticeable on
+    //  the volcano track". Measured before/after with `.probe-tmp/crowding.ts`
+    //  (frame fill at the real chase pose) and `.probe-tmp/sightline.ts`
+    //  (occlusion of the road ahead). Volcano was the worst circuit on both:
+    //  11.29 % of the frame filled by props with under 6 m of clear verge,
+    //  85 of 193 stations over 10 %, and 4.1 % of the road-ahead hidden with
+    //  7 stations over 40 %.
+    //
+    //  The offenders, by near-road frame pixels, and what each one got:
+    //    spiralpylon   4.42 %   -8.5 m verge   the helix's own supports stood
+    //                                          beside the LOWER carriageway
+    //    ashplume      2.34 %   22x40x22 m     pushed out
+    //    basaltcolumn  1.90 %   44 instances   thinned, slimmed, pushed out
+    //    obsidian      0.62 %   111 stations   pushed out (recipe scale capped)
+    // =======================================================================
     props: [
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'crowdStand', t: 0.015, lat: -26, step: 0.02, end: 0.06 },
-      { type: 'basaltColumn', t: 0.01, lat: 24, step: 0.01, end: 0.10, mirror: true, scale: 1.2 },
+      // The owner's screenshots: "dark basalt columns crowding both sides". The
+      // start straight carried 20 of them at lat +-24 on a 0.01 step at scale
+      // 1.2 — a continuous 4 m-thick, 9 m-tall wall down both verges. 7 per side
+      // at 27 with the scale back to 1.0 keeps the Giant's-Causeway silhouette
+      // and stops it reading as a corridor. The recipe is also slimmer now.
+      { type: 'basaltColumn', t: 0.01, lat: 27, step: 0.016, end: 0.10, mirror: true },
       { type: 'brakeBoard', t: 0.075, lat: -15 },
       // ash rise + switchback
       { type: 'deadTree', t: 0.115, lat: 19, step: 0.013, end: 0.20 },
-      { type: 'ashPlume', t: 0.14, lat: -34, step: 0.03, end: 0.22 },
+      // The plume is a 22 x 40 x 22 m column of ash and it was the single biggest
+      // shadow caster on the circuit as well as 2.34 % of frame. At -46 it still
+      // dominates the skyline over the switchback; it just no longer leans over
+      // the road.
+      { type: 'ashPlume', t: 0.14, lat: -46, step: 0.03, end: 0.22 },
       { type: 'signChevron', t: 0.175, lat: 12, step: 0.005, end: 0.205 },
       // broken bridge
       { type: 'bridgePylon', t: 0.235, lat: 0, up: -22, step: 0.014, end: 0.265 },
@@ -722,18 +789,39 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'bridgePylon', t: 0.30, lat: 0, up: -22, step: 0.014, end: 0.325 },
       // crater rim
       { type: 'lavaFountain', t: 0.36, lat: 44, up: -6, scale: 2.2 },
-      { type: 'obsidianSpire', t: 0.34, lat: -20, step: 0.012, end: 0.44, scale: 1.4 },
+      // `obsidianSpire` is folded into `buildVolcano`'s shard cluster, whose own
+      // scatter caps the anchor scale now. These two runs were at 1.4 / 1.6 on a
+      // cluster ~2.5 m in half-width, so the far end of a spire reached 7.9 m
+      // inside the tarmac on the tightest instances. Pushed out and calmed down.
+      { type: 'obsidianSpire', t: 0.34, lat: -27, step: 0.014, end: 0.44, scale: 1.15 },
       { type: 'ashPlume', t: 0.40, lat: 56, up: -4, step: 0.02, end: 0.45 },
       // lava field shortcut - marked with warning posts
-      { type: 'warningPost', t: 0.465, lat: -11, step: 0.006, end: 0.535 },
+      // -11 left the post 0.30 m INSIDE an 11.0 m half-width, which is why
+      // `Props.clearRoadSurface` was pushing four of these clear every load.
+      { type: 'warningPost', t: 0.465, lat: -12.5, step: 0.006, end: 0.535 },
       { type: 'lavaRock', t: 0.47, lat: -22, step: 0.008, end: 0.54, scale: 1.1 },
-      // the spiral
-      { type: 'spiralPylon', t: 0.60, lat: 0, up: -18, step: 0.008, end: 0.79 },
-      { type: 'obsidianSpire', t: 0.62, lat: -26, step: 0.02, end: 0.78, scale: 1.6 },
+      // ---- the spiral. THE worst prop in the game ------------------------
+      // A 47 m tall, 4 m thick column, authored at lat 0 / up -18 to hold the
+      // helix up. The helix passes directly OVER the lava-tube straight, so the
+      // first few pylons of the run descend right beside that lower carriageway:
+      // instance #0 projected to lat +1.8 on a 9.5 m half-width road (7.7 m
+      // inside it) and hid **100 % of the visible road ahead** at t=0.826, 87 %
+      // at t=0.825 and 70 % at t=0.874 — all 7 of volcano's over-40 % stations
+      // were this one run. It also filled 4.42 % of the frame across 90 of 193
+      // stations, more than any other prop on any circuit except neon's alley.
+      //
+      // `lat` cannot fix it: lat is measured from the helix, and the helix is
+      // where the pylon belongs. The fix is to start the run AFTER the overlap
+      // (t 0.60 -> 0.638) and halve the density, so the flyover still visibly
+      // stands on something without a column growing out of the road below.
+      { type: 'spiralPylon', t: 0.638, lat: 0, up: -18, step: 0.014, end: 0.79 },
+      { type: 'obsidianSpire', t: 0.62, lat: -32, step: 0.022, end: 0.78, scale: 1.3 },
       // lava tube + esses
       { type: 'tunnelPortal', t: 0.805, lat: 0 },
       { type: 'tunnelPortal', t: 0.865, lat: 0, yaw: Math.PI },
-      { type: 'basaltColumn', t: 0.88, lat: 17, step: 0.01, end: 0.99, mirror: true },
+      // 24 columns at +-17 on a 10.0-11.5 m half-width road left 3.5 m of verge
+      // and 1.90 % of frame through the esses. 14 at +-21.
+      { type: 'basaltColumn', t: 0.88, lat: 21, step: 0.017, end: 0.99, mirror: true },
       { type: 'crowdStand', t: 0.965, lat: -26, step: 0.02, end: 0.998 },
     ],
     boostPads: [

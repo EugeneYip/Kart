@@ -32,6 +32,8 @@ import { CHARACTERS as ROSTER, DEFAULT_CHARACTER_ID } from '@/karts/Characters';
 import type { CharacterDef as RosterEntry, CharacterStats } from '@/karts/Characters';
 import { BODY_NAMES, BODY_TYRE, KART_BODY_IDS } from '@/karts/KartBodies';
 import type { KartBodyId } from '@/karts/KartBodies';
+import { DRIVERS } from '@/karts/Driver';
+import type { DriverDef, HeadKind, Species } from '@/karts/Driver';
 import { TRACKS as CIRCUITS, TRACK_ORDER } from '@/track/TrackDefs';
 import type { SkyPresetName, TrackDef as CircuitDef, TrackTheme } from '@/track/TrackDefs';
 
@@ -49,6 +51,51 @@ export interface StatBlock {
   handling: number; traction: number; turbo: number;
 }
 
+/**
+ * Everything `characterBust()` needs to draw one racer in canvas 2-D, DERIVED
+ * from `DRIVERS` in `@/karts/Driver` — the same table the 3-D rig is built from.
+ *
+ * This exists because the racer-select cards need art that cannot fail. The
+ * primary source is `KartManager.renderPortrait()`, a real offscreen render of
+ * the real rig; when that comes back empty (it did, on the owner's machine, for
+ * all ten cards) the menu needs a *character*, not a gradient. Deriving the
+ * palette and the headwear shape from `DRIVERS` rather than inventing them is
+ * what keeps the fallback recognisably the same cast: `head` is the driver's own
+ * `HeadKind`, so ten racers get ten different silhouettes — which is precisely
+ * what the old generic-helmet fallback failed to do.
+ */
+export interface BustSpec {
+  name: string;
+  /** Headwear silhouette — the real `HeadKind`, so a new hat is a type error. */
+  head: HeadKind;
+  /** `'fox' | 'capy'`, or `null` for the eight humanoids. */
+  species: Species | null;
+  /** Suit / trim, from the driver's own two-colour blocking. */
+  suit: string;
+  suitAlt: string;
+  /** Skin, or pelt tones for the animals. */
+  skin: string;
+  fur: string;
+  furAlt: string;
+  furDark: string;
+  eye: string;
+  brow: string;
+  /** Optic / visor emissive, when the driver has one. */
+  faceGlow: string | null;
+  /** 0..1 — drives shoulder width and neck thickness. */
+  bulk: number;
+  /** Head radius relative to the roster average, ~0.9..1.15. */
+  headScale: number;
+  /** Snout length as a multiple of the head radius. 0 for the humanoids. */
+  muzzle: number;
+  /** Draw whiskers / freckles / a moustache, from `FaceSpec.mark`. */
+  mark: string;
+  /** Eye size multiplier from the face spec. */
+  eyeSize: number;
+  /** A trailing scarf sits over the shoulder line. */
+  scarf: boolean;
+}
+
 export interface CharacterDef {
   id: string;
   name: string;
@@ -64,6 +111,8 @@ export interface CharacterDef {
   stats: StatBlock;
   /** The game is named after her: Foxy gets a badge on her card. */
   mascot: boolean;
+  /** Canvas-2-D portrait data, derived from the driver rig's own definition. */
+  bust: BustSpec;
 }
 
 export interface KartBodyDef {
@@ -154,6 +203,41 @@ export function toMenuStats(s: CharacterStats): StatBlock {
 // Characters — order and ids come straight from the roster
 // ===========================================================================
 
+/**
+ * Mean `headR` across the roster, so `headScale` is a ratio rather than a raw
+ * metre value the drawing code would have to know the units of.
+ */
+const MEAN_HEAD_R = (() => {
+  const ids = Object.keys(DRIVERS) as Array<keyof typeof DRIVERS>;
+  let sum = 0;
+  for (const id of ids) sum += DRIVERS[id].headR * DRIVERS[id].scale;
+  return sum / Math.max(1, ids.length);
+})();
+
+function toBust(d: DriverDef): BustSpec {
+  const fur = cssColor(d.fur ?? d.skinColor);
+  return {
+    name: d.name,
+    head: d.head,
+    species: d.species ?? null,
+    suit: cssColor(d.suit),
+    suitAlt: cssColor(d.suitAlt),
+    skin: cssColor(d.skinColor),
+    fur,
+    furAlt: cssColor(d.furAlt ?? d.skinColor),
+    furDark: cssColor(d.furDark ?? darken(d.skinColor, 0.55)),
+    eye: d.face.eye,
+    brow: d.face.brow,
+    faceGlow: d.face.glow ?? null,
+    bulk: d.bulk,
+    headScale: (d.headR * d.scale) / MEAN_HEAD_R,
+    muzzle: d.muzzle ?? 0,
+    mark: d.face.mark ?? 'none',
+    eyeSize: d.face.eyeSize ?? 1,
+    scarf: d.scarf === true,
+  };
+}
+
 function toMenuCharacter(c: RosterEntry): CharacterDef {
   return {
     id: c.id,
@@ -164,6 +248,7 @@ function toMenuCharacter(c: RosterEntry): CharacterDef {
     bodyId: c.bodyId,
     stats: toMenuStats(c.stats),
     mascot: c.id === DEFAULT_CHARACTER_ID,
+    bust: toBust(DRIVERS[c.driverId]),
   };
 }
 

@@ -30,7 +30,7 @@
  *  The `ItemType` enum lives in `src/core/Types.ts`, which this agent may not
  *  edit, so the five survivors are addressed by their existing enum members
  *  (given in brackets above). Every other member — the triples, green shell,
- *  bob-omb, blue shell, coin, bullet, ink and lightning — has a weight of zero
+ *  bob-omb, blue shell, bullet, coin, ink and lightning — has a weight of zero
  *  in every row and is therefore unreachable through a box. `grantItem()` can
  *  still hand one over for the dev harness and cheats, and `ItemSystem.use()`
  *  still knows what to do with it; nothing in a race will ever produce one.

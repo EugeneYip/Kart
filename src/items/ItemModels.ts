@@ -301,22 +301,26 @@ function wavySkirt(geo: THREE.BufferGeometry, profileLen: number, amp: number, l
  *     'battery'  replaces 'mushroom'   — ItemType.Boost    / TripleBoost
  *     'ninja'    replaces 'ghost'      — ItemType.Ghost
  *
- * `'lightning'` and `'squid'` are deleted outright: their items are gone from the
- * set, so building them would cost boot time and an atlas cell for something no
- * player can ever be handed. `'greenShell'`, `'blueShell'`, `'bomb'`, `'bullet'`
- * and `'coin'` survive because `Projectiles` still pools those kinds and
- * `grantItem()` can still force them — the roulette cannot.
+ * `'lightning'`, `'squid'` and `'coin'` are deleted outright: their items are
+ * gone from the set, so building them would cost boot time and an atlas cell for
+ * something no player can ever be handed. `'greenShell'`, `'blueShell'`,
+ * `'bomb'` and `'bullet'` survive because `Projectiles` still pools those kinds
+ * and `grantItem()` can still force them — the roulette cannot.
+ *
+ * The coin went in the P0d follow-up: *"You can remove the coin item — it
+ * doesn't do much."* It didn't: see the note on `ItemType.Coin` in
+ * `ItemSystem.use()`.
  */
 export type ItemModelId =
   | 'greenShell' | 'blueShell' | 'bomb'
   | 'rocket' | 'bottle' | 'battery' | 'ninja'
-  | 'star' | 'bullet' | 'coin';
+  | 'star' | 'bullet';
 
 /**
  * `Record<ItemType, …>` must stay total — `ItemType` is in `src/core/Types.ts`
- * and off limits to this agent — so the two removed items point at the nearest
- * surviving prototype. Neither is reachable: `ItemRoulette` gives both weight 0
- * in every row, and `ItemSystem.use()` treats both as no-ops.
+ * and off limits to this agent — so the three removed items point at the nearest
+ * surviving prototype. None is reachable: `ItemRoulette` gives them weight 0 in
+ * every row, and `ItemSystem.use()` treats them as no-ops.
  */
 export const MODEL_FOR_ITEM: Record<ItemType, ItemModelId> = {
   [ItemType.Boost]: 'battery',
@@ -333,7 +337,7 @@ export const MODEL_FOR_ITEM: Record<ItemType, ItemModelId> = {
   [ItemType.Ghost]: 'ninja',
   [ItemType.Bullet]: 'bullet',
   [ItemType.BlueShell]: 'blueShell',
-  [ItemType.Coin]: 'coin',
+  [ItemType.Coin]: 'star', // unreachable — coins are removed
   [ItemType.Squid]: 'bottle', // unreachable
 };
 
@@ -362,7 +366,7 @@ export const ITEM_NAMES: Record<ItemType, string> = {
   [ItemType.Ghost]: 'Ninja',
   [ItemType.Bullet]: 'Bullet',
   [ItemType.BlueShell]: 'Blue Shell',
-  [ItemType.Coin]: 'Coin',
+  [ItemType.Coin]: 'Coin', // unreachable — kept only to keep the record total
   [ItemType.Squid]: 'Squid Ink',
 };
 
@@ -382,10 +386,41 @@ export const PART = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// ICON ATLAS LAYOUT — ONE SOURCE OF TRUTH
+// ---------------------------------------------------------------------------
 
-const ATLAS_COLS = 4;
-const ATLAS_ROWS = 4;
+/**
+ * Every `ItemType`, ascending.
+ *
+ * DERIVED from `MODEL_FOR_ITEM`, which TypeScript forces to stay total over the
+ * enum, so this list cannot go out of step with `src/core/Types.ts` — add or
+ * remove an enum member and the record fails to compile until it is handled,
+ * and this array follows for free. Three separate places used to hardcode
+ * `for (let i = 0; i < 16; i++)`.
+ */
+export const ALL_ITEM_TYPES: readonly ItemType[] = Object.keys(MODEL_FOR_ITEM)
+  .map((k) => Number(k) as ItemType)
+  .sort((a, b) => (a as number) - (b as number));
+
 const ATLAS_CELL = 256;
+const ATLAS_COLS = 4;
+/** Rows follow the item count, so the grid can never be too small. */
+const ATLAS_ROWS = Math.max(1, Math.ceil(ALL_ITEM_TYPES.length / ATLAS_COLS));
+const ATLAS_W = ATLAS_COLS * ATLAS_CELL;
+const ATLAS_H = ATLAS_ROWS * ATLAS_CELL;
+
+/**
+ * Which cell of the atlas belongs to an item. **The only place the index -> grid
+ * mapping is written.**
+ *
+ * `getIconPixelRect`, `getIconUV` and the bake loop all route through this, so
+ * the cell the artwork is drawn into and the cell the HUD samples are the same
+ * expression by construction, not by two authors agreeing.
+ */
+export function iconAtlasCell(item: ItemType): { col: number; row: number } {
+  const i = (item as number) | 0;
+  return { col: i % ATLAS_COLS, row: Math.floor(i / ATLAS_COLS) };
+}
 
 /**
  * Owns every item prototype, its materials, and the HUD icon atlas.
@@ -430,7 +465,6 @@ export class ItemModels {
     // --- retained ---
     this.protos.set('star', this.buildStar());
     this.protos.set('bullet', this.buildBullet());
-    this.protos.set('coin', this.buildCoin());
 
     await this.bakeIconAtlas();
     this.ready = true;
@@ -463,12 +497,32 @@ export class ItemModels {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, 4, 4);
       this.atlas = canvasTexture(ctx);
+      this.atlas.flipY = false; // same convention as the baked atlas
       this.texs.push(this.atlas);
     }
     return this.atlas;
   }
 
-  /** UV rect (origin bottom-left, matching THREE's texture space). */
+  /**
+   * Normalised rect of an item's cell, **origin TOP-LEFT — image space**, i.e.
+   * the same corner `getIconPixelRect` and the atlas canvas itself use.
+   *
+   * ⚠️ THIS CONVENTION IS LOAD-BEARING AND WAS THE P0d ICON BUG. The only
+   * consumer is the HUD (`ItemIcons.useAtlas` -> `apply`), which turns the rect
+   * into a CSS `background-position`, and CSS has no other origin: 0 % is the
+   * TOP of the image. This used to return `y = 1 - (row+1)/rows` — correct for a
+   * THREE texture with the default `flipY = true`, and therefore mirrored
+   * vertically once the DOM read it. Displayed row was `rows-1-row`, so all five
+   * live items showed another item's artwork: the Plastic Bottle drew the
+   * BATTERY (cell 10), the Battery drew the Bullet, the Rocket drew the Bob-omb,
+   * the Star drew the Rocket and the Ninja drew the Bottle. Nobody noticed for
+   * as long as `Game.ts` forgot `hud.setItems(this.items)`, because the HUD was
+   * silently painting its own fallback drawings instead.
+   *
+   * The texture returned by `getIconAtlas()` carries `flipY = false` so that
+   * these same rects are correct as THREE UVs too — one convention, both
+   * consumers. Asserted in both directions by `.probe-tmp/icons.ts`.
+   */
   getIconUV(item: ItemType): IconRect {
     return this.uvRects.get(item) ?? { x: 0, y: 0, w: 1, h: 1 };
   }
@@ -478,9 +532,7 @@ export class ItemModels {
 
   /** Pixel rect within the atlas canvas, origin top-left. */
   getIconPixelRect(item: ItemType): IconRect {
-    const i = item as number;
-    const col = i % ATLAS_COLS;
-    const row = Math.floor(i / ATLAS_COLS);
+    const { col, row } = iconAtlasCell(item);
     return { x: col * ATLAS_CELL, y: row * ATLAS_CELL, w: ATLAS_CELL, h: ATLAS_CELL };
   }
 
@@ -1776,97 +1828,6 @@ export class ItemModels {
   }
 
   // -------------------------------------------------------------------------
-  // COIN
-  // -------------------------------------------------------------------------
-
-  private buildCoin(): THREE.Group {
-    const g = new THREE.Group();
-    const R = 0.36;
-
-    // Rim: beveled lathe ring
-    const rimPts: THREE.Vector2[] = [
-      new THREE.Vector2(R * 0.92, 0.055),
-      new THREE.Vector2(R * 0.99, 0.040),
-      new THREE.Vector2(R, 0.0),
-      new THREE.Vector2(R * 0.99, -0.040),
-      new THREE.Vector2(R * 0.92, -0.055),
-    ];
-    const goldTex = this.regT(pixelTexture(256, (u, v, o) => {
-      const c = new THREE.Color(0xffc422).lerp(new THREE.Color(0xa06a06), Math.abs(v - 0.5) * 1.4);
-      const n = ringNoise(u, v, 22, 3);
-      c.offsetHSL((n - 0.5) * 0.02, 0, (n - 0.5) * 0.06);
-      o.r = Math.round(clamp01(c.r) * 255);
-      o.g = Math.round(clamp01(c.g) * 255);
-      o.b = Math.round(clamp01(c.b) * 255);
-    }));
-    const rimNrm = this.regT(normalFromHeight(256, (u) =>
-      0.5 + Math.sin(u * Math.PI * 2 * 48) * 0.13, 1.6)); // milled edge
-    const goldMat = this.regM(new THREE.MeshPhysicalMaterial({
-      map: goldTex,
-      normalMap: rimNrm,
-      roughness: 0.17,
-      metalness: 1.0,
-      clearcoat: 0.5,
-      clearcoatRoughness: 0.1,
-      envMapIntensity: 1.5,
-    }));
-    this.trackMetal(goldMat, 1.0, 0.45);
-    const rim = new THREE.Mesh(this.reg(lathe(rimPts, 56)), goldMat);
-    rim.castShadow = true;
-    g.add(rim);
-
-    // Faces: embossed star inside a raised ring
-    const embossH = (u: number, v: number): number => {
-      const x = (u - 0.5) * 2, y = (v - 0.5) * 2;
-      const r = Math.hypot(x, y);
-      if (r > 1) return 0;
-      let h = 0.45;
-      // Raised inner ring
-      h += (1 - smoothstep((Math.abs(r - 0.80) - 0.02) / 0.06)) * 0.22;
-      // 5-point star emboss
-      const a = Math.atan2(y, x);
-      const k = Math.cos(a * 5) * 0.5 + 0.5;
-      const starR = lerp(0.24, 0.56, Math.pow(k, 0.7));
-      h += (1 - smoothstep((r - starR) / 0.05)) * 0.30;
-      h -= (1 - smoothstep((Math.abs(r - 0.93) - 0.01) / 0.04)) * 0.12;
-      return h;
-    };
-    const faceTex = this.regT(pixelTexture(512, (u, v, o) => {
-      const h = embossH(u, v);
-      const c = new THREE.Color(0xffc422).lerp(new THREE.Color(0xfff0b0), clamp01((h - 0.45) * 1.9));
-      c.lerp(new THREE.Color(0x9c6404), clamp01((0.45 - h) * 2.4));
-      const x = (u - 0.5) * 2, y = (v - 0.5) * 2;
-      const r = Math.hypot(x, y);
-      c.multiplyScalar(1 - smoothstep((r - 0.86) / 0.12) * 0.25);
-      o.r = Math.round(clamp01(c.r) * 255);
-      o.g = Math.round(clamp01(c.g) * 255);
-      o.b = Math.round(clamp01(c.b) * 255);
-    }));
-    const faceNrm = this.regT(normalFromHeight(256, embossH, 3.4));
-    const faceMat = this.regM(new THREE.MeshPhysicalMaterial({
-      map: faceTex,
-      normalMap: faceNrm,
-      normalScale: new THREE.Vector2(1.5, 1.5),
-      roughness: 0.15,
-      metalness: 1.0,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.08,
-      envMapIntensity: 1.6,
-    }));
-    this.trackMetal(faceMat, 1.0, 0.45);
-    const faceGeo = this.reg(new THREE.CircleGeometry(R * 0.945, 56));
-    for (const s of [1, -1]) {
-      const f = new THREE.Mesh(faceGeo, faceMat);
-      f.position.y = s * 0.0545;
-      f.rotation.x = s > 0 ? -Math.PI / 2 : Math.PI / 2;
-      f.castShadow = true;
-      g.add(f);
-    }
-    g.rotation.x = Math.PI / 2; // face the camera by default
-    return g;
-  }
-
-  // -------------------------------------------------------------------------
 
   /** Cartoon eyes: white sclera + dark pupil + a specular catchlight. */
   private addEyes(
@@ -1925,21 +1886,22 @@ export class ItemModels {
    * A throwaway WebGL context is used so we never disturb the game renderer,
    * then the result is read back into a 2D canvas -> CanvasTexture, which is
    * portable across contexts.
+   *
+   * Cell placement — both the draw and the lookup — comes from
+   * `iconAtlasCell()`. Do not re-derive `col`/`row` from an index here: the
+   * previous revision had the same expression written out in three places and
+   * one of them disagreed about which corner the origin was.
    */
   private async bakeIconAtlas(): Promise<void> {
-    const W = ATLAS_COLS * ATLAS_CELL;
-    const H = ATLAS_ROWS * ATLAS_CELL;
+    const W = ATLAS_W;
+    const H = ATLAS_H;
 
-    // UV rects first — they're valid even if the GL bake fails.
-    for (let i = 0; i < 16; i++) {
-      const col = i % ATLAS_COLS;
-      const row = Math.floor(i / ATLAS_COLS);
-      this.uvRects.set(i as ItemType, {
-        x: col / ATLAS_COLS,
-        y: 1 - (row + 1) / ATLAS_ROWS,
-        w: 1 / ATLAS_COLS,
-        h: 1 / ATLAS_ROWS,
-      });
+    // UV rects first — they're valid even if the GL bake fails. Normalised
+    // straight off the pixel rect, so there is exactly one layout expression and
+    // exactly one origin corner (top-left; see `getIconUV`).
+    for (const item of ALL_ITEM_TYPES) {
+      const px = this.getIconPixelRect(item);
+      this.uvRects.set(item, { x: px.x / W, y: px.y / H, w: px.w / W, h: px.h / H });
     }
 
     const out = make2d(1);
@@ -1971,7 +1933,7 @@ export class ItemModels {
       const hemi = new THREE.HemisphereLight(0xdfeaff, 0x3a3f52, 1.5);
       scene.add(key, fill, rim, hemi);
 
-      // A tiny PMREM environment so metals (coin, bullet, bomb) read as metal.
+      // A tiny PMREM environment so metals (bullet, bomb, battery can) read right.
       const pmrem = new THREE.PMREMGenerator(renderer);
       const envScene = this.makeStudioEnvScene();
       const envRT = pmrem.fromScene(envScene, 0.04);
@@ -1981,8 +1943,7 @@ export class ItemModels {
       const holder = new THREE.Group();
       scene.add(holder);
 
-      for (let i = 0; i < 16; i++) {
-        const item = i as ItemType;
+      for (const item of ALL_ITEM_TYPES) {
         holder.clear();
         const node = this.buildIconSubject(item);
         holder.add(node);
@@ -2000,9 +1961,8 @@ export class ItemModels {
         }
 
         renderer.render(scene, cam);
-        const col = i % ATLAS_COLS;
-        const row = Math.floor(i / ATLAS_COLS);
-        out.drawImage(renderer.domElement, col * ATLAS_CELL, row * ATLAS_CELL, ATLAS_CELL, ATLAS_CELL);
+        const px = this.getIconPixelRect(item);
+        out.drawImage(renderer.domElement, px.x, px.y, px.w, px.h);
       }
 
       envRT.dispose();
@@ -2019,18 +1979,18 @@ export class ItemModels {
     } catch (err) {
       console.warn('[ItemModels] icon atlas bake failed, using flat fallback', err);
       // Fall back to readable coloured chips so the HUD still has something.
-      // Keyed by ItemType. The five live items get their re-skinned key colour:
-      // battery indigo/gold, rocket red, bottle teal, ninja indigo, star yellow.
-      const fallback: Record<number, string> = {
-        0: '#2a3358', 1: '#2a3358', 2: '#2fbf3f', 3: '#2fbf3f', 4: '#e33a26', 5: '#e33a26',
-        6: '#0f9d8c', 7: '#0f9d8c', 8: '#1b1f28', 9: '#ffe14a', 10: '#2a3358', 11: '#2b3358',
-        12: '#8b93a5', 13: '#2b6fe8', 14: '#ffc422', 15: '#0f9d8c',
+      // Keyed by MODEL id, not by index — a chip is now guaranteed to be the
+      // right colour for whatever prototype the item actually resolves to.
+      const chip: Record<ItemModelId, string> = {
+        battery: '#2a3358', rocket: '#e33a26', bottle: '#0f9d8c', ninja: '#2b3358',
+        star: '#ffe14a', greenShell: '#2fbf3f', blueShell: '#2b6fe8', bomb: '#1b1f28',
+        bullet: '#8b93a5',
       };
-      for (let i = 0; i < 16; i++) {
-        const col = i % ATLAS_COLS, row = Math.floor(i / ATLAS_COLS);
-        out.fillStyle = fallback[i] ?? '#888';
+      for (const item of ALL_ITEM_TYPES) {
+        const px = this.getIconPixelRect(item);
+        out.fillStyle = chip[MODEL_FOR_ITEM[item]] ?? '#888';
         out.beginPath();
-        out.arc(col * ATLAS_CELL + 128, row * ATLAS_CELL + 128, 96, 0, Math.PI * 2);
+        out.arc(px.x + px.w * 0.5, px.y + px.h * 0.5, px.w * 0.375, 0, Math.PI * 2);
         out.fill();
       }
     } finally {
@@ -2042,6 +2002,10 @@ export class ItemModels {
 
     this.atlasCanvas = out.canvas;
     this.atlas = canvasTexture(out);
+    // Image space, origin top-left — the convention `getIconUV` publishes and the
+    // only one the DOM consumer can express. Without this a THREE sampler and the
+    // HUD would disagree about which cell a rect names.
+    this.atlas.flipY = false;
     this.atlas.minFilter = THREE.LinearMipmapLinearFilter;
     this.atlas.generateMipmaps = true;
     this.atlas.needsUpdate = true;
@@ -2107,7 +2071,6 @@ export class ItemModels {
       }
     } else {
       const m = this.create(id);
-      if (item === ItemType.Coin) m.rotation.set(Math.PI / 2, 0, 0.35);
       if (item === ItemType.Bullet) m.rotation.y = Math.PI * 0.86;
       if (id === 'rocket') {
         // Nose is down -Z: rotate +X by -80 deg to stand it up, then yaw so a fin

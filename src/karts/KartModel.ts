@@ -299,6 +299,8 @@ export class KartModel {
   private driverBuild: DriverBuild | null = null;
   private driverRootMatrix: THREE.Matrix4 | null = null;
   private opacity = 1;
+  /** Latched opaque/transparent decision — see `setOpacity` for why it latches. */
+  private isTransparent = false;
   private lightRear: THREE.MeshStandardMaterial | null = null;
   private lightFront: THREE.MeshStandardMaterial | null = null;
   private glowMat: THREE.MeshStandardMaterial | null = null;
@@ -729,17 +731,52 @@ export class KartModel {
     }
   }
 
-  /** Fade the whole kart (ghost item, respawn blink). */
+  /**
+   * Fade the whole kart (ghost item, respawn blink).
+   *
+   * `transparent` is not a cosmetic flag: it decides which of three's two render
+   * lists every mesh of this kart lands in, and the transparent list is
+   * depth-sorted per object and (with `depthWrite` off) draws without occluding
+   * itself. The previous version derived `transparent` and `depthWrite` directly
+   * from the instantaneous alpha, so the respawn/invulnerability blink — a 4 Hz
+   * sine through the 0.995 and 0.6 thresholds — reshuffled the kart's own panels
+   * roughly eight times a second and let the driver, seat and far bodywork show
+   * through the near bodywork on alternate frames. That is half of the reported
+   * "karts keep flickering and deforming", and it hits rivals as readily as the
+   * player because every hazard hit grants invulnerability.
+   *
+   * So: the opaque/transparent decision carries hysteresis, `depthWrite` follows
+   * that decision rather than the alpha, and `needsUpdate` is set only on a real
+   * transition. The last part matters for correctness too — three bakes
+   * `#define OPAQUE` (which forces output alpha to 1) into the program from
+   * `material.transparent` at compile time and does not revisit it unless the
+   * material version moves, so the old code's flag flips were silently ignored by
+   * the shader half the time and the fade did not actually fade.
+   */
   setOpacity(v: number): void {
-    if (Math.abs(v - this.opacity) < 1e-3) return;
-    this.opacity = v;
-    const transparent = v < 0.995;
+    const next = clamp01(v);
+    if (Math.abs(next - this.opacity) < 1e-3) return;
+    this.opacity = next;
+    // Enter transparency well below opaque, leave it only when essentially solid.
+    const transparent = this.isTransparent ? next < 0.995 : next < 0.96;
+    this.isTransparent = transparent;
     for (const m of this.meshes) {
       const mat = m.material;
       if (Array.isArray(mat)) continue;
-      mat.transparent = transparent || mat.name === 'glass' || mat.name.startsWith('glass');
-      mat.opacity = mat.name.startsWith('glass') ? Math.min(0.55, v) : v;
-      mat.depthWrite = v > 0.6 && !mat.name.startsWith('glass');
+      const glass = mat.name.startsWith('glass');
+      const want = transparent || glass;
+      if (mat.transparent !== want) {
+        mat.transparent = want;
+        // Required: `OPAQUE` is a compile-time define derived from this flag.
+        mat.needsUpdate = true;
+      }
+      mat.opacity = glass ? Math.min(0.55, next) : next;
+      // Depth-write stays ON for the bodywork at every alpha. A blinking kart is
+      // a fading *solid*, not a ghost: with depth-write off its own panels stop
+      // occluding each other and the seat and far bodywork punch through the
+      // near bodywork, which is what read as the kart "deforming".
+      const depthWrite = !glass;
+      if (mat.depthWrite !== depthWrite) mat.depthWrite = depthWrite;
     }
   }
 

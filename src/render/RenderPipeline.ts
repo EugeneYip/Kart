@@ -25,6 +25,34 @@
  *  on, NormalPass. Everything else is a full-screen quad. Nothing in the chain
  *  re-renders the scene a third time.
  *
+ *  BUT THE FRAME CONTAINS MORE PASSES THAN THIS FILE OWNS, and the multiplier
+ *  AGENTS.md §5b warns about is the sum, not our share. Counted for real (see
+ *  `scenePasses()`, which is what the perf HUD reports), at `high`/`ultra` on a
+ *  circuit with water:
+ *
+ *    shadow cascade 0   world/Lighting   every frame
+ *    shadow cascade 1   world/Lighting   every 2nd frame   (0.50/frame)
+ *    shadow cascade 2   world/Lighting   every 3rd frame   (0.33/frame)
+ *    water reflection   world/Water      every frame       <- see below
+ *    RenderPass         here             every frame
+ *    NormalPass         here             every frame when SSAO is on
+ *    SubjectMask        here             player kart only, quarter res
+ *
+ *  = 5.83 renders of the scene graph per frame, which is the measured 3.15x on
+ *  `renderer.info.render.triangles` (the shadow and reflection passes each draw a
+ *  subset). Two of those are avoidable and neither is geometry:
+ *
+ *   - **NormalPass** is now disabled by the resolution budget below whenever the
+ *     colour buffer is well over 1080p, which is the case the game is actually
+ *     judged on. That is one whole scene pass plus the 3.13 ms AO resolve.
+ *   - **the water reflection pass is never turned off.** `Water.setReflections()`
+ *     exists, its doc comment says "lets the render pipeline turn the reflection
+ *     pass off under load", and nothing has ever called it — the pipeline is not
+ *     handed `Environment` or `Water`. It also is not gated on whether water is
+ *     on screen: the 760 m disc is re-centred on the camera every frame, so the
+ *     plane test always passes. Wiring that up needs one line in `Game.ts` and is
+ *     in the report; it is worth a full scene pass per frame on coastal and neon.
+ *
  *  Plus one thing that is NOT a scene render and NOT a full-screen pass: on
  *  frames that will actually blur, `renderSubjectMask()` draws the player kart's
  *  model — one object, 33 draw calls, unlit flat material — into a
@@ -128,6 +156,47 @@ const MB_MAX_RADIUS = 0.008;
 /** Fraction of the blur that survives on the masked player kart. */
 const MB_MASK_KEEP = 0.1;
 
+/**
+ * ============================================================================
+ *  THE RESOLUTION BUDGET — why the quality *tier* is not enough on its own
+ * ============================================================================
+ *  Every millisecond quoted in the header of this file was measured at
+ *  1600x900 = 1.44 Mpixel. Nothing in the chain was ever sized against the
+ *  buffer it actually runs on, and the buffer is not 1.44 Mpixel on the machine
+ *  this game is judged on:
+ *
+ *    Engine boots with `setPixelRatio(min(devicePixelRatio, 2))`, and
+ *    `detectTier()` hands an Apple M-series Mac the `ultra` preset. A Retina
+ *    Mac reports devicePixelRatio 2, so a 1512x982 window becomes a
+ *    **3024x1964 = 5.94 Mpixel** colour buffer — 4.1x the fill the numbers were
+ *    taken at. Seven full-screen passes, two of them convolutions, all scale
+ *    linearly with that: the ~17 ms post chain becomes ~70 ms, on its own,
+ *    before the scene, the shadows or the reflection pass are drawn at all.
+ *
+ *  That is the arithmetic behind "lag is still severe", and no tier flag
+ *  expresses it: `ultra` on a 1280x720 window and `ultra` on a Retina 16"
+ *  differ by 6x in fill and not at all in settings.
+ *
+ *  So the expensive knobs are chosen from the **measured device pixel count**
+ *  and only then capped by the tier. `POST_PIXEL_BUDGET` is the buffer size the
+ *  chain's timings were taken at, rounded to 1080p; `costScale` is how many
+ *  times over it we actually are. Every threshold below is expressed in
+ *  multiples of that, so it stays correct on hardware nobody has tested on.
+ *
+ *  This deliberately does NOT touch `renderer.setPixelRatio` — Engine owns the
+ *  backing store and fights anyone who writes it. See the report: the real fix
+ *  is for Engine to derive the pixel ratio from a pixel budget instead of
+ *  `min(dpr, 2)`, and this is what the pipeline can do without that.
+ * ============================================================================
+ */
+const POST_PIXEL_BUDGET = 1920 * 1080;
+/** Above this multiple of the budget, drop SSAO — and with it a scene pass. */
+const COST_DROP_SSAO = 1.6;
+/** Above this, halve the motion-blur tap count and shrink the DoF/AO buffers. */
+const COST_CHEAP_KERNELS = 1.35;
+/** Above this, SMAA drops to its cheapest preset. */
+const COST_CHEAP_AA = 2.2;
+
 export class RenderPipeline implements ISubsystem {
   private readonly engine: Engine;
   private readonly karts: KartSource;
@@ -174,6 +243,11 @@ export class RenderPipeline implements ISubsystem {
   /** Wall-clock milliseconds the last composer.render() took (CPU side). */
   lastCpuMs = 0;
 
+  /** Last `costScale` the budget was applied at — see POST_PIXEL_BUDGET. */
+  private appliedCost = -1;
+  /** The DEV scene/presentation audits are once-per-session, not per rebuild. */
+  private audited = false;
+
   constructor(engine: Engine, karts?: KartSource, track?: TrackSource) {
     this.engine = engine;
     this.karts = karts ?? null;
@@ -211,6 +285,7 @@ export class RenderPipeline implements ISubsystem {
     this.composer.autoRenderToScreen = true;
 
     this.build();
+    this.wireKartLod();
 
     this.unsubscribe.push(
       bus.on('quality:change', () => this.rebuildForQuality()),
@@ -419,7 +494,136 @@ export class RenderPipeline implements ISubsystem {
 
     this.builtTier = q.tier;
     this.composer.setSize(this.width, this.height);
+    this.appliedCost = -1;
+    this.applyResolutionBudget();
     this.verifyDepthBinds();
+  }
+
+  /**
+   * Give `KartManager` the real camera to measure LOD distance from.
+   *
+   * `KartManager.setCamera()` exists, is documented ("Optional: gives LOD a real
+   * camera instead of the player's kart") and **nothing had ever called it** —
+   * `Game` wires `setVfx` and `setAudio` on the karts and not this. So all twelve
+   * karts' LOD was being measured from *the player kart's own position*, which
+   * makes the player's own distance identically 0 and biases every rival's by the
+   * 7 m of chase-camera offset in the wrong direction. That is the sixth instance
+   * of the authored-but-never-called pattern recorded in HANDOFF.md.
+   *
+   * It is done from here rather than reported as a `Game` change because the
+   * pipeline is already handed both halves — `engine.camera` and `karts` — and
+   * needs no new wiring to do it. Feature-detected, because `karts` is declared
+   * structurally and may be null in a probe.
+   */
+  private wireKartLod(): void {
+    const k = this.karts as { setCamera?: (c: THREE.Object3D) => void } | null;
+    if (k && typeof k.setCamera === 'function') {
+      try {
+        k.setCamera(this.engine.camera);
+      } catch (err) {
+        console.warn('[Render] karts.setCamera failed; LOD will use the player kart', err);
+      }
+    }
+  }
+
+  /**
+   * Size the expensive knobs against the buffer we are actually rendering into
+   * rather than against the quality tier. See POST_PIXEL_BUDGET for the
+   * arithmetic; the short version is that `ultra` on a Retina Mac is a 5.9
+   * Mpixel buffer and every number in this file's header was measured at 1.44.
+   *
+   * Everything here is applied in place — no pass is constructed or destroyed and
+   * the composer is not resized, so it is safe to call from `resize()`. Two knobs
+   * recompile a pass (the motion-blur tap count and the SMAA preset), so the whole
+   * thing is keyed on the resulting *decisions* rather than on the pixel count.
+   */
+  private applyResolutionBudget(): void {
+    const q = this.engine.quality;
+    const px = this.deviceWidth() * this.deviceHeight();
+    const cost = px / POST_PIXEL_BUDGET;
+
+    const cheapKernels = cost > COST_CHEAP_KERNELS;
+    const wantSsao = q.ssao && cost <= COST_DROP_SSAO;
+    const aa = cost > COST_CHEAP_AA ? SMAAPreset.LOW
+      : (q.tier === 'ultra' && cost <= 1.15) ? SMAAPreset.HIGH
+        : SMAAPreset.MEDIUM;
+
+    // Key on the *decisions*, not on the pixel count. Engine's adaptive
+    // resolution walks the pixel ratio in 10 % steps every 1.5 s, and two of the
+    // knobs below (motion-blur taps, the SMAA preset) recompile a pass when they
+    // change — so keying on `cost` itself would burn a shader compile on every
+    // step of that ramp for a decision that had not actually changed.
+    const key = (cheapKernels ? 1 : 0) | (wantSsao ? 2 : 0) | (aa << 2);
+    if (key === this.appliedCost) return;
+    this.appliedCost = key;
+
+    // --- antialiasing: the second most expensive pass in the chain -----------
+    // 5.36 ms at 1.44 Mpixel on the HIGH preset. At 5.9 Mpixel that is ~22 ms of
+    // a 16.6 ms frame for edge quality on a moving image.
+    if (this.smaa) this.smaa.applyPreset(aa);
+
+    // --- motion blur: one dependent texture fetch per tap per pixel ---------
+    if (this.motionBlur) {
+      const base = q.tier === 'ultra' ? 14 : q.tier === 'high' ? 12 : 8;
+      this.motionBlur.setTaps(cheapKernels ? Math.max(6, Math.round(base * 0.5)) : base);
+    }
+
+    // --- SSAO: this is the one that removes a whole SCENE pass ---------------
+    // `NormalPass` re-renders the entire scene to get view normals. AGENTS.md
+    // §5b: "if renderer.info.render.triangles is several times the triangle count
+    // actually present in the scene graph, you have too many full-scene passes —
+    // that is usually the real bug". Disabling the pair takes one full pass out of
+    // the frame *and* removes the 3.13 ms AO resolve, and it is a pass toggle, so
+    // it costs nothing to change and nothing to change back.
+    if (this.ssaoPass) this.ssaoPass.enabled = wantSsao;
+    if (this.normalPass) this.normalPass.enabled = wantSsao;
+    // Sample count is deliberately left alone: `SSAOEffect.samples` is deprecated
+    // in postprocessing 6.39 and its setter recompiles the resolve shader, so the
+    // buffer size is the cheaper lever and the one that actually scales with fill.
+    if (this.ssao && wantSsao) this.ssao.resolution.scale = cheapKernels ? 0.35 : 0.5;
+    if (this.normalPass) this.normalPass.resolution.scale = cheapKernels ? 0.35 : 0.5;
+
+    // --- depth of field + bloom pyramid -------------------------------------
+    if (this.dof) this.dof.resolution.scale = cheapKernels ? 0.35 : 0.5;
+    if (this.bloom) {
+      this.bloom.mipmapBlurPass.levels = q.tier === 'low' ? 5 : cheapKernels ? 6 : 7;
+    }
+
+    if (import.meta.env.DEV) {
+      console.info(
+        `[Render] resolution budget: ${this.deviceWidth()}x${this.deviceHeight()}`
+        + ` = ${(px / 1e6).toFixed(2)} Mpx (${cost.toFixed(2)}x budget) -> `
+        + `ssao ${wantSsao ? 'on' : 'OFF (NormalPass scene pass removed)'}, `
+        + `smaa preset ${aa}, mb taps ${this.motionBlur ? this.motionBlur.tapCount : 0}, `
+        + `scene passes/frame: ${this.scenePasses().length}`,
+      );
+    }
+  }
+
+  /**
+   * Every render of the scene graph this frame will contain, named.
+   *
+   * AGENTS.md §5b asks for the *list*, not the total, because a multiplier on
+   * `renderer.info` only tells you that there are too many passes and not which.
+   * Passes owned by other subsystems are included with their owner, because the
+   * number that matters is the one for the whole frame.
+   */
+  scenePasses(): string[] {
+    const q = this.engine.quality;
+    const out: string[] = [];
+    const cascades = Math.min(3, Math.max(1, q.cascadeCount | 0));
+    out.push('shadow cascade 0 (world/Lighting, every frame)');
+    if (cascades > 1) out.push('shadow cascade 1 (world/Lighting, every 2nd frame)');
+    if (cascades > 2) out.push('shadow cascade 2 (world/Lighting, every 3rd frame)');
+    if (q.tier === 'high' || q.tier === 'ultra') {
+      out.push('water planar reflection (world/Water, every frame — NOT gated on visibility)');
+    }
+    out.push('RenderPass — main scene (render/RenderPipeline)');
+    if (this.normalPass?.enabled) out.push('NormalPass — full scene, view normals for SSAO');
+    if (this.motionPass?.enabled && this.subjectMask?.active) {
+      out.push('SubjectMask — player kart subtree only, quarter res');
+    }
+    return out;
   }
 
   /**
@@ -463,6 +667,213 @@ export class RenderPipeline implements ISubsystem {
           + 'draw of every pass that reads it. Clear compareFunction.',
         );
       }
+    }
+    // Once per session, not once per quality rebuild — these walk the scene.
+    if (!this.audited) {
+      this.audited = true;
+      this.auditSceneSamplers();
+      this.auditPresentation();
+    }
+  }
+
+  /**
+   * Scene-wide sampler/texture-type validator.
+   *
+   * `GL_INVALID_OPERATION: Mismatch between texture format and sampler type` has
+   * been open since it was first reported (HANDOFF.md item 2) and has cost two
+   * review rounds of arguing about ownership from indirect evidence, because the
+   * message is emitted by Chrome's command decoder and never reaches a JS console
+   * reader — so nobody could point at a file. It is a per-draw validation
+   * failure, which makes the decoder crawl, so it is also a plausible share of
+   * "lag is still severe".
+   *
+   * The message has exactly one cause: the GLSL sampler a program declares does
+   * not match the texture bound to it. That is decidable *statically* from the
+   * shader source plus the live uniform value, which is what this does. It walks
+   * every material in the scene once and reports the offending
+   * material + uniform + texture by name, for every subsystem, so the next person
+   * to boot the game gets the answer instead of a suspect list.
+   *
+   * Two families are checked:
+   *  - **`ShaderMaterial`** — parse `uniform <sampler…> <name>` out of the
+   *    fragment and vertex source and compare against what `uniforms[name].value`
+   *    actually is (2D / array / 3D / cube / depth-with-compare / integer format).
+   *  - **built-in materials** — `envMap` is the dangerous one, because the
+   *    sampler three declares for it is chosen from `texture.mapping`
+   *    (`CubeUVReflectionMapping` → `sampler2D`, `Cube*Mapping` → `samplerCube`),
+   *    so a cube texture with a CubeUV mapping fails on *every draw of every
+   *    material in the scene* — which is precisely the reported symptom.
+   */
+  private auditSceneSamplers(): void {
+    const DECL = /uniform\s+(?:highp\s+|mediump\s+|lowp\s+)?(sampler2DArray|sampler2DShadow|sampler3D|samplerCube|isampler2D|usampler2D|sampler2D)\s+([A-Za-z_]\w*)/g;
+    type Kind = '2d' | 'array' | '3d' | 'cube';
+    const kindOf = (t: THREE.Texture): Kind => {
+      const x = t as unknown as {
+        isDataArrayTexture?: boolean; isCompressedArrayTexture?: boolean;
+        isData3DTexture?: boolean; isCompressed3DTexture?: boolean;
+        isCubeTexture?: boolean;
+      };
+      if (x.isDataArrayTexture || x.isCompressedArrayTexture) return 'array';
+      if (x.isData3DTexture || x.isCompressed3DTexture) return '3d';
+      if (x.isCubeTexture) return 'cube';
+      return '2d';
+    };
+    const INT_FORMATS = new Set<number>([
+      THREE.RedIntegerFormat, THREE.RGIntegerFormat, THREE.RGBAIntegerFormat,
+    ]);
+    const problems: string[] = [];
+    const seen = new Set<THREE.Material>();
+
+    const checkTexture = (
+      owner: string, uniform: string, want: Kind | 'shadow', t: THREE.Texture,
+    ): void => {
+      const got = kindOf(t);
+      const name = t.name || '(unnamed)';
+      if (want !== 'shadow' && got !== want) {
+        problems.push(
+          `${owner}.${uniform} declares sampler for '${want}' but '${name}' is a '${got}' texture`,
+        );
+      }
+      const cmp = (t as THREE.DepthTexture).compareFunction;
+      if (want === '2d' && cmp !== null && cmp !== undefined) {
+        problems.push(
+          `${owner}.${uniform} binds depth texture '${name}' with compareFunction=`
+          + `${String(cmp)} to a plain sampler2D — it requires sampler2DShadow`,
+        );
+      }
+      if (INT_FORMATS.has(t.format)) {
+        problems.push(
+          `${owner}.${uniform} binds '${name}' with an INTEGER format (${t.format}) `
+          + 'to a float sampler — needs isampler/usampler',
+        );
+      }
+    };
+
+    const checkMaterial = (mat: THREE.Material, meshName: string): void => {
+      if (seen.has(mat)) return;
+      seen.add(mat);
+      const label = `${mat.name || mat.type}${meshName ? ` on ${meshName}` : ''}`;
+      const sm = mat as THREE.ShaderMaterial;
+      if (sm.isShaderMaterial && sm.uniforms) {
+        const src = `${sm.fragmentShader ?? ''}\n${sm.vertexShader ?? ''}`;
+        DECL.lastIndex = 0;
+        let m: RegExpExecArray | null = DECL.exec(src);
+        while (m !== null) {
+          const decl = m[1];
+          const uname = m[2];
+          const u = sm.uniforms[uname];
+          const value = u ? (u.value as THREE.Texture | null | undefined) : undefined;
+          if (value && (value as { isTexture?: boolean }).isTexture) {
+            const want: Kind | 'shadow' = decl === 'sampler2DArray' ? 'array'
+              : decl === 'sampler3D' ? '3d'
+                : decl === 'samplerCube' ? 'cube'
+                  : decl === 'sampler2DShadow' ? 'shadow' : '2d';
+            checkTexture(label, uname, want, value);
+          }
+          m = DECL.exec(src);
+        }
+      }
+      // Built-in slots. `envMap` is the only one whose sampler type is data-driven.
+      const std = mat as THREE.MeshStandardMaterial;
+      const env = std.envMap as THREE.Texture | null | undefined;
+      if (env) {
+        const cubeDeclared = env.mapping === THREE.CubeReflectionMapping
+          || env.mapping === THREE.CubeRefractionMapping;
+        checkTexture(label, 'envMap', cubeDeclared ? 'cube' : '2d', env);
+      }
+      for (const slot of ['map', 'normalMap', 'roughnessMap', 'metalnessMap',
+        'emissiveMap', 'aoMap', 'alphaMap', 'bumpMap', 'displacementMap'] as const) {
+        const t = (std as unknown as Record<string, THREE.Texture | null | undefined>)[slot];
+        if (t && (t as { isTexture?: boolean }).isTexture) checkTexture(label, slot, '2d', t);
+      }
+    };
+
+    const scene = this.engine.scene;
+    const envTex = scene.environment;
+    if (envTex) {
+      const cubeDeclared = envTex.mapping === THREE.CubeReflectionMapping
+        || envTex.mapping === THREE.CubeRefractionMapping;
+      checkTexture('scene.environment', 'envMap', cubeDeclared ? 'cube' : '2d', envTex);
+    }
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (!mat) return;
+      if (Array.isArray(mat)) for (const mm of mat) checkMaterial(mm, mesh.name);
+      else checkMaterial(mat, mesh.name);
+    });
+
+    if (problems.length === 0) {
+      console.info(
+        `[Render] sampler audit: ${seen.size} materials in the scene graph, `
+        + '0 texture/sampler-type mismatches. If '
+        + '"GL_INVALID_OPERATION: Mismatch between texture format and sampler type" '
+        + 'still floods, it is NOT a scene material — re-check the post chain '
+        + 'targets with __POST__.boundTextures() and the shadow maps.',
+      );
+      return;
+    }
+    console.error(
+      `[Render] sampler audit found ${problems.length} texture/sampler-type `
+      + 'mismatch(es). Each one fails WebGL validation on EVERY draw of the '
+      + 'affected program:\n  - ' + problems.join('\n  - '),
+    );
+  }
+
+  /**
+   * One-shot report of everything that owns pixels on screen.
+   *
+   * Filed because a mid-race screenshot showed a ~200x115 picture-in-picture copy
+   * of the whole game — scene *and* HUD — in the bottom-right corner, and nothing
+   * in this repository draws one. The audit below is what distinguishes the three
+   * possible causes without guessing:
+   *
+   *  - **a second canvas / a second Game instance** — would appear in the canvas
+   *    list with its own rect;
+   *  - **a partial GL viewport** (a render target's viewport left bound, so the
+   *    composited frame lands in one corner of the default framebuffer) — would
+   *    show as a viewport smaller than the drawing buffer;
+   *  - **outside the page entirely** (the review pane compositing the page into a
+   *    sub-region — see AGENTS.md §5 — or an OS/browser picture-in-picture
+   *    window). Everything below is consistent and the copy contains the DOM HUD,
+   *    which no WebGL pass in this engine can draw.
+   *
+   * That last point is the decisive one and is worth keeping: the HUD is DOM, so
+   * a WebGL pass cannot reproduce it. An inset containing a HUD is therefore a
+   * *document*-level duplicate, not a render-target composite.
+   */
+  private auditPresentation(): void {
+    if (typeof document === 'undefined') return;
+    const gl = this.engine.renderer.getContext();
+    const vp = new THREE.Vector4();
+    this.engine.renderer.getViewport(vp);
+    const canvases = Array.from(document.querySelectorAll('canvas')).map((c, i) => {
+      const r = c.getBoundingClientRect();
+      return `#${i} ${c.className || '(no class)'} buffer=${c.width}x${c.height}`
+        + ` css=${Math.round(r.width)}x${Math.round(r.height)}`
+        + ` at (${Math.round(r.left)},${Math.round(r.top)})`
+        + `${c === this.engine.canvas ? ' <- engine' : ''}`;
+    });
+    console.info(
+      `[Render] presentation audit — drawingBuffer ${gl.drawingBufferWidth}x`
+      + `${gl.drawingBufferHeight}, viewport ${vp.x},${vp.y} ${vp.z}x${vp.w}, `
+      + `pixelRatio ${this.engine.renderer.getPixelRatio()}, composer `
+      + `${this.width}x${this.height} CSS. ${canvases.length} canvas element(s):\n  `
+      + canvases.join('\n  '),
+    );
+    if (vp.z < gl.drawingBufferWidth || vp.w < gl.drawingBufferHeight) {
+      console.error(
+        '[Render] the GL viewport is SMALLER than the drawing buffer. The '
+        + 'composited frame will land in one corner of the canvas and the rest '
+        + 'will hold whatever was there before — this is the picture-in-picture '
+        + 'artifact. Something set a render target and did not restore it.',
+      );
+    }
+    if (canvases.length > 1) {
+      console.error(
+        `[Render] ${canvases.length} canvases are in the document. Only one is `
+        + 'the engine\'s. A second live canvas is the picture-in-picture inset.',
+      );
     }
   }
 
@@ -559,6 +970,8 @@ export class RenderPipeline implements ISubsystem {
   getStats(): {
     passes: number; cpuMs: number; textureMs: number; textures: number;
     maskDrawCalls: number; motionBlurPx: number;
+    /** Renders of the scene graph this frame — the number AGENTS.md §5b wants. */
+    scenePasses: number; megapixels: number;
   } {
     // `motionBlurPx` is the peak blur length in pixels of the current backing
     // store, clamped exactly as the shader clamps it. Report this rather than a
@@ -574,6 +987,8 @@ export class RenderPipeline implements ISubsystem {
       textures: textureStats.count,
       maskDrawCalls: this.subjectMask?.drawCalls ?? 0,
       motionBlurPx: Math.round(peak * 10) / 10,
+      scenePasses: this.scenePasses().length,
+      megapixels: Math.round((this.deviceWidth() * this.deviceHeight()) / 1e4) / 100,
     };
   }
 
@@ -690,6 +1105,9 @@ export class RenderPipeline implements ISubsystem {
     if (!this.composer) return;
     this.composer.setSize(this.width, this.height);
     this.subjectMask?.setSize(this.deviceWidth(), this.deviceHeight());
+    // Engine changes the pixel ratio (adaptive resolution) by calling resize, so
+    // this is where the real buffer size becomes known. Bucketed internally.
+    this.applyResolutionBudget();
   }
 
   dispose(): void {

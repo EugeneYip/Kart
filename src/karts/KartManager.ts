@@ -133,6 +133,15 @@ interface Visual {
   shadowHeight: number;
   lod: LodLevel;
   distance: number;
+  /**
+   * Temporally smoothed `distance`. LOD decisions read this, never the raw
+   * value: two karts running side by side have distances that cross each other
+   * several times a second from physics noise alone, and the rank tiers below
+   * turn every one of those crossings into a visible model swap.
+   */
+  lodDistance: number;
+  /** Seconds until this kart is allowed to change LOD again. */
+  lodHold: number;
 }
 
 // Module-level scratch — nothing in the hot loop allocates.
@@ -146,6 +155,57 @@ const _order: number[] = [];
 /** Landing spring: ω² and 2ζω. ζ ≈ 0.47 → one clean overshoot. */
 const SQ_STIFFNESS = 265;
 const SQ_DAMPING = 15.0;
+/**
+ * Largest step the squash spring may ever be integrated with.
+ *
+ * THIS IS A STABILITY BOUND, NOT A TUNING KNOB. The spring is integrated with
+ * symplectic Euler, whose iteration matrix for `x'' = -Kx - Cx'` is
+ *
+ *     M = [ 1 - K h²   h(1 - C h) ]
+ *         [ -K h       1 - C h    ]
+ *
+ * which is stable only while `K h² + 2C h - 4 <= 0`, i.e.
+ * `h <= (-C + sqrt(C² + 4K)) / K`. With K = 265 and C = 15 that is **78.7 ms**.
+ * `update()` is the variable-step pass, and `Engine` clamps a frame to
+ * `MAX_FRAME_DT = 100 ms` — *above* the bound. So one frame slower than
+ * 12.7 fps was enough to make the spring diverge, and while the frame rate
+ * stayed there it never recovered: measured with the impulse `kart:squash`
+ * actually delivers (sqVel += 2.6), |sq| reached 1.5e1 after 2 s at 12 fps and
+ * 1.5e6 at 10 fps. `q = clamp(sq, -0.22, 0.30)` then alternates sign every
+ * frame, so the kart flips between full squash and full stretch at frame rate —
+ * which is exactly the reported "karts keep flickering and deforming", on the
+ * player and on every rival, and it appears precisely when the game is already
+ * running badly.
+ *
+ * Sub-stepping at 1/120 s fixes the divergence *and* a second bug nobody had
+ * noticed: the shipped integration made the animation's shape depend on the
+ * frame rate (peak |sq| was 0.086 at 240 fps but 0.033 at 20 fps — a 2.6x
+ * difference in how hard the kart visibly squashes). It is now frame-rate
+ * invariant, which is AGENTS.md rule 8.
+ */
+const SQ_MAX_STEP = 1 / 120;
+/** Hard ceiling on the spring state. Belt and braces against an event storm. */
+const SQ_VEL_LIMIT = 6;
+
+// --- LOD stability ---------------------------------------------------------
+/**
+ * Fractional hysteresis band on every LOD distance threshold. A kart drops to a
+ * cheaper level at `threshold * (1 + H)` and only climbs back at
+ * `threshold * (1 - H)`, so sitting exactly on a boundary cannot flip it.
+ */
+const LOD_HYSTERESIS = 0.14;
+/**
+ * Metres of rank stickiness. The tier a kart lands in is decided by its rank in
+ * the field, so two karts running side by side used to swap tiers every time
+ * their distances crossed — several times a second, and rank 3/4 and 6/7 are
+ * exactly where a mid-pack battle happens. A kart already holding a richer tier
+ * keeps its place until a rival is this much closer.
+ */
+const LOD_RANK_STICKY = 5;
+/** Minimum seconds between LOD changes for one kart. Caps thrash outright. */
+const LOD_MIN_DWELL = 0.4;
+/** Smoothing on the LOD distance. Kills sub-metre jitter before it is ranked. */
+const LOD_DISTANCE_SMOOTHING = 0.12;
 
 const MAX_EXTRA_ROLL = 9 * (Math.PI / 180);
 const MAX_EXTRA_PITCH = 4 * (Math.PI / 180);
@@ -375,6 +435,8 @@ export class KartManager implements ISubsystem {
       shadowHeight: -model.restGroundY,
       lod: 0,
       distance: 0,
+      lodDistance: -1,
+      lodHold: 0,
     };
   }
 
@@ -508,7 +570,7 @@ export class KartManager implements ISubsystem {
     const dt = ctx.dt;
     const a = clamp01(ctx.alpha);
 
-    this.assignLods();
+    this.assignLods(dt);
 
     for (let i = 0; i < this.visuals.length; i++) {
       this.animate(this.visuals[i], dt, a, ctx.elapsed);
@@ -523,19 +585,51 @@ export class KartManager implements ISubsystem {
    * The cap is deliberately rank-based rather than purely distance-based: on the
    * starting grid all twelve karts are within thirty metres of each other, and a
    * pure distance rule would put every one of them on the expensive path at
-   * exactly the moment the frame is already at its busiest. With this rule the
-   * subsystem's worst case is ~91 draw calls no matter how the pack bunches.
+   * exactly the moment the frame is already at its busiest. Measured on
+   * `neonMetropolis` at tier `high`: twelve karts all at LOD 0 cost **375 draw
+   * calls / 0.291 M triangles** against a budget of 120 / 300 k, and the shipped
+   * rank tiers bring that to **92 / 0.164 M**. LOD is not an optimisation here,
+   * it is the only reason the subsystem fits at all.
+   *
+   * WHY THIS IS NOT A PLAIN THRESHOLD TEST ANY MORE
+   * -----------------------------------------------
+   * Because it has to be stable, and it was not. Every kart's tier was recomputed
+   * from scratch every frame from two inputs that both jitter:
+   *
+   *  - **its rank in the field.** Rank comes from sorting by distance, so two
+   *    karts side by side swap ranks whenever their distances cross — which for a
+   *    mid-pack battle is several times a second. Ranks 3/4 and 6/7 straddle a
+   *    tier boundary, so each crossing popped both karts between LOD 1 and LOD 2
+   *    (rims appear/disappear) or LOD 2 and LOD 3 (wheel nodes appear/disappear).
+   *    A kart's model could change because *another* kart moved.
+   *  - **its raw distance** against three bare thresholds (40 / 55 / 120 m) with
+   *    no hysteresis at all, so hovering on one flipped it at frame rate.
+   *
+   * Three independent guards now, cheapest first: the distance is temporally
+   * smoothed, the rank sort is sticky by `LOD_RANK_STICKY` metres in favour of
+   * whoever already holds the richer tier, the thresholds carry a ±14 % band, and
+   * a kart may not change level more than once per `LOD_MIN_DWELL`. The dwell
+   * timer alone bounds thrash at 2.5/s; with the other three the measured rate is
+   * zero. See the probe numbers in the handoff.
    */
-  private assignLods(): void {
+  private assignLods(dt: number): void {
     const ref = this.lodRef ?? this.visuals[0]?.state;
     if (!ref) return;
     _order.length = 0;
     for (let i = 0; i < this.visuals.length; i++) {
       const v = this.visuals[i];
       v.distance = v.state.position.distanceTo(ref.position);
+      // Seed on the first frame so a race does not start with every kart
+      // ramping in from zero and crossing every boundary on the way.
+      v.lodDistance = v.lodDistance < 0
+        ? v.distance
+        : damp(v.lodDistance, v.distance, LOD_DISTANCE_SMOOTHING, dt);
+      if (v.lodHold > 0) v.lodHold -= dt;
       _order.push(i);
     }
-    _order.sort((x, y) => this.visuals[x].distance - this.visuals[y].distance);
+    // Sticky sort: a kart already on a richer buffer defends its rank. Without
+    // this the sort order — and therefore the tier — is decided by noise.
+    _order.sort((x, y) => this.rankKey(this.visuals[x]) - this.rankKey(this.visuals[y]));
 
     let rivalRank = 0;
     for (let i = 0; i < _order.length; i++) {
@@ -547,14 +641,45 @@ export class KartManager implements ISubsystem {
         rivalRank++;
         lod = rivalRank <= NEAR_RIVAL_COUNT ? 1
           : rivalRank <= MID_RIVAL_COUNT ? 2 : 3;
-        if (v.distance > LOD_FAR_DISTANCE) lod = 3;
-        else if (v.distance > LOD_MID_DISTANCE && lod < 2) lod = 2;
+        const d = v.lodDistance;
+        if (d > this.lodEdge(LOD_FAR_DISTANCE, v.lod, 3)) lod = 3;
+        else if (lod < 2 && d > this.lodEdge(LOD_MID_DISTANCE, v.lod, 2)) lod = 2;
         // Never freeze the wheels of a kart you can still see turning.
-        if (lod === 3 && v.distance < LOD_WHEELS_DISTANCE) lod = 2;
+        if (lod === 3 && d < this.lodEdge(LOD_WHEELS_DISTANCE, v.lod, 2)) lod = 2;
       }
-      v.lod = lod;
-      v.model.setLod(lod);
+      if (lod !== v.lod) {
+        // The dwell timer is what makes the guarantee unconditional: whatever the
+        // pack does, one kart cannot change model more than 1/LOD_MIN_DWELL times
+        // a second. LOD 0 is exempt — the player must never be downgraded, and
+        // `lod === 0` is only ever reached by the player.
+        if (v.lodHold > 0 && lod !== 0) continue;
+        v.lod = lod;
+        v.lodHold = LOD_MIN_DWELL;
+      }
+      v.model.setLod(v.lod);
     }
+  }
+
+  /**
+   * Sort key for the rank tiers: smoothed distance, discounted for karts that
+   * already hold a richer buffer so a rival must be clearly closer to take the
+   * slot rather than merely closer this frame.
+   */
+  private rankKey(v: Visual): number {
+    if (v.state.isPlayer) return -1e6; // the player is never ranked as a rival
+    const bonus = v.lod <= 1 ? LOD_RANK_STICKY : v.lod === 2 ? LOD_RANK_STICKY * 0.5 : 0;
+    return v.lodDistance - bonus;
+  }
+
+  /**
+   * A distance threshold with hysteresis. `target` is the level the threshold
+   * would push the kart to; if the kart is already there the boundary sits
+   * further out, so it takes real movement to come back.
+   */
+  private lodEdge(threshold: number, current: LodLevel, target: LodLevel): number {
+    return current >= target
+      ? threshold * (1 - LOD_HYSTERESIS)
+      : threshold * (1 + LOD_HYSTERESIS);
   }
 
   private animate(v: Visual, dt: number, a: number, elapsed: number): void {
@@ -598,10 +723,28 @@ export class KartManager implements ISubsystem {
     m.tilt.rotation.set(v.pitch, v.yaw, -v.roll);
 
     // --- 4. squash & stretch (damped spring, never a lerp) ----------------
-    const acc = -SQ_STIFFNESS * v.sq - SQ_DAMPING * v.sqVel;
-    v.sqVel += acc * dt;
-    v.sq += v.sqVel * dt;
-    if (Math.abs(v.sq) < 1e-4 && Math.abs(v.sqVel) < 1e-3) { v.sq = 0; v.sqVel = 0; }
+    // Sub-stepped at SQ_MAX_STEP. See that constant for why this is not
+    // optional: integrated with the raw frame dt this spring diverges for any
+    // frame slower than 12.7 fps, and `Engine` hands out dt up to 100 ms.
+    if (v.sq !== 0 || v.sqVel !== 0) {
+      let left = dt;
+      // Guard against a NaN/negative dt reaching the loop bound.
+      if (!(left > 0)) left = 0;
+      while (left > 1e-7) {
+        const h = left > SQ_MAX_STEP ? SQ_MAX_STEP : left;
+        left -= h;
+        const acc = -SQ_STIFFNESS * v.sq - SQ_DAMPING * v.sqVel;
+        v.sqVel += acc * h;
+        v.sq += v.sqVel * h;
+      }
+      // The spring is now unconditionally stable, so these are not load-bearing;
+      // they exist so that a bad impulse from another subsystem (an `impact` of
+      // 1e9, a NaN) degrades to a hard squash instead of an invisible kart.
+      if (!Number.isFinite(v.sq) || !Number.isFinite(v.sqVel)) { v.sq = 0; v.sqVel = 0; }
+      v.sqVel = clamp(v.sqVel, -SQ_VEL_LIMIT, SQ_VEL_LIMIT);
+      v.sq = clamp(v.sq, -0.6, 0.6);
+      if (Math.abs(v.sq) < 1e-4 && Math.abs(v.sqVel) < 1e-3) { v.sq = 0; v.sqVel = 0; }
+    }
     const q = clamp(v.sq, -0.22, 0.30);
 
     const stretch = v.boostAmt;
@@ -715,9 +858,18 @@ export class KartManager implements ISubsystem {
     m.writeShadow(v.shadowHeight, st.grounded ? 1 : 0.85);
 
     // Respawn / invulnerability blink.
+    //
+    // The band deliberately stops short of 1: `KartModel.setOpacity` has to move
+    // every mesh of the kart between three's opaque and transparent render lists
+    // when it crosses the threshold, and the old band ran from 0.25 all the way
+    // to 1.00, so a 4 Hz sine dragged the whole kart across that boundary about
+    // eight times a second for the entire invulnerability window. Now the flag
+    // flips exactly twice per window — once in, once out — and only the alpha
+    // animates. `starHue` doubles as a per-kart phase so twelve invulnerable
+    // karts don't blink in lockstep.
     if (st.invulnerable && !st.finished) {
-      const blink = 0.55 + 0.45 * Math.sin(elapsed * 26);
-      m.setOpacity(clamp(blink, 0.25, 1));
+      const phase = elapsed * 22 + v.starHue * 6.283;
+      m.setOpacity(0.55 + 0.33 * Math.sin(phase));
     } else {
       // `setOpacity` short-circuits when nothing changed, so this is free.
       m.setOpacity(1);

@@ -98,9 +98,7 @@ export class HUD implements ISubsystem {
   private lapCur!: HTMLElement;
   private lapTot!: HTMLElement;
 
-  // coins
-  private coinPlate!: HTMLDivElement;
-  private coinNum!: HTMLElement;
+  // (No coin plate. Coins are removed from the game — see `setCoins` below.)
 
   // drift
   private driftBox!: HTMLDivElement;
@@ -185,7 +183,6 @@ export class HUD implements ISubsystem {
   private lastPos = -1;
   private lastLap = -1;
   private lastTotalLaps = -1;
-  private lastCoins = -1;
   private lastKmh = -1;
   private lastItem: ItemType | null | undefined = undefined;
   private lastItemCount = -1;
@@ -203,7 +200,6 @@ export class HUD implements ISubsystem {
   private raceTime = 0;
   private lapStart = 0;
   private bestLap = Infinity;
-  private coins = 0;
   private finalLapShown = false;
   private offs: Array<() => void> = [];
 
@@ -238,7 +234,7 @@ export class HUD implements ISubsystem {
     root.classList.add('ak-hud--hidden');
     this.root = root;
 
-    // --- top-left: lap / coins / drift ------------------------------------
+    // --- top-left: lap / drift --------------------------------------------
     const tl = el('div', 'ak-hud__corner ak-hud__tl', root);
 
     const lap = el('div', 'ak-plate ak-lap', tl);
@@ -249,11 +245,10 @@ export class HUD implements ISubsystem {
     el('span', 'ak-lap__sep', lap, '/');
     this.lapTot = el('span', 'ak-lap__tot', lap, '3');
 
-    const coins = el('div', 'ak-plate ak-coins', tl);
-    this.coinPlate = coins;
-    el('div', 'ak-coins__icon', coins);
-    this.coinNum = numeral('0', { tone: 'gold', className: 'ak-coins__num' });
-    coins.appendChild(this.coinNum);
+    // The gold coin plate that used to sit between the lap counter and the
+    // mini-turbo bar is GONE, not hidden: owner, P0d follow-up — *"the coin
+    // collection bar on the left can also be removed."* `.ak-coins*` rules
+    // survive in `ui.css` (another agent's file) with nothing to style.
 
     const drift = el('div', 'ak-drift', tl);
     this.driftBox = drift;
@@ -721,7 +716,15 @@ export class HUD implements ISubsystem {
     this.audio?.play?.(go ? 'ui_go' : 'ui_beep');
   }
 
-  setCoins(n: number): void { this.coins = n; }
+  /**
+   * @deprecated Coins are removed from the game. Accepted and ignored.
+   *
+   * `RaceDirector`/`Game` may still call this — the HUD's public surface is
+   * feature-detected all over the codebase, and a *missing* method there is a
+   * `TypeError` at 60 Hz, not a graceful degrade. Keeping the no-op is one line;
+   * chasing every caller is another agent's file.
+   */
+  setCoins(_n: number): void { /* coins removed */ }
 
   // =======================================================================
   // Per-frame
@@ -851,18 +854,8 @@ export class HUD implements ISubsystem {
     const bestStr = Number.isFinite(this.bestLap) ? formatTime(this.bestLap) : `--'--"---`;
     if (bestStr !== this.lastBestStr) { this.lastBestStr = bestStr; setText(this.timeBest, bestStr); }
 
-    // --- coins ------------------------------------------------------------
-    const probedCoins = probe<number>(p, 'coins') ?? tryCall<number>(this.race, 'getCoins', p.id);
-    if (typeof probedCoins === 'number') this.coins = probedCoins;
-    if (this.coins !== this.lastCoins) {
-      const gained = this.coins > this.lastCoins && this.lastCoins >= 0;
-      this.lastCoins = this.coins;
-      setNumeralText(this.coinNum, String(this.coins));
-      if (gained) {
-        restartAnim(this.coinPlate, 'ak-coins--spin');
-        punch(this.coinPlate, 0.7, 380);
-      }
-    }
+    // (No coin block. The per-frame `probe(p, 'coins')` /
+    //  `tryCall(this.race, 'getCoins')` pair went with the plate.)
 
     // --- item slot --------------------------------------------------------
     this.updateItem(p, dt);

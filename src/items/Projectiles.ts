@@ -66,8 +66,10 @@ export interface PhysicsLike {
   setAutopilot?(kartId: number, target: THREE.Vector3 | null, speed: number): void;
   /** Optional: lightning shrink. Degrades to a visual-only shrink. */
   setScale?(kartId: number, scale: number): void;
-  /** Optional: coin top-speed bonus. */
-  setCoinBonus?(kartId: number, coins: number): void;
+  // `setCoinBonus?(kartId, coins)` used to be declared here for a coin-driven
+  // top-speed bonus. Coins are removed, and `PhysicsWorld` never implemented it
+  // in the first place, so the hook is gone rather than left as a promise the
+  // physics layer was never going to keep.
 }
 
 export type VfxLike = Partial<IVfxService>;

@@ -244,21 +244,70 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     envIntensity: 0.65,
     godRays: 0.25, godRayColor: 0xc8d4e2, shadowIntensity: 0.70,
   }),
+  /**
+   * ---- P0d: RAISED. "The volcano-themed track is a bit too dark" — and the
+   *  cause was NOT the key intensity, which at 2.90 was already 1.66x `night`'s.
+   *  Measured with `.probe-tmp/volcdark.ts`, which unlike `mood.ts` uses the
+   *  circuit's OWN authored road albedo (`TrackDef.road.tint` x the asphalt
+   *  variant base) instead of a flat 0.055:
+   *
+   *      circuit    key lin   hemi lin   IBL lin   TOTAL    key share
+   *      coastal    0.0023    0.0021     0.0061    0.0105     22 %
+   *      neon       0.0087    0.0006     0.0085    0.0178     49 %
+   *      volcano    0.0021    0.0003     0.0044    0.0068     30 %   <- darkest
+   *
+   *  Three compounding causes, in order of size:
+   *
+   *  1. **`sunElevation: 11` — the cosine, not the intensity.** A road faces
+   *     straight up, so it collects `sin(elevation)` of the key: 0.191 at 11 deg.
+   *     `night`'s moon sits at 42 deg (0.669), so despite a key 1.66x weaker it
+   *     put 4.1x more light on the tarmac. This is why "volcanic has a stronger
+   *     key than night" was a red herring. 11 -> 19 deg is worth 1.71x on the key
+   *     term, and it also cuts every shadow from 5.1x to 2.9x the caster's height,
+   *     which is the other half of the "basalt columns crowd the road" complaint.
+   *  2. **The authored road albedo was 41 % below the other two circuits**
+   *     (`tint: 0xbdb6b2`, lum 0.0321 vs 0.0544 / 0.0524). Fixed in `TrackDefs`.
+   *  3. **The IBL was already 65 % of the road's light** — the largest term by
+   *     far — so `envIntensity` is the one fill knob with real leverage here.
+   *     The warning at the top of this file ("raising envIntensity flattens the
+   *     image") is written for a scene whose key does the shaping; at 11-19 deg
+   *     against an up-facing plane the key physically cannot, and a sky dome of
+   *     glowing ash genuinely IS a large area source. Raised, but the key is
+   *     raised further so the key share goes UP (30 % -> 36 %), not down.
+   *
+   *  The fog was a separate defect with the opposite sign: `fogColor` #5e1e16 has
+   *  lum 0.0337, 4.9x the road's 0.0068, and at density 0.0024 (2.4x neon's) the
+   *  road was 18 % fog at 100 m and 33 % at 200 m. So the fog was not darkening
+   *  the road, it was washing the far half of it into a flat brown with no
+   *  road/verge edge left. Density cut to 0.00145; the colour stays ash.
+   *
+   *  `shadowIntensity` 0.82 -> 0.62: with a low sun the shadows are long and
+   *  numerous, and an 82 %-opaque shadow term over a road this dark is a black
+   *  stripe. 0.62 leaves 38 % of the key inside shadow.
+   *
+   *  ALSO REPORTED, NOT FIXABLE FROM THIS FILE: `GRADE_PRESETS` in
+   *  `src/render/effects/GradeEffect.ts` has no `volcanic` entry, and nothing in
+   *  the game ever calls `RenderPipeline.setGradePreset()` — `GradeEffect` is
+   *  constructed with `'day'` and stays there. So every circuit is graded through
+   *  the `day` curve: exposure 0.70 with a 1.2 shadow toe, calibrated against a
+   *  road at linear 0.0478. That mis-grade costs volcano more than any preset
+   *  value here does. THE FINAL CALL ON BRIGHTNESS NEEDS A SCREENSHOT.
+   * ---- */
   volcanic: P({
-    sunElevation: 11, sunAzimuth: 196, moonElevation: -20, moonAzimuth: 10,
+    sunElevation: 19, sunAzimuth: 196, moonElevation: -20, moonAzimuth: 10,
     turbidity: 8.5, rayleigh: 2.6, mie: 0.032, mieG: 0.90, sunIntensity: 0.85,
     skyScale: 0.46, skyGamma: 0.45, skySat: 1.22, chromaDip: 0.90,
     cloudCoverage: 0.68, cloudErode: 0.35, cloudOpacity: 1.0, cloudSpeed: 1.4,
     cloudLit: 0xff7a3a, cloudDark: 0x1e0c10, cloudAmbient: 0.42, cloudLum: 1.8,
     haze: 0x8f3a20, hazeStrength: 0.76, hazeLum: 0.85,
     night: 0, cityGlow: 0, embers: 1, lightning: 0,
-    keyColor: 0xff7a45, keyIntensity: 2.9,
-    skyAmbient: 0x7d2f20, groundAmbient: 0x33100a, ambientIntensity: 0.48,
-    bounceColor: 0xd94a1e, bounceIntensity: 0.8,
-    rimColor: 0xff9a5c, rimIntensity: 0.42,
-    fogColor: 0x5e1e16, fogSunColor: 0xff8a44, fogDensity: 0.0024, fogHeight: 2, fogFalloff: 0.018,
-    envIntensity: 0.60,
-    godRays: 0.8, godRayColor: 0xff8038, shadowIntensity: 0.82,
+    keyColor: 0xff7a45, keyIntensity: 3.8,
+    skyAmbient: 0xa85436, groundAmbient: 0x4a1a0e, ambientIntensity: 0.80,
+    bounceColor: 0xd94a1e, bounceIntensity: 0.95,
+    rimColor: 0xff9a5c, rimIntensity: 0.50,
+    fogColor: 0x6b2a1d, fogSunColor: 0xff8a44, fogDensity: 0.00145, fogHeight: 2, fogFalloff: 0.018,
+    envIntensity: 0.90,
+    godRays: 0.8, godRayColor: 0xff8038, shadowIntensity: 0.62,
   }),
 };
 

@@ -7,30 +7,53 @@
     <title>Foxy Kart</title>
     <!--
       ===================================================================
-       BOOT SCREEN — Foxy + Capy
+       BOOT SCREEN — typographic
       ===================================================================
-       D8. The owner wanted the loading screen built around the two
-       characters. It is drawn as **inline SVG**, for one specific reason:
+       WHY THERE IS NO CHARACTER ART HERE ANY MORE
+       A previous revision drew Foxy and Capy as two hand-authored inline
+       SVG busts. They were authored blind — written as path data without
+       ever being rendered — and the owner's verdict on seeing them was
+       "really ugly, almost unbearable". Rule 3 of AGENTS.md forbids a
+       static image, and a bust good enough to lead the game cannot be
+       hand-written in path data on the first try. So the boot screen is
+       now purely typographic: a logotype, a subtitle, a progress bar and
+       a status line. Restrained and correct beats ambitious and crude.
+       The 3-D characters introduce themselves on the racer-select screen,
+       where they are rendered from the real rigs (`src/karts/Portrait.ts`).
 
-         The boot screen must still render, and must still show status,
-         when the 3-D never starts. A previous defect had the page sit at
-         "Initializing" forever because `requestAnimationFrame` does not
-         fire at a 0x0 viewport, and anything that depended on the module
-         graph, WebGL or rAF would have gone down with it. Inline SVG plus
-         CSS needs none of the three: this screen is fully painted by the
-         time the parser reaches `main.ts`, and it stays painted whatever
-         happens next.
+       WHY IT IS STILL PLAIN HTML + CSS, WITH NO SCRIPT
+       The boot screen must render, and must keep showing status, even when
+       the 3-D never starts. A previous defect had the page sit at
+       "Initializing" forever because `requestAnimationFrame` does not fire
+       at a 0x0 viewport, and anything depending on the module graph, WebGL
+       or rAF would have gone down with it. Everything below is painted by
+       the parser before it reaches `main.ts`, and stays painted whatever
+       happens next. No <img>, no canvas, no fetch, no script — which also
+       satisfies AGENTS.md rule 3 (procedural, zero network requests).
 
-       So: no <img>, no canvas, no fetch, no script — which also satisfies
-       AGENTS.md rule 3 (everything procedural, zero network requests).
-       Every colour below is the same hex the 3-D drivers use in
-       `src/karts/Driver.ts`, so the boot art and the game agree.
+       NO DECORATIVE OVERLAYS — this is a bug fix, not a preference.
+       The owner also reported "weird lines in the text": faint diagonal
+       hairlines across the logotype. Four things in the old markup could
+       produce them and all four are gone:
+         1. a `repeating-conic-gradient` light-ray backdrop on #boot::before,
+            rotating behind the text and crossing it at every angle;
+         2. a second full-bleed haze overlay on #boot::after;
+         3. `-webkit-text-stroke` on `background-clip: text` glyphs, whose
+            stroke antialiases against a transparent fill and leaves seams;
+         4. `drop-shadow(0 3px 0 ...)` — a hard-edged, zero-blur duplicate
+            of the glyphs that shows through the antialiased fringe of
+            diagonal strokes (K, A, Y, R) as exactly such a hairline.
+       Nothing is painted on top of, or immediately behind, the type now.
+       The only backdrop is #boot's own background, which the browser paints
+       below every child by definition.
 
        THE BOOT CONTRACT `src/main.ts` DEPENDS ON — do not rename:
+         #app        the render host
          #boot       the overlay; gets `.hidden`, then removed
+         #boot-bar   the progress track
          #boot-fill  progress fill; `style.width` is written as a %
          #boot-msg   status line; `textContent` is written
-       Animation is CSS-only and decorative; the art, the bar and the
+       Animation is CSS-only and decorative; the logotype, the bar and the
        status line are all legible with animation disabled.
     -->
     <style>
@@ -41,88 +64,65 @@
       #app { position: fixed; inset: 0; }
       canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
 
-      /* ---- Boot overlay ------------------------------------------------ */
+      /* ---- Boot overlay ------------------------------------------------
+         Two stacked radial washes plus the base colour: a warm pool behind
+         the logotype over a cooler field. This is #boot's OWN background,
+         so it is painted beneath every child and can never streak the type.
+      */
       #boot {
         position: fixed; inset: 0; z-index: 9999;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: clamp(10px, 2.2vh, 26px);
         background:
-          radial-gradient(ellipse 70% 55% at 50% 34%, #1b2748 0%, #0a1024 55%, #05070f 100%);
-        transition: opacity 0.6s ease; color: #cfe3ff; overflow: hidden;
+          radial-gradient(ellipse 52% 34% at 50% 44%, rgba(255, 168, 74, 0.16) 0%, rgba(255, 168, 74, 0) 70%),
+          radial-gradient(ellipse 78% 62% at 50% 42%, #1b2748 0%, #0a1024 58%, #05070f 100%);
+        transition: opacity 0.6s ease; color: #cfe3ff;
       }
       #boot.hidden { opacity: 0; pointer-events: none; }
 
-      /* Rotating light rays behind the cast — the MK8 select-screen tell. */
-      #boot::before {
-        content: ""; position: absolute; left: 50%; top: 34%;
-        width: 200vmax; height: 200vmax; transform: translate(-50%, -50%);
-        background: repeating-conic-gradient(
-          from 0deg,
-          rgba(255, 214, 150, 0.055) 0deg 7deg,
-          rgba(255, 214, 150, 0) 7deg 24deg
-        );
-        animation: boot-spin 90s linear infinite;
-        /* #boot is a stacking context (fixed + z-index), so a negative z-index
-           paints these decorations above its background and behind every
-           in-flow child. Without it the floor haze would sit ON TOP of the
-           progress bar and the status line and dim both. */
-        z-index: -2; pointer-events: none;
+      /* ---- Logotype ---------------------------------------------------- */
+      .boot-logo {
+        text-align: center;
+        display: flex; flex-direction: column; align-items: center;
+        gap: clamp(8px, 1.4vh, 16px);
       }
-      /* Floor haze, so the cast is standing on something. */
-      #boot::after {
-        content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 42%;
-        background: linear-gradient(180deg, rgba(5, 7, 15, 0) 0%, rgba(5, 7, 15, 0.85) 70%);
-        z-index: -1; pointer-events: none;
-      }
-      @keyframes boot-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
-
-      /* ---- The two characters ----------------------------------------- */
-      .boot-cast {
-        /* `z-index: 0` makes this its own stacking context so the contact
-           shadows below can use a negative z-index and stay behind the pair
-           instead of being painted over their feet. */
-        position: relative; z-index: 0; display: flex; align-items: flex-end;
-        justify-content: center; gap: clamp(4px, 3vw, 54px);
-      }
-      .boot-char {
-        width: clamp(112px, 21vw, 216px); height: auto; display: block;
-        filter: drop-shadow(0 14px 20px rgba(0, 0, 0, 0.55));
-        transform-origin: 50% 92%;
-      }
-      .boot-char--fox { animation: boot-bob 2.6s ease-in-out infinite alternate; }
-      .boot-char--capy { animation: boot-bob 3.4s ease-in-out 0.4s infinite alternate; }
-      @keyframes boot-bob {
-        from { transform: translateY(0) rotate(-1.1deg); }
-        to { transform: translateY(-8px) rotate(1.1deg); }
-      }
-      /* Contact shadows. Without them the pair floats. */
-      .boot-cast::after {
-        content: ""; position: absolute; left: 6%; right: 6%; bottom: -10px; height: 26px;
-        background:
-          radial-gradient(ellipse at 27% 50%, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0) 62%),
-          radial-gradient(ellipse at 73% 50%, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0) 62%);
-        z-index: -1; pointer-events: none;
-      }
-
-      /* ---- Logo ------------------------------------------------------- */
-      .boot-logo { position: relative; text-align: center; }
       #boot h1 {
-        font-size: clamp(30px, 6.4vw, 78px); letter-spacing: 0.18em; font-weight: 900;
-        line-height: 1.04;
-        background: linear-gradient(180deg, #fff8e2 0%, #ffd166 42%, #f08c1d 74%, #b4560c 100%);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-        -webkit-text-stroke: 1px rgba(24, 12, 4, 0.55);
-        filter: drop-shadow(0 3px 0 rgba(70, 30, 6, 0.75)) drop-shadow(0 0 34px rgba(255, 170, 60, 0.35));
+        font-size: clamp(34px, 8.2vw, 104px); letter-spacing: 0.17em; font-weight: 900;
+        line-height: 1.02; text-indent: 0.17em; /* balance the trailing letter-space */
+        /* A solid warm gold is the BASE, not a fallback afterthought: if
+           background-clip:text is unavailable the wordmark still reads. */
+        color: #ffcf6d;
       }
+      @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+        #boot h1 {
+          background: linear-gradient(180deg, #fff6dd 0%, #ffd166 44%, #f2901f 76%, #c2610d 100%);
+          -webkit-background-clip: text; background-clip: text;
+          color: transparent;
+          /* Soft, blurred depth only. No zero-blur offsets, no text stroke. */
+          filter:
+            drop-shadow(0 2px 4px rgba(48, 20, 4, 0.55))
+            drop-shadow(0 0 30px rgba(255, 172, 62, 0.28));
+        }
+      }
+
+      /* Subtitle, flanked by two rules that grow out of it. Flex siblings —
+         nothing overlaps the text. */
       .boot-logo__sub {
-        margin-top: 6px; font-size: clamp(9px, 1.5vw, 13px); font-weight: 700;
-        letter-spacing: 0.52em; text-indent: 0.52em; color: #9fc0ef;
+        display: flex; align-items: center; justify-content: center;
+        gap: clamp(10px, 1.6vw, 20px);
+        font-size: clamp(9px, 1.5vw, 14px); font-weight: 700;
+        letter-spacing: 0.5em; text-indent: 0.5em; color: #9fc0ef;
         text-transform: uppercase;
       }
+      .boot-logo__sub::before, .boot-logo__sub::after {
+        content: ""; display: block; height: 1px; width: clamp(18px, 6vw, 74px);
+        background: linear-gradient(90deg, rgba(159, 192, 239, 0) 0%, rgba(159, 192, 239, 0.55) 100%);
+      }
+      .boot-logo__sub::after { transform: scaleX(-1); }
 
-      /* ---- Progress --------------------------------------------------- */
+      /* ---- Progress ---------------------------------------------------- */
       #boot-bar {
         position: relative; width: min(430px, 62vw); height: 8px;
+        margin-top: clamp(22px, 5vh, 54px);
         background: rgba(255, 255, 255, 0.09); border-radius: 5px; overflow: hidden;
         box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
       }
@@ -131,8 +131,8 @@
         background: linear-gradient(90deg, #ffb347, #ffd98a 45%, #48d6ff);
         transition: width 0.25s ease; box-shadow: 0 0 14px rgba(255, 179, 71, 0.8);
       }
-      /* Indeterminate sweep: proof of life even before the first progress
-         event, and it needs no JS clock. */
+      /* Indeterminate sweep: proof of life before the first progress event,
+         and it needs no JS clock. Clipped inside the bar, far from the type. */
       #boot-bar::after {
         content: ""; position: absolute; inset: 0;
         background: linear-gradient(
@@ -144,17 +144,20 @@
       @keyframes boot-sweep { to { transform: translateX(100%); } }
 
       #boot-msg {
+        margin-top: clamp(10px, 1.8vh, 18px);
         font-size: clamp(10px, 1.3vw, 12px); letter-spacing: 0.2em; text-transform: uppercase;
         opacity: 0.68; min-height: 1.2em; text-align: center;
       }
 
-      /* Tight viewports (the 800x450 review pane): stack tighter, no bob. */
+      /* Tight viewports (the 800x450 review pane): pull the stack together. */
       @media (max-height: 470px) {
-        .boot-char { width: clamp(96px, 17vw, 150px); }
-        #boot { gap: 8px; }
+        #boot-bar { margin-top: 20px; }
+        #boot h1 { font-size: clamp(30px, 6.6vw, 60px); }
       }
       @media (prefers-reduced-motion: reduce) {
-        #boot::before, .boot-char, #boot-bar::after { animation: none; }
+        #boot { transition: none; }
+        #boot-bar::after { animation: none; }
+        #boot-fill { transition: none; }
       }
     </style>
   </head>
@@ -162,218 +165,6 @@
     <div id="app"></div>
 
     <div id="boot">
-      <div class="boot-cast">
-        <!-- ============ FOXY ============================================
-             Fox, three-quarter facing right (inward). Mustard beret with a
-             stalk, round dark-rimmed spectacles, blue knit roll-neck,
-             orange-rust fur with cream muzzle / cheeks / chest, dark brown
-             ear tips, and the bushy cream-tipped tail behind her.
-        -->
-        <svg class="boot-char boot-char--fox" viewBox="0 0 200 230"
-             xmlns="http://www.w3.org/2000/svg" role="img"
-             aria-label="Foxy the fox in a mustard beret and blue knit sweater">
-          <defs>
-            <radialGradient id="foxFur" cx="34%" cy="26%" r="82%">
-              <stop offset="0%" stop-color="#ff9a45" />
-              <stop offset="62%" stop-color="#e4761f" />
-              <stop offset="100%" stop-color="#a8500f" />
-            </radialGradient>
-            <linearGradient id="foxKnit" x1="18%" y1="0%" x2="86%" y2="100%">
-              <stop offset="0%" stop-color="#6b96bd" />
-              <stop offset="55%" stop-color="#4a7398" />
-              <stop offset="100%" stop-color="#2f5375" />
-            </linearGradient>
-            <linearGradient id="foxBeret" x1="10%" y1="0%" x2="80%" y2="100%">
-              <stop offset="0%" stop-color="#f7cd63" />
-              <stop offset="58%" stop-color="#d8a32b" />
-              <stop offset="100%" stop-color="#9c6f11" />
-            </linearGradient>
-            <radialGradient id="foxCream" cx="40%" cy="30%" r="80%">
-              <stop offset="0%" stop-color="#fffaf0" />
-              <stop offset="100%" stop-color="#f3e3cb" />
-            </radialGradient>
-          </defs>
-
-          <!-- tail: bushy, sweeping up behind her left shoulder -->
-          <path d="M74,186 C36,188 14,158 22,124"
-                fill="none" stroke="#c15f14" stroke-width="40" stroke-linecap="round" />
-          <path d="M74,186 C38,188 18,158 25,126"
-                fill="none" stroke="url(#foxFur)" stroke-width="32" stroke-linecap="round" />
-          <path d="M25,128 C23,120 23,114 24,108"
-                fill="none" stroke="url(#foxCream)" stroke-width="30" stroke-linecap="round" />
-
-          <!-- knit sweater: shoulders + rolled collar -->
-          <path d="M44,222 C44,176 68,156 100,156 C132,156 156,176 156,222 Z"
-                fill="url(#foxKnit)" />
-          <g stroke="rgba(255,255,255,0.10)" stroke-width="3" fill="none">
-            <path d="M50,196 C70,188 130,188 150,196" />
-            <path d="M47,208 C68,200 132,200 153,208" />
-            <path d="M53,184 C72,177 128,177 147,184" />
-          </g>
-          <path d="M44,222 C44,196 52,178 62,168 C56,186 54,204 54,222 Z"
-                fill="rgba(10,24,40,0.28)" />
-          <ellipse cx="100" cy="160" rx="43" ry="16" fill="#5d86ab" />
-          <ellipse cx="100" cy="164" rx="34" ry="10" fill="#33587c" />
-
-          <!-- cream chest tuft rising out of the roll-neck -->
-          <path d="M84,164 C90,152 112,152 118,164 C110,170 92,170 84,164 Z"
-                fill="url(#foxCream)" />
-
-          <!-- ears (behind the beret so it sits over their bases) -->
-          <g stroke-linejoin="round" stroke-linecap="round">
-            <polygon points="112,66 132,22 146,62" fill="url(#foxFur)"
-                     stroke="url(#foxFur)" stroke-width="9" />
-            <polygon points="124,40 132,22 140,42" fill="#4a2e20"
-                     stroke="#4a2e20" stroke-width="7" />
-            <polygon points="60,68 50,18 90,54" fill="url(#foxFur)"
-                     stroke="url(#foxFur)" stroke-width="9" />
-            <polygon points="52,36 50,18 68,28" fill="#4a2e20"
-                     stroke="#4a2e20" stroke-width="7" />
-            <polygon points="62,62 57,34 80,54" fill="#f3e3cb"
-                     stroke="#f3e3cb" stroke-width="4" opacity="0.9" />
-          </g>
-
-          <!-- head: skull, snout, cheeks -->
-          <ellipse cx="96" cy="104" rx="46" ry="42" fill="url(#foxFur)" />
-          <polygon points="120,94 178,110 174,122 144,134 120,126"
-                   fill="url(#foxCream)" stroke="url(#foxCream)"
-                   stroke-width="11" stroke-linejoin="round" />
-          <ellipse cx="70" cy="120" rx="24" ry="17" fill="url(#foxCream)"
-                   transform="rotate(-18 70 120)" />
-          <ellipse cx="176" cy="114" rx="10" ry="7.5" fill="#241713"
-                   transform="rotate(-12 176 114)" />
-          <path d="M150,128 C158,132 164,131 168,127"
-                fill="none" stroke="#7a4a2c" stroke-width="3" stroke-linecap="round" />
-          <!-- whiskers -->
-          <g stroke="rgba(255,255,255,0.55)" stroke-width="2" stroke-linecap="round" fill="none">
-            <path d="M146,116 L120,108" />
-            <path d="M146,122 L118,120" />
-            <path d="M148,128 L122,132" />
-          </g>
-
-          <!-- spectacles: two rims, a bridge, and a temple back to the ear -->
-          <g fill="none" stroke="#2b1d15" stroke-width="5" stroke-linecap="round">
-            <circle cx="128" cy="94" r="17.5" fill="rgba(210,236,255,0.20)" />
-            <circle cx="92" cy="90" r="16" fill="rgba(210,236,255,0.16)" />
-            <path d="M110,92 C114,88 118,88 111,90" />
-            <path d="M76,88 C66,88 60,92 56,98" stroke-width="4" />
-          </g>
-          <!-- eyes + brows, inside the rims -->
-          <ellipse cx="130" cy="95" rx="6.4" ry="7" fill="#241a12" />
-          <ellipse cx="93" cy="91" rx="5.6" ry="6.4" fill="#241a12" />
-          <circle cx="132.6" cy="92" r="2.1" fill="#fff" opacity="0.92" />
-          <circle cx="95.4" cy="88" r="1.8" fill="#fff" opacity="0.92" />
-          <g stroke="#8a4a16" stroke-width="4" stroke-linecap="round" fill="none">
-            <path d="M120,74 C127,70 136,71 141,75" />
-            <path d="M84,71 C91,67 99,68 104,72" />
-          </g>
-
-          <!-- beret: tilted crown, gripped band, stalk -->
-          <g transform="rotate(-15 96 64)">
-            <ellipse cx="96" cy="60" rx="51" ry="24" fill="url(#foxBeret)" />
-            <ellipse cx="96" cy="72" rx="44" ry="13" fill="#b7861a" />
-            <path d="M52,68 C62,60 130,60 140,68"
-                  fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="3" />
-            <path d="M96,38 C101,32 101,26 96,22"
-                  fill="none" stroke="#e0b23c" stroke-width="9" stroke-linecap="round" />
-          </g>
-        </svg>
-
-        <!-- ============ CAPY ===========================================
-             Capybara, three-quarter facing left (inward). Rust bucket hat
-             with a darker band and a floppy brim, blue-grey knit scarf with
-             a fringed end, sandy-tan fur, blunt rounded muzzle, small
-             high-set ears, heavy rounded silhouette. No tail.
-        -->
-        <svg class="boot-char boot-char--capy" viewBox="0 0 200 230"
-             xmlns="http://www.w3.org/2000/svg" role="img"
-             aria-label="Capy the capybara in a rust bucket hat and blue-grey scarf">
-          <defs>
-            <radialGradient id="capyFur" cx="36%" cy="26%" r="84%">
-              <stop offset="0%" stop-color="#e2c5a4" />
-              <stop offset="60%" stop-color="#c9a98a" />
-              <stop offset="100%" stop-color="#8f7255" />
-            </radialGradient>
-            <linearGradient id="capyHat" x1="14%" y1="0%" x2="82%" y2="100%">
-              <stop offset="0%" stop-color="#e5814a" />
-              <stop offset="55%" stop-color="#c4622d" />
-              <stop offset="100%" stop-color="#8d3f18" />
-            </linearGradient>
-            <linearGradient id="capyScarf" x1="10%" y1="0%" x2="90%" y2="100%">
-              <stop offset="0%" stop-color="#8fb0cb" />
-              <stop offset="55%" stop-color="#6e90ae" />
-              <stop offset="100%" stop-color="#476a89" />
-            </linearGradient>
-            <radialGradient id="capyCream" cx="42%" cy="32%" r="80%">
-              <stop offset="0%" stop-color="#f6e6cf" />
-              <stop offset="100%" stop-color="#e3cbae" />
-            </radialGradient>
-          </defs>
-
-          <!-- heavy rounded body: wider and lower than the fox -->
-          <path d="M30,222 C30,172 62,150 100,150 C138,150 170,172 170,222 Z"
-                fill="url(#capyFur)" />
-          <path d="M30,222 C30,192 40,170 52,160 C42,182 40,202 40,222 Z"
-                fill="rgba(40,26,14,0.22)" />
-
-          <!-- scarf: wrap, hanging end, fringe -->
-          <path d="M62,168 C56,188 60,202 52,216"
-                fill="none" stroke="url(#capyScarf)" stroke-width="22" stroke-linecap="round" />
-          <g stroke="#3f6382" stroke-width="4" stroke-linecap="round" fill="none">
-            <path d="M45,214 L41,224" />
-            <path d="M53,216 L52,226" />
-            <path d="M61,214 L64,224" />
-          </g>
-          <ellipse cx="100" cy="158" rx="48" ry="18" fill="url(#capyScarf)" />
-          <ellipse cx="100" cy="162" rx="38" ry="11" fill="#4f7291" />
-          <g stroke="rgba(255,255,255,0.13)" stroke-width="3" fill="none">
-            <path d="M60,152 C78,144 122,144 140,152" />
-            <path d="M58,164 C78,157 122,157 142,164" />
-          </g>
-
-          <!-- ears: small, high-set, almost nothing -->
-          <circle cx="62" cy="72" r="12" fill="url(#capyFur)" />
-          <circle cx="60" cy="72" r="5.5" fill="#8a6a4a" />
-          <circle cx="136" cy="70" r="12" fill="url(#capyFur)" />
-          <circle cx="138" cy="70" r="5.5" fill="#8a6a4a" />
-
-          <!-- head: a loaf, wider than it is tall -->
-          <ellipse cx="100" cy="106" rx="53" ry="40" fill="url(#capyFur)" />
-          <ellipse cx="60" cy="120" rx="27" ry="21" fill="url(#capyCream)" />
-          <ellipse cx="41" cy="113" rx="12" ry="8" fill="#3b2a20" />
-          <path d="M46,126 C54,131 62,130 66,126"
-                fill="none" stroke="#6b4c30" stroke-width="3.5" stroke-linecap="round" />
-          <g stroke="rgba(255,255,255,0.45)" stroke-width="2" stroke-linecap="round" fill="none">
-            <path d="M62,112 L38,104" />
-            <path d="M62,118 L36,118" />
-            <path d="M64,124 L40,132" />
-          </g>
-          <!-- calm, half-lidded eyes -->
-          <ellipse cx="76" cy="96" rx="6.6" ry="6" fill="#2c1e16" />
-          <ellipse cx="120" cy="93" rx="6" ry="5.4" fill="#2c1e16" />
-          <circle cx="78.4" cy="93.6" r="2" fill="#fff" opacity="0.9" />
-          <circle cx="122.2" cy="90.8" r="1.8" fill="#fff" opacity="0.9" />
-          <g stroke="#8a6a4a" stroke-width="4" stroke-linecap="round" fill="none">
-            <path d="M68,88 C74,85 82,86 85,89" />
-            <path d="M112,85 C118,82 126,83 129,86" />
-          </g>
-
-          <!-- bucket hat: crown, grosgrain band, floppy brim -->
-          <path d="M56,70 C56,40 76,28 100,28 C124,28 146,40 146,70 Z"
-                fill="url(#capyHat)" />
-          <path d="M60,50 C70,40 130,40 140,50"
-                fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="4" />
-          <path d="M30,72 C30,58 60,50 100,50 C140,50 172,58 172,74
-                   C172,88 138,96 98,95 C58,94 30,86 30,72 Z"
-                fill="url(#capyHat)" />
-          <path d="M30,72 C34,84 60,94 98,95 C138,96 168,88 172,74
-                   C168,90 136,100 98,99 C58,98 32,88 30,72 Z"
-                fill="rgba(70,26,8,0.45)" />
-          <path d="M56,64 C56,58 146,56 146,64 C146,72 56,74 56,64 Z"
-                fill="#8a4a26" />
-        </svg>
-      </div>
-
       <div class="boot-logo">
         <h1>FOXY KART</h1>
         <div class="boot-logo__sub">Grand Prix</div>

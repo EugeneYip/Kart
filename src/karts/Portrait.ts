@@ -57,6 +57,28 @@
  *  once even though the same material objects are already compiled for the
  *  game's light rig. It is a one-off at menu open, and `KartManager` caches the
  *  finished canvases so it never happens twice.
+ *
+ *  ⚠️⚠️ THE DEFECT THAT MADE ALL TEN CARDS BLANK — read before touching `env`.
+ *  This studio's first revision assigned a **1×4** `DataTexture` ramp to
+ *  `scene.environment` with a comment saying "no PMREM, a portrait does not need
+ *  a filtered probe". three does not offer that choice: `WebGLCubeUVMaps.get()`
+ *  runs `PMREMGenerator.fromEquirectangular()` on *any* equirect environment,
+ *  and it sizes the cube from the source — `_setSize(image.width / 4)`, then
+ *  `height = 4 * cubeSize`. A 1-px-wide source therefore produced a cube size of
+ *  0.25 and a cubeUV target **1 px tall**, so `generateCubeUVSize()` emitted
+ *  `#define CUBEUV_TEXEL_HEIGHT 1` — an *integer* literal, because `1.0 / 1`
+ *  stringifies as `"1"`. GLSL ES 1.00 has no implicit int→float promotion, so
+ *  `uv.y *= CUBEUV_TEXEL_HEIGHT;` failed to compile and **every material in the
+ *  portrait scene lost its fragment shader**: skin, fur, cloth, plastic, chrome,
+ *  glass, glow, paint and the face atlas. Nothing rasterised, the readback came
+ *  back all zeroes, and `compose()` dutifully painted the card art under an
+ *  empty bust — ten coloured gradients. The headless probe could not see it
+ *  because a fake renderer has no shader compiler.
+ *  So: the environment is **256×128** (cube size 64). The floor is 64 px wide —
+ *  the cubeUV sampler hard-codes `cubeUV_minTileSize 16.0`, so a cube size under
+ *  16 samples outside its own mip chain. And `render()` now *measures* the
+ *  readback and refuses a blank one, so this class of failure degrades loudly to
+ *  `MenuSystem`'s canvas-2D bust instead of shipping a gradient.
  * ============================================================================
  */
 
@@ -83,10 +105,15 @@ const FOV_DEG = 26;
 /**
  * How far below the head box the crop reaches, as a multiple of the head box
  * height. These rigs are small — a fox's whole torso is 0.228 m against a
- * 0.32 m head-and-beret — so 0.55 lands the bottom edge on the upper chest.
+ * 0.32 m head-and-beret — so this lands the bottom edge on the upper chest.
  * Anything past ~0.9 puts the hips in frame and stops being a bust.
+ *
+ * Tightened from 0.55 once the render could actually be looked at: at 0.55 the
+ * head-and-headwear box filled 55 % of the card and the faces were small, with
+ * a band of chest and sleeve under them. 0.34 takes it to ~64 %, which is the
+ * proportion an MK8 select icon uses.
  */
-const SHOULDER_DROP = 0.55;
+const SHOULDER_DROP = 0.34;
 /** The crop never goes below this height in rig space (hips are at y = 0). */
 const CROP_FLOOR = 0.02;
 /**
@@ -105,6 +132,19 @@ const PORTRAIT_EXPRESSION: FaceExpression = 'happy';
 const SUPERSAMPLE = 2;
 /** Iterations of the distance solve. Converges to <0.5 % in three. */
 const FIT_STEPS = 4;
+/**
+ * Equirect environment size. **Width must be ≥ 64** — see the PMREM note in the
+ * file header. 256 gives a cube size of 64, which is what a real HDR probe of
+ * this kind produces and leaves margin above the 16-px sampler floor.
+ */
+const ENV_W = 256;
+const ENV_H = 128;
+/**
+ * Minimum fraction of the readback that must carry ink before a portrait is
+ * believed. A framed bust covers 30–60 % of the card; anything under this is a
+ * failed rasterisation, not a thin character.
+ */
+const MIN_INK = 0.02;
 /**
  * Hand target for a portrait-only rig (nothing to borrow). A constant rather
  * than module scratch: `KartAssets.driverFor` quantises this into a cache key,
@@ -261,21 +301,7 @@ export class PortraitStudio {
     this.lights = [key, fill, rim, hemi];
     for (const l of this.lights) this.scene.add(l);
 
-    // Environment: a 1×4 vertical ramp (zenith → horizon → ground) used as an
-    // equirect. No PMREM — that wants a live renderer, and a portrait does not
-    // need a filtered probe to stop metal reading as a black hole.
-    const env = new THREE.DataTexture(new Uint8Array([
-      164, 196, 244, 255,   // zenith
-      206, 216, 232, 255,   // upper horizon
-      148, 138, 126, 255,   // lower horizon
-      58, 50, 44, 255,      // ground
-    ]), 1, 4, THREE.RGBAFormat);
-    env.mapping = THREE.EquirectangularReflectionMapping;
-    env.colorSpace = THREE.SRGBColorSpace;
-    env.magFilter = THREE.LinearFilter;
-    env.minFilter = THREE.LinearFilter;
-    env.name = 'portrait-env';
-    env.needsUpdate = true;
+    const env = buildEnvironment(key.position, fill.position);
     this.env = env;
     this.scene.environment = env;
     this.scene.environmentIntensity = 0.9;
@@ -331,6 +357,32 @@ export class PortraitStudio {
       expr: Math.max(0, FACE_EXPRESSIONS.indexOf(PORTRAIT_EXPRESSION)),
       blink: false,
     });
+
+    // Reduce the rig to a real bust: head + torso, nothing else.
+    //
+    // This is the one thing about this module that could only be found by LOOKING
+    // at a render, which is why it was wrong for the whole of its first life.
+    // `driverFor` poses the hands at a steering-wheel target, so at a
+    // three-quarter framing both forearms swing forward and read as two dark
+    // blobs under the chin; and Foxy's tail — mounted on `hips`, and the thing
+    // `Driver.ts` says owns her silhouette from behind — swings into the top-left
+    // corner as a stray orange mass with a cream tip. Both are right for a kart
+    // seen from the chase camera and wrong for a select-screen icon.
+    //
+    //  - `rig.root` IS the hips node: everything on it except `torso` is the
+    //    tail and the hip shells, all of it below or outside a bust.
+    //  - The arm pivots are the torso's non-mesh children (`armL`/`armR`, each
+    //    parenting a forearm); the torso's own body meshes are mesh children and
+    //    stay.
+    //
+    // Visibility lives on this rig's own `Object3D`s, never on the borrowed
+    // `DriverBuild` geometry, so the live racer on the grid is untouched.
+    for (const child of rig.root.children) {
+      if (child !== rig.torso) child.visible = false;
+    }
+    for (const child of rig.torso.children) {
+      if (child !== rig.head && !(child as Partial<THREE.Mesh>).isMesh) child.visible = false;
+    }
 
     this.scene.add(rig.root);
     rig.root.position.set(0, 0, 0);
@@ -485,11 +537,18 @@ export class PortraitStudio {
 
   /**
    * Render one bust. Returns `null` when this renderer cannot read pixels back
-   * (the headless fake renderer), which the caller turns into the flat
-   * procedural fallback rather than a broken image.
+   * (the headless fake renderer) **or when the readback contains no character**,
+   * which the caller turns into the canvas-2D fallback rather than a broken
+   * image.
+   *
+   * The ink measurement is the whole reason this returns `null` rather than a
+   * canvas: the shipped defect was a perfectly well-formed 220×220 canvas that
+   * happened to contain nothing but the card gradient, and every layer above —
+   * `KartManager.renderPortrait`, `MenuSystem.buildArt` — treated "a canvas came
+   * back" as "it worked". A truthy return is now a claim about pixels.
    */
   render(subject: PortraitSubject, px = 220): {
-    canvas: HTMLCanvasElement; framing: PortraitFraming;
+    canvas: HTMLCanvasElement; framing: PortraitFraming; ink: number;
   } | null {
     if (this.disposed) return null;
     const size = Math.round(clamp(px, 64, 512));
@@ -498,9 +557,27 @@ export class PortraitStudio {
     const p = this.prepare(subject);
     try {
       const pixels = this.readPixels(ss);
-      if (!pixels) return null;
+      if (!pixels) {
+        warnOnce('readback', `[PortraitStudio] "${subject.id}": this renderer cannot read `
+          + 'pixels back, so every portrait will use the canvas-2D fallback.');
+        return null;
+      }
+      const ink = inkOf(pixels);
+      if (ink < MIN_INK) {
+        warnOnce('blank', `[PortraitStudio] "${subject.id}": the offscreen render came back `
+          + `empty (${(ink * 100).toFixed(2)} % ink, needs ${(MIN_INK * 100).toFixed(0)} %). `
+          + 'Nothing rasterised — check the console for THREE.WebGLProgram shader errors, '
+          + 'which is what a broken environment probe or an unsupported material looks like. '
+          + 'Falling back to the canvas-2D bust for the whole roster.');
+        return null;
+      }
       const canvas = compose(pixels, ss, size, subject, p.framing);
-      return canvas ? { canvas, framing: p.framing } : null;
+      if (!canvas) {
+        warnOnce('compose', `[PortraitStudio] "${subject.id}": no 2-D canvas context, `
+          + 'so the bust cannot be composited.');
+        return null;
+      }
+      return { canvas, framing: p.framing, ink };
     } finally {
       p.release();
     }
@@ -578,11 +655,120 @@ export class PortraitStudio {
 }
 
 // ---------------------------------------------------------------------------
+//  Environment probe
+// ---------------------------------------------------------------------------
+
+/** Vertical ramp stops, `v` = 0 straight down, `v` = 1 straight up. */
+const ENV_RAMP: ReadonlyArray<readonly [number, number, number, number]> = [
+  [0.00, 46, 39, 34],       // under the subject — a dark studio floor
+  [0.34, 92, 82, 72],
+  [0.47, 148, 138, 126],    // lower horizon
+  [0.53, 206, 216, 232],    // upper horizon: the bright band metal picks up
+  [1.00, 150, 184, 236],    // zenith
+];
+
+function rampAt(v: number): [number, number, number] {
+  let i = 1;
+  while (i < ENV_RAMP.length - 1 && ENV_RAMP[i][0] < v) i++;
+  const a = ENV_RAMP[i - 1];
+  const b = ENV_RAMP[i];
+  const t = clamp01((v - a[0]) / Math.max(1e-5, b[0] - a[0]));
+  return [lerp(a[1], b[1], t), lerp(a[2], b[2], t), lerp(a[3], b[3], t)];
+}
+
+/**
+ * The equirect probe: a vertical studio ramp plus a soft lobe for each of the
+ * two front lights, so clearcoat and spectacle glass reflect a *shaped*
+ * highlight rather than a flat band. Sized per `ENV_W`/`ENV_H` — see the header,
+ * the size is load-bearing.
+ *
+ * `v` = 0 is straight down: three's `equirectUv()` is
+ * `v = asin(dir.y) / PI + 0.5`, and a `DataTexture` is `flipY = false`, so row 0
+ * of the buffer is the nadir. The first revision of this ramp had it upside down
+ * as well as fatally small — the ground tone was at the zenith.
+ */
+function buildEnvironment(key: THREE.Vector3, fill: THREE.Vector3): THREE.DataTexture {
+  const data = new Uint8Array(ENV_W * ENV_H * 4);
+
+  // Light directions in equirect (u, v). Both lobes are warm/cool per their lamp.
+  const lobes: Array<{ u: number; v: number; r: number; amp: number; tint: [number, number, number] }> = [];
+  const push = (p: THREE.Vector3, r: number, amp: number, tint: [number, number, number]): void => {
+    _v.copy(p).normalize();
+    lobes.push({
+      u: Math.atan2(_v.z, _v.x) / (Math.PI * 2) + 0.5,
+      v: Math.asin(clamp(_v.y, -1, 1)) / Math.PI + 0.5,
+      r, amp, tint,
+    });
+  };
+  push(key, 0.20, 1.0, [255, 246, 228]);
+  push(fill, 0.26, 0.42, [186, 214, 255]);
+
+  for (let y = 0; y < ENV_H; y++) {
+    const v = y / (ENV_H - 1);
+    const base = rampAt(v);
+    for (let x = 0; x < ENV_W; x++) {
+      const u = x / ENV_W;
+      let r = base[0], g = base[1], b = base[2];
+      for (const L of lobes) {
+        // Azimuth wraps, so take the shorter way round the sphere.
+        let du = Math.abs(u - L.u);
+        if (du > 0.5) du = 1 - du;
+        const d = Math.hypot(du / L.r, (v - L.v) / (L.r * 0.8));
+        if (d >= 1) continue;
+        const k = (1 - d * d) * (1 - d * d) * L.amp;
+        r = lerp(r, L.tint[0], k);
+        g = lerp(g, L.tint[1], k);
+        b = lerp(b, L.tint[2], k);
+      }
+      const i = (y * ENV_W + x) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+
+  const env = new THREE.DataTexture(data, ENV_W, ENV_H, THREE.RGBAFormat);
+  env.mapping = THREE.EquirectangularReflectionMapping;
+  env.colorSpace = THREE.SRGBColorSpace;
+  env.magFilter = THREE.LinearFilter;
+  env.minFilter = THREE.LinearFilter;
+  env.wrapS = THREE.RepeatWrapping;
+  env.name = 'portrait-env';
+  env.needsUpdate = true;
+  return env;
+}
+
+// ---------------------------------------------------------------------------
 //  Framing helpers
 // ---------------------------------------------------------------------------
 
 function worstOf(b: NdcBox): number {
   return Math.max(Math.abs(b.x0), Math.abs(b.x1), Math.abs(b.y0), Math.abs(b.y1));
+}
+
+/** Warned keys, so a broken portrait says so exactly once per page load. */
+const _warned = new Set<string>();
+
+function warnOnce(key: string, message: string): void {
+  if (_warned.has(key)) return;
+  _warned.add(key);
+  console.warn(message);
+}
+
+/**
+ * Fraction of the readback carrying visible ink. Sampled on a stride: this runs
+ * once per portrait on a 440×440 buffer and every fourth pixel is plenty to tell
+ * "a rendered bust" from "an empty framebuffer".
+ */
+function inkOf(pixels: Uint8Array): number {
+  let seen = 0;
+  let lit = 0;
+  for (let i = 3; i < pixels.length; i += 16) {
+    seen++;
+    if (pixels[i] > 8) lit++;
+  }
+  return seen === 0 ? 0 : lit / seen;
 }
 
 function round4(b: NdcBox): NdcBox {

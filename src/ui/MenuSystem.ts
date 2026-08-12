@@ -31,7 +31,7 @@ import { formatStat, numeral, setNumeralText } from './Fonts';
 import { Results } from './Results';
 import type { ResultRow, StandingRow } from './Results';
 import {
-  applyUiScale, characterPortrait, el, kartThumb, probe, proceduralLoop, punch,
+  applyUiScale, characterBust, el, kartThumb, probablyBlank, probe, proceduralLoop, punch,
   setClass, setText, trackPreview, tryCall,
 } from './Widgets';
 import type { AudioLike, GameLike } from './Widgets';
@@ -234,25 +234,61 @@ export class MenuSystem implements ISubsystem {
 
   /**
    * `KartManager.renderPortrait(id)` is the intended source — a real 3-D bust of
-   * the chosen racer. The ids handed to it are now the roster's own, so it can
-   * actually resolve one; until it exists (nothing in `src/karts` implements it
-   * today) `tryCall` returns undefined and the procedural portrait stands in,
-   * painted with the racer's real paint + shade rather than an invented pair.
+   * the chosen racer, rendered offscreen from the real rig. It is feature-detected
+   * because the menu must build whether or not `src/karts` is running.
+   *
+   * ⚠️ WHY THE FALLBACK IS NOW A REAL CHARACTER, AND WHY THIS COUNTS PIXELS
+   * The 3-D path shipped and produced **ten blank cards**: a degenerate
+   * environment probe broke every fragment shader in the portrait scene, so the
+   * offscreen buffer came back empty and the studio composited its card art
+   * under nothing (see the header of `@/karts/Portrait`). Two lessons are baked
+   * in here:
+   *
+   *  - **A canvas coming back is not proof of art.** `probablyBlank()` samples
+   *    the returned bitmap; a portrait with no character in it is rejected as if
+   *    the call had failed. Both this and the studio's own ink check would have
+   *    caught the defect on their own.
+   *  - **The fallback has to be worth falling back to.** It used to be
+   *    `characterPortrait()`, one grey visor ellipse with the racer's initial in
+   *    the corner — identical for all ten, which the visual critic failed. It is
+   *    now `characterBust()`, driven by `BustSpec` off the driver rig's own
+   *    definition, so each racer keeps their species, palette and headwear
+   *    silhouette.
+   *
+   * Whichever source wins, it is loud about it exactly once.
    */
   private buildArt(): void {
+    let fellBack = 0;
     for (const c of CHARACTERS) {
       const fromKarts = tryCall<unknown>(this.game.karts, 'renderPortrait', c.id, 220);
       let url = '';
-      if (typeof fromKarts === 'string') url = fromKarts;
-      else if (fromKarts instanceof HTMLCanvasElement) {
-        try { url = fromKarts.toDataURL('image/png'); } catch { url = ''; }
+      let why = 'renderPortrait is not available';
+      if (typeof fromKarts === 'string') {
+        url = fromKarts;
+        if (!url) why = 'renderPortrait returned an empty string';
+      } else if (fromKarts instanceof HTMLCanvasElement) {
+        if (probablyBlank(fromKarts)) {
+          why = 'renderPortrait returned a canvas with no character in it';
+        } else {
+          try { url = fromKarts.toDataURL('image/png'); }
+          catch { why = 'the portrait canvas could not be encoded'; }
+        }
       }
       if (!url) {
-        try { url = characterPortrait(c.name, c.colorA, c.colorB, 220).toDataURL('image/png'); }
+        fellBack++;
+        if (fellBack === 1) {
+          console.warn(`[MenuSystem] no 3-D portrait for "${c.id}" — ${why}. `
+            + 'Drawing the canvas-2D bust instead for any racer that needs it.');
+        }
+        try { url = characterBust(c.bust, c.colorA, c.colorB, c.glow, 220).toDataURL('image/png'); }
         catch { url = ''; }
       }
       this.portraits.push(url);
       this.portraitById.set(c.id, url);
+    }
+    if (fellBack > 0) {
+      console.warn(`[MenuSystem] ${fellBack}/${CHARACTERS.length} racer portraits are the `
+        + 'canvas-2D bust rather than a 3-D render.');
     }
     for (const k of KART_BODIES) {
       try { this.kartArt.push(kartThumb(k.colorA, k.colorB, 240, 180).toDataURL('image/png')); }

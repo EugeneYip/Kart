@@ -667,7 +667,7 @@ class Harness {
     const ids: ItemModelId[] = [
       'rocket', 'bottle', 'battery', 'ninja',
       'star', 'greenShell', 'blueShell', 'bomb',
-      'bullet', 'coin',
+      'bullet',
     ];
     const cols = 4;
     const sx = 2.35, sy = 2.5;

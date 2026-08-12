@@ -244,6 +244,11 @@ export class MotionBlurEffect extends Effect {
     this.setChanged();
   }
 
+  /** Current tap count. Reported by the resolution-budget log and the perf HUD. */
+  get tapCount(): number {
+    return Number(this.defines.get('MB_TAPS') ?? 0);
+  }
+
   /**
    * Supply (or clear) the subject mask. White = keep sharp. Toggling between
    * null and a texture recompiles the pass, so RenderPipeline calls this once

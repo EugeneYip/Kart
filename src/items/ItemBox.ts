@@ -44,10 +44,10 @@ export const BOX_PICKUP_RADIUS = 1.55;
 export const BOX_RESPAWN = 6.0;
 
 /**
- * Height of a box's centre above the road, metres.
+ * Height a SPAWNER lifts a box's centre above the road, metres.
  *
  * NOT a free parameter. The box tumbles (±0.32 rad about X, free yaw, ±0.22 rad
- * about Z), bobs ±0.10 m and breathes ±2.2 % of scale, and the outer rim shell is
+ * about Z), bobs and breathes ±2.2 % of scale, and the outer rim shell is
  * 1.075× the body — so its lowest point sweeps below its centre as it animates.
  *
  * MEASURED, not estimated (`.probe-tmp/boxclear.ts`, which drives the same
@@ -63,10 +63,50 @@ export const BOX_RESPAWN = 6.0;
  * corners pull the extreme in. The lift is right either way, but the margin is
  * bigger than the comment implied.
  *
- * Anything that positions a box — the authored path in TrackBuilder and the
- * fallback in ItemSystem alike — must use this, or boxes clip through the tarmac.
+ * ⚠️ `TrackBuilder` does NOT import this. It carries its own private
+ * `ITEM_BOX_HEIGHT = 1.7`, and the authored path — the one every shipping
+ * circuit actually uses — reads that. The two agree numerically today, and a
+ * previous handoff claimed they were the same symbol; they are not. That is why
+ * the float trim below lives in `ItemBoxField` rather than in this constant:
+ * raising this number alone would move the fallback boxes and leave all 39
+ * authored ones exactly where they were.
  */
 export const ITEM_BOX_LIFT = 1.7;
+
+/**
+ * Extra float the FIELD adds to every spawn, along that spawn's own up axis.
+ *
+ * ------------------------------------------------------------------------
+ * WHY THIS EXISTS — the third "half-buried box" report, and it is not geometry
+ * ------------------------------------------------------------------------
+ * The boxes do not intersect the road. Measured twice, on both spawn paths, all
+ * three circuits: worst clearance 0.2789 m. What was never checked is whether
+ * 0.28 m LOOKS like clearance, and on a 1.72 m box it does not — the visible gap
+ * under it was 16 % of its own height at the animation extreme and ~32 % at rest.
+ * An object floating that close to a surface reads as resting on it, and three
+ * things then finish the illusion:
+ *
+ *   1. the body casts a real shadow-map shadow, which at 0.28 m lands directly
+ *      under the box and merges with its own base;
+ *   2. the additive Fresnel rim shell is 1.075x the body, so its halo hangs
+ *      6.5 cm past the silhouette — including downward, onto the tarmac;
+ *   3. the bob was SYMMETRIC (±0.10 m), so half of every cycle was spent BELOW
+ *      the authored rest height, i.e. the worst case was also the common case.
+ *
+ * MK8's boxes float roughly half a box height clear. This trim plus the one-sided
+ * bob (see `update`) takes the worst case from 0.28 m to ~0.72 m and the typical
+ * gap to ~1.0 m — 42 % and 58 % of the box's height — which separates the shadow,
+ * lifts the halo off the road, and makes the float legible.
+ *
+ * Applied here, in the field, for two reasons: it is the one place BOTH spawn
+ * paths funnel through (so the authored path in `TrackBuilder` — which this agent
+ * does not own — is fixed without touching it), and it is baked into `pos`, so
+ * pickup collision, shards and VFX all use the same height the player sees.
+ */
+export const BOX_FLOAT = 0.34;
+
+/** Peak of the one-sided bob, metres. The box rises from rest, never below it. */
+export const BOX_BOB = 0.16;
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -404,9 +444,13 @@ export class ItemBoxField {
     const n = Math.min(spawns.length, MAX_BOXES);
     for (let i = 0; i < n; i++) {
       const s = spawns[i];
+      const up = (s.normal ? s.normal.clone() : new THREE.Vector3(0, 1, 0)).normalize();
       this.boxes.push({
-        pos: s.position.clone(),
-        up: (s.normal ? s.normal.clone() : new THREE.Vector3(0, 1, 0)).normalize(),
+        // `BOX_FLOAT` is baked in HERE and nowhere else, so every consumer of
+        // `pos` — the pickup sphere, the shard burst, the VFX position the HUD
+        // reads — agrees with what is drawn. See the constant for why.
+        pos: s.position.clone().addScaledVector(up, BOX_FLOAT),
+        up,
         phase: (i * 0.618033) % 1,
         respawn: 0,
         pop: 1,
@@ -432,8 +476,22 @@ export class ItemBoxField {
   }
 
   /**
-   * Sphere test against every kart. `onPickup` fires once per box per hit.
+   * CYLINDER test against every kart. `onPickup` fires once per box per hit.
    * Called from fixedUpdate.
+   *
+   * ⚠️ It used to open with a 3-D pre-filter,
+   * `dx² + dy² + dz² > r² + 1.2 -> skip`, which silently COUPLED THE CATCH RADIUS
+   * TO THE FLOAT HEIGHT. With a kart CoM ~0.45 m up and a box centre at 1.70 m,
+   * `dy² = 1.56` ate most of the 3.60 budget and left a 1.43 m horizontal reach;
+   * raising the float by `BOX_FLOAT` would have cut that to 1.04 m — barely wider
+   * than a kart's half-width — and turned a visual fix into "the boxes stopped
+   * collecting". `TrackBuilder`'s own comment on `ITEM_BOX_HEIGHT` even cites the
+   * 1.4 m figure as the *upper bound on how high a box may float*, which is the
+   * tail wagging the dog: a pre-filter is an early-out, not a gameplay rule.
+   *
+   * The two tests that follow are the actual contract and always were — a 1.55 m
+   * horizontal radius and ±2.4 m of vertical slack — so the reach is now
+   * independent of how high the box hovers.
    */
   checkPickups(
     positions: ReadonlyArray<{ id: number; position: THREE.Vector3; skip: boolean }>,
@@ -446,13 +504,13 @@ export class ItemBoxField {
       for (let k = 0; k < positions.length; k++) {
         const kart = positions[k];
         if (kart.skip) continue;
-        const dx = kart.position.x - b.pos.x;
         const dy = kart.position.y - b.pos.y;
-        const dz = kart.position.z - b.pos.z;
-        if (dx * dx + dy * dy + dz * dz > r2 + 1.2) continue;
-        // Vertical tolerance is looser than horizontal (karts jump).
-        if (dx * dx + dz * dz > r2) continue;
+        // Cheapest reject first, and the one that culls a whole lap's worth of
+        // boxes on a circuit with bridges over itself.
         if (Math.abs(dy) > 2.4) continue;
+        const dx = kart.position.x - b.pos.x;
+        const dz = kart.position.z - b.pos.z;
+        if (dx * dx + dz * dz > r2) continue;
         this.breakBox(i);
         this.pickupOut.boxIndex = i;
         this.pickupOut.kartId = kart.id;
@@ -540,7 +598,12 @@ export class ItemBoxField {
       const overshoot = 1 + Math.sin(k * Math.PI) * 0.34 * (1 - smoothstep(k));
       const breathe = 1 + Math.sin(t * 2.2 + ph) * 0.022;
       const s = smoothstep(k) * overshoot * breathe;
-      const bob = Math.sin(t * 1.5 + ph) * 0.10;
+      // ONE-SIDED BOB. This used to be `sin(...) * 0.10`, i.e. half of every
+      // cycle spent BELOW the authored rest height — so the worst-case road
+      // clearance was also the average one, and the box dipped toward the tarmac
+      // twice a second. Now it only ever rises from rest, which reads as the same
+      // gentle hover and makes the rest height a true floor.
+      const bob = (0.5 + 0.5 * Math.sin(t * 1.5 + ph)) * BOX_BOB;
 
       _v.copy(b.pos).addScaledVector(b.up, bob);
       _scale.setScalar(s);

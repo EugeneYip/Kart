@@ -717,16 +717,69 @@ function patchProp(
 // Textures
 // ===========================================================================
 
-const SPONSORS: Array<[string, string, string]> = [
-  ['APEX', '#e8332a', '#ffffff'],
-  ['NITRO', '#141821', '#ffd23f'],
-  ['TURBO', '#0f6bd6', '#ffffff'],
-  ['GRIP', '#1f9e57', '#0c1410'],
-  ['VOLT', '#7a2ed6', '#f2e9ff'],
-  ['SLIP', '#ff7a18', '#22160b'],
-  ['DRIFT', '#0d1b2a', '#4fd6ff'],
-  ['KART', '#f4f1e6', '#c2192a'],
+/**
+ * The eight trackside advertisers. `lines` is the wordmark: one entry is set as
+ * a single wide line, two entries as a stacked lockup with the second line
+ * smaller and tracked out.
+ *
+ * ---- P0d. The owner asked for their own two brands on the boards, *"not too
+ * densely"*, replacing some APEX and SLIP cells. So APEX (cell 0) is now
+ * **CAPY LAB** and SLIP (cell 5) is **TINY TRIP CLUB**, and `weight` makes them
+ * genuinely sparse rather than one-in-eight — see `SPONSOR_PICK` below.
+ *
+ * "TINY TRIP CLUB" is 14 characters against NITRO's 5, and the cells are square
+ * (2048x1024 over 4x2) stretched onto a 6.4 x 2.1 m board, so a single line at
+ * the shared 0.42-of-cell size would run about 2.8x past the cell edge. It is
+ * therefore set as a two-line lockup — TINY TRIP over CLUB — and every line goes
+ * through `fitLine()`, which measures the glyphs and shrinks the size until it
+ * fits the safe width. That means no future brand name can overflow either,
+ * whatever its length.
+ */
+interface Sponsor {
+  readonly lines: readonly [string] | readonly [string, string];
+  readonly bg: string;
+  readonly fg: string;
+  /**
+   * Relative frequency across the boards. 1 is a normal sponsor; the owner's two
+   * brands sit at 0.4 so they read as "a couple of theirs among the others".
+   */
+  readonly weight: number;
+}
+
+const SPONSORS: readonly Sponsor[] = [
+  { lines: ['CAPY', 'LAB'], bg: '#1d6f63', fg: '#f6efdd', weight: 0.4 },
+  { lines: ['NITRO'], bg: '#141821', fg: '#ffd23f', weight: 1 },
+  { lines: ['TURBO'], bg: '#0f6bd6', fg: '#ffffff', weight: 1 },
+  { lines: ['GRIP'], bg: '#1f9e57', fg: '#0c1410', weight: 1 },
+  { lines: ['VOLT'], bg: '#7a2ed6', fg: '#f2e9ff', weight: 1 },
+  { lines: ['TINY TRIP', 'CLUB'], bg: '#e4573c', fg: '#fff4e2', weight: 0.4 },
+  { lines: ['DRIFT'], bg: '#0d1b2a', fg: '#4fd6ff', weight: 1 },
+  { lines: ['KART'], bg: '#f4f1e6', fg: '#c2192a', weight: 1 },
 ];
+
+/**
+ * Weighted cell lookup, 20 slots. `emit()` picks a cell from the anchor's uniform
+ * `seed`, which spreads eight cells evenly at one-in-eight; with 58 sponsor
+ * boards on a circuit that would be ~7 CAPY LABs and ~7 TINY TRIP CLUBs per lap,
+ * which is not "not too densely". This table gives each owner brand 2 of 22
+ * slots (9.1 %) and each generic sponsor 3 of 22 (13.6 %), so a 58-board circuit
+ * carries about five of each — one every couple of hundred metres, never two in
+ * the same view. The two owner cells sit at slots 1, 5, 9 and 13, so consecutive
+ * seeds can never put them side by side either.
+ */
+const SPONSOR_PICK: readonly number[] = (() => {
+  const out: number[] = [];
+  // Interleaved rather than blocked, so consecutive seeds cannot land two owner
+  // boards next to each other.
+  const order = [1, 0, 2, 3, 6, 5, 4, 7];
+  for (let pass = 0; pass < 3; pass++) {
+    for (const cell of order) {
+      if (pass === 2 && SPONSORS[cell].weight < 1) continue;
+      out.push(cell);
+    }
+  }
+  return out;
+})();
 
 const ATLAS_COLS = 4;
 const ATLAS_ROWS = 2;
@@ -764,13 +817,54 @@ function atlasRect(cell: number, inset = 0.006): [number, number, number, number
   return V_TOP_FIRST ? [u0, vTop, u1, vBot] : [u0, vBot, u1, vTop];
 }
 
-/** 4x2 atlas of sponsor boards, 2:1 cells to match a real trackside board. */
+/**
+ * Set one line of a wordmark at the largest size that fits `maxWidth`.
+ *
+ * The existing sponsors are all one short word, so the atlas could hard-code a
+ * font size. "TINY TRIP CLUB" cannot: at the shared 0.42-of-cell size it measures
+ * roughly 2.8x the cell width. Measuring and shrinking is the only version of
+ * this that survives the next brand name somebody adds.
+ *
+ * Returns the size actually used, so a caller stacking two lines can keep the
+ * second line proportional to the first.
+ */
+function fitLine(
+  ctx: CanvasRenderingContext2D, text: string, maxWidth: number,
+  wantPx: number, weight: number, tracking = 0,
+): number {
+  let px = wantPx;
+  const measure = (): number => {
+    ctx.font = `${weight} ${Math.round(px)}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+    // `letterSpacing` is not universally available on 2D contexts, so tracking is
+    // applied as an explicit per-gap allowance rather than trusted to the API.
+    return ctx.measureText(text).width + tracking * px * Math.max(0, text.length - 1);
+  };
+  let wd = measure();
+  // Ten halving-free steps: proportional shrink converges in one or two passes
+  // for real text, and the loop is bounded so a pathological metric cannot hang.
+  for (let k = 0; k < 10 && wd > maxWidth && px > 6; k++) {
+    px *= Math.max(0.55, (maxWidth / wd) * 0.995);
+    wd = measure();
+  }
+  return px;
+}
+
+/**
+ * 4x2 atlas of sponsor boards. The cells are square (2048 x 1024 over 4 x 2) and
+ * get stretched onto the 6.4 x 2.1 m `sponsorBoard` plate; that horizontal
+ * stretch is longstanding and the wordmarks are drawn to look right through it.
+ *
+ * DO NOT "FIX" THE UVS from in here. Both axes are settled and verified on
+ * screen — see the `V_TOP_FIRST` note above `atlasRect()` for v, and the long
+ * note in `plate()` for u. HANDOFF.md section 0b records an earlier `u` swap that
+ * was wrong and had to be reverted; the ascending range is correct.
+ */
 function makeSponsorAtlas(): THREE.CanvasTexture {
   return canvasTexture(2048, (ctx, w, h) => {
     const cw = w / 4, ch = h / 2;
     for (let i = 0; i < 8; i++) {
       const x = (i % 4) * cw, y = Math.floor(i / 4) * ch;
-      const [text, bg, fg] = SPONSORS[i];
+      const { lines, bg, fg } = SPONSORS[i];
       const grad = ctx.createLinearGradient(x, y, x, y + ch);
       grad.addColorStop(0, bg);
       grad.addColorStop(1, shade(bg, 0.72));
@@ -801,16 +895,39 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
       ctx.fillStyle = fg;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = `900 ${Math.round(ch * 0.42)}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+      // Safe width: inside the 8 px inset and the 7 px keyline, with a margin.
+      const safe = cw - 46;
       ctx.save();
       ctx.translate(x + cw * 0.5, y + ch * 0.5);
       ctx.transform(1, 0, -0.14, 1, 0, 0);
-      ctx.fillText(text, 0, 0);
+      if (lines.length === 1) {
+        fitLine(ctx, lines[0], safe, ch * 0.42, 900);
+        ctx.fillText(lines[0], 0, 0);
+      } else {
+        // Two-line lockup: the long line takes the width, the short line sits
+        // under it a size down and tracked out, which is how a club wordmark is
+        // set and keeps "CLUB" from looking like a truncation of the line above.
+        const top = fitLine(ctx, lines[0], safe, ch * 0.34, 900);
+        ctx.fillText(lines[0], 0, -top * 0.44);
+        const botPx = fitLine(ctx, lines[1], safe * 0.82, top * 0.62, 700, 0.22);
+        // Tracking has to be drawn glyph by glyph: the measurement above allowed
+        // for it, so the string must actually carry it or the line reads narrow.
+        const gap = botPx * 0.22;
+        const glyphs = [...lines[1]];
+        let total = -gap * (glyphs.length - 1);
+        for (const g of glyphs) total += ctx.measureText(g).width;
+        let gx = -(total + gap * (glyphs.length - 1)) * 0.5;
+        for (const g of glyphs) {
+          const gw = ctx.measureText(g).width;
+          ctx.fillText(g, gx + gw * 0.5, top * 0.60);
+          gx += gw + gap;
+        }
+      }
       ctx.restore();
 
       ctx.globalAlpha = 0.55;
       ctx.font = `600 ${Math.round(ch * 0.1)}px Helvetica, Arial, sans-serif`;
-      ctx.fillText('APEX KART CHAMPIONSHIP', x + cw * 0.5, y + ch * 0.82);
+      ctx.fillText('FOXY KART CHAMPIONSHIP', x + cw * 0.5, y + ch * 0.82);
       ctx.globalAlpha = 1;
     }
   }, { srgb: true, height: 1024 });
@@ -955,7 +1072,13 @@ export function planStands(ctx: WorldContext, limit = 8): StandSpec[] {
       const y = field.heightAt(x, z);
       if (y < ctx.waterLevel + 0.6) continue;
       if (field.slopeAt(x, z) > 0.55) continue;
-      if (!standClearsRoad(st, x, z, yaw, width)) continue;
+      // 1.16x, not 1.0. `standParts` builds roof eaves and end walls past the
+      // nominal `width` — measured, a 46 m stand emits a 53 m mesh — so testing
+      // the nominal width let a stand's far end land 11 m inside the road on a
+      // curve (`.probe-tmp/crowding.ts`: `grandstand:46x6` worst clearance
+      // -11.0 m, 1.08 % of frame across 69 of 193 volcano stations). Same class
+      // of bug as an authored `lat` that ignores its own recipe's width.
+      if (!standClearsRoad(st, x, z, yaw, width * 1.16)) continue;
       for (const o of out) if (o.position.distanceTo(_v.set(x, y, z)) < 95) return false;
       out.push({
         position: new THREE.Vector3(x, y, z),
@@ -1014,7 +1137,17 @@ function roadside(
       const along = (rng.next() - 0.5) * o.spacing * jitter;
       const x = s.px + s.bx * d * side + s.tx * along;
       const z = s.pz + s.bz * d * side + s.tz * along;
-      if (field.roadDistanceAt(x, z) < s.halfWidth + o.min * 0.6) continue;
+      // `d` above is measured on the STATION's frame; this is the check against
+      // the real baked distance field, which is what catches an anchor that sits
+      // on the inside of a bend where the road curves back toward it.
+      //
+      // The discount used to be `o.min * 0.6` — a silent 40 % write-off of the
+      // clearance the caller asked for, which on a 12 m half-width section let a
+      // pass declaring `min: 4` put its props 2.4 m from the tarmac. 0.9 keeps a
+      // little slack for the field's bake resolution without handing back most of
+      // the margin. Rejecting a few anchors is the right trade here: the whole
+      // P0d complaint is that there is too much bulk close to the road.
+      if (field.roadDistanceAt(x, z) < s.halfWidth + o.min * 0.9) continue;
       const y = field.heightAt(x, z);
       if (y < ctx.waterLevel + 0.35) continue;
       if (field.slopeAt(x, z) > maxSlope) continue;
@@ -1561,7 +1694,14 @@ export class Props implements ISubsystem {
       if (atlasAttr) {
         if (o.atlasCells) {
           const cells = o.atlasCells;
-          const cell = Math.floor(a.seed * cells) % cells;
+          // `atlasCells: 8` is always the sponsor atlas (there is exactly one
+          // 8-cell atlas in the file), so it goes through the weighted lookup:
+          // a uniform 1-in-8 would put ~7 CAPY LAB and ~7 TINY TRIP CLUB boards
+          // on a 58-board lap, and the owner asked for these "not too densely".
+          // See `SPONSOR_PICK`. Any other cell count keeps the plain uniform pick.
+          const cell = cells === SPONSORS.length
+            ? SPONSOR_PICK[Math.floor(a.seed * SPONSOR_PICK.length) % SPONSOR_PICK.length]
+            : Math.floor(a.seed * cells) % cells;
           const cols = 4, rows = Math.max(1, Math.ceil(cells / cols));
           atlasAttr[n * 4] = (cell % cols) / cols;
           atlasAttr[n * 4 + 1] = Math.floor(cell / cols) / rows;
@@ -1960,7 +2100,13 @@ export class Props implements ISubsystem {
           const off = (i / segs - 0.5) * stand.width;
           const x = stand.position.x + ca * off + sa * 4.5;
           const z = stand.position.z - sa * off + ca * 4.5;
-          if (this.field.roadDistanceAt(x, z) < 9) continue;
+          // 14, not 9. This is a fixed clearance tested against a road whose half
+          // width reaches 12.5 m, so on the wide sections a 6.1 m panel passed the
+          // test while standing over the tarmac: measured (`.probe-tmp/crowding.ts`)
+          // `catchFence` / `fencePost` at -11.2 m clearance on volcano, present at
+          // 90 of 193 stations. Same class of bug as an authored `lat` that ignores
+          // its own recipe width — a constant standing in for a variable.
+          if (this.field.roadDistanceAt(x, z) < 14) continue;
           anchors.push({
             x, y: this.field.heightAt(x, z), z,
             yaw: stand.yaw, side: 0, arc: stand.arc, scale: 1, seed: rng.next(),
@@ -2565,11 +2711,20 @@ export class Props implements ISubsystem {
 
     // ---- obsidian formations -------------------------------------------------
     {
+      // ---- P0d. `roadside()`'s `min` is the clearance of the ANCHOR, and says
+      // nothing about how wide the thing standing on it is — the same mistake as
+      // the authored `alleyBlock` at lat 10.5, one layer down. The shard cluster
+      // is ~2.5 m in half-width and the scale went to 2.4, so at `min: 4` the far
+      // shard of a big one reached 2 m INSIDE the tarmac. Measured
+      // (`.probe-tmp/crowding.ts`): worst instance 7.9 m past the road edge,
+      // 0.62 % of frame across 111 of 193 stations — present at more than half
+      // the circuit. `min` now covers the widest body the scale can produce
+      // (10 - 2.5*1.6 = 6 m of guaranteed verge) and the scale range is capped.
       const anchors = roadside(ctx, rng, {
-        spacing: 19, min: 4, max: 40, sides: 2, limit: this.count(80),
+        spacing: 19, min: 10, max: 44, sides: 2, limit: this.count(80),
         maxSlope: 0.85, faceRoad: false, skipNearStands: this.stands,
       });
-      for (const a of anchors) a.scale = 0.6 + rng.next() * 1.8;
+      for (const a of anchors) a.scale = 0.55 + rng.next() * 1.05;
       // Volcano authors `obsidianSpire` twice (crater rim and the spiral) at
       // scale 1.4–1.6; this shard cluster is exactly that silhouette already.
       anchors.push(...this.takeAuthored('obsidianspire'));
@@ -3035,18 +3190,198 @@ export class Props implements ISubsystem {
         return { geo: b.build('balloonArch'), mat: this.glowSoft, cull: CULL_FAR, shadow: false };
       }
 
+      /**
+       * ===================================================================
+       *  TUNNEL PORTAL — REBUILT (P0d)
+       * ===================================================================
+       *  Owner: *"For any track with tunnel structures, the entrance and exit
+       *  aren't refined enough, causing poor visual structure."*
+       *
+       *  The old recipe was two jambs, a ten-stone arch and a keystone, and it
+       *  did not enclose anything. Measured against the bore it is supposed to
+       *  frame (`.probe-tmp/crowding.ts`, and `CROSS` in TrackBuilder for the
+       *  bore sweep):
+       *
+       *    the bore    a half-ellipse, horizontal semi-axis
+       *                `hw + kerbW + shoulder + 0.6` = 12.25 m (coastal t=0.408)
+       *                to 13.75 m (volcano t=0.865), vertical semi-axis
+       *                `tunnelH` 8.20 m, centred 0.50 m below the centreline,
+       *                so its crown is 7.70 m above the road.
+       *    the portal  jamb inner faces at +-12.25 m, arch SPRINGING at 7.14 m
+       *                and crown at 12.60 m, total 15.25 m half-width, 13.56 m
+       *                tall, 2.50 m deep.
+       *
+       *  Two consequences, both visible in the owner's screenshots:
+       *
+       *   1. The arch sprang from 7.14 m while the bore crown is at 7.70 m, and
+       *      there was NO WALL between them — a 4.9 m band of empty air between
+       *      the top of the hole you drive into and the underside of the stone
+       *      arch. You looked *through* the frame at the hillside behind it.
+       *      That is the "poor visual structure": a decorative arch parked in
+       *      front of a hole, not a portal.
+       *   2. At volcano t=0.805 the terrain is 10.36 m and the road 5.88 m, so
+       *      4.48 m of the portal (33 % of its height) is inside the hillside.
+       *      That part is CORRECT for a bore driven into rising ground — but it
+       *      ate the jambs, which were the only thing below the arch, leaving
+       *      2.7 m of stub under a 5.5 m void.
+       *
+       *  So: a real headwall with the arch opening cut in it, sized to the bore;
+       *  a projecting ring around the opening (the lip); a cornice and dentil
+       *  course at the top (the lintel); wing walls raking back into the cutting
+       *  so the structure reads as retaining the slope rather than sitting on it;
+       *  a splayed three-ring reveal so the mouth has depth; and an emissive
+       *  cove + a run of lamps going in, so the opening reads as a lit tunnel
+       *  instead of a black rectangle.
+       *
+       *  ORIENTATION. `Track.getDecorationHints().place()` yaws a lat-0 prop so
+       *  local +Z follows the TANGENT. The entrance is authored at `yaw: 0` and
+       *  the exit at `yaw: Math.PI`, so for both of them **local +Z points into
+       *  the hill and local -Z is the face the driver sees.** Everything
+       *  decorative therefore lives at negative z and everything structural
+       *  reaches into positive z.
+       *
+       *  CLEARANCE. `tunnelportal` is in `CORRIDOR_PROPS`, so neither
+       *  `clearAuthored` nor `clearRoadSurface` will fix a mistake here. The
+       *  widest shoulder edge inside a bore on any circuit is
+       *  `hw 10.0 + kerbW 1.55 + shoulder 1.6 = 13.15 m`, so nothing may come
+       *  inside 13.4 m of the centreline below the springing. The reveal rings
+       *  hold their horizontal radius at 13.60 m and get their depth read from
+       *  the z stagger and a descending soffit instead of narrowing.
+       */
       case 'tunnelportal': {
         const b = this.builder();
-        const w = 13, h = 8.5, t = 1.5;
-        for (const sx of [-1, 1]) b.box(sx * (w + t * 0.5), h * 0.42, 0, t, h * 0.42, 2.2, 0x8d8375);
-        // Stepped arch ring: 9 voussoirs rotated about the springing line.
-        for (let i = 0; i <= 9; i++) {
-          const a = Math.PI * (i / 9);
-          b.box(Math.cos(a) * (w + t * 0.5), h * 0.84 + Math.sin(a) * (w * 0.42), 0,
-            t * 0.62, 0.85, 2.2, i === 4 ? 0xa79a88 : 0x8d8375, { yaw: 0, shade: { top: 1.14 } });
+        const glow = this.builder();
+        /** Opening semi-axes: the widest bore (13.75 x 8.20) plus clearance. */
+        const R = 13.90, H = 8.45;
+        /** Springing line: -(CROSS.crown + CROSS.shoulderDrop). */
+        const Y0 = -0.50;
+        /** Headwall: how far past the opening, how high, how far below the road. */
+        const WING = 3.4, YT = Y0 + H + 2.6, YB = -3.2;
+        const FACE = 0.62;            // half-thickness of the headwall slab
+        const stone = 0x8d8375, light = 0xa79a88, dark = 0x6f665b;
+        /** Height of the arch soffit at a given x, or Y0 outside the opening. */
+        const arcY = (x: number): number => {
+          const u = Math.abs(x) / R;
+          return u >= 1 ? Y0 : Y0 + H * Math.sqrt(1 - u * u);
+        };
+
+        // ---- 1. headwall, as a column sweep with the arch cut out ----------
+        // Sampled by ANGLE, not by x, so the slabs are narrow where the curve is
+        // steep (at the springing) and wide where it is flat (at the crown). Each
+        // slab's underside takes the HIGHER of its two edge heights, so the wall
+        // can never encroach on the ellipse — the ring in step 2 hides the steps.
+        const STEPS = 20;
+        for (let i = 0; i < STEPS; i++) {
+          const x0 = -Math.cos((i / STEPS) * Math.PI) * R;
+          const x1 = -Math.cos(((i + 1) / STEPS) * Math.PI) * R;
+          const yb = Math.max(arcY(x0), arcY(x1));
+          if (YT - yb < 0.08) continue;
+          b.box((x0 + x1) * 0.5, (yb + YT) * 0.5, 0,
+            (x1 - x0) * 0.5, (YT - yb) * 0.5, FACE, i % 2 ? stone : 0x877d70,
+            { shade: { top: 1.05, side: 1.0 } });
         }
-        b.box(0, h * 0.84 + w * 0.44, 0, w * 0.34, 0.7, 2.5, 0xa79a88);
-        return { geo: b.build('tunnelPortal'), cull: CULL_FAR };
+        for (const sx of [-1, 1]) {
+          b.box(sx * (R + WING * 0.5), (YB + YT) * 0.5, 0,
+            WING * 0.5, (YT - YB) * 0.5, FACE, stone, { shade: { top: 1.05 } });
+          // Splayed footing where the wall goes into the ground.
+          b.box(sx * (R + WING * 0.5), YB + 1.1, 0, WING * 0.5 + 0.35, 1.4, FACE + 0.42,
+            dark, { shade: { top: 1.12 } });
+          // Impost band: the moulding a real arch springs from.
+          b.box(sx * (R + WING * 0.5 + 0.1), Y0 + 2.3, -0.28,
+            WING * 0.5 + 0.2, 0.34, FACE + 0.5, light, { shade: { top: 1.2 } });
+        }
+
+        // ---- 2. arch ring — the lip, proud of the face ---------------------
+        const RING = 22;
+        for (let i = 0; i <= RING; i++) {
+          const a = (i / RING) * Math.PI;
+          const cx = -Math.cos(a) * (R + 0.44);
+          const cy = Y0 + Math.sin(a) * (H + 0.44);
+          const key = Math.abs(i - RING * 0.5) < 0.51;
+          b.box(cx, cy, -0.42, 0.62, 0.72, 0.42, key ? light : (i % 2 ? stone : dark),
+            { yaw: 0, shade: { top: 1.18, side: 1.02 } });
+        }
+        // Keystone, projecting further than its neighbours.
+        b.box(0, Y0 + H + 0.9, -0.72, 1.05, 1.15, 0.72, light, { shade: { top: 1.26 } });
+
+        // ---- 3. cornice + dentil course — the lintel ----------------------
+        for (let i = 0; i < 24; i++) {
+          const x = -(R + WING) + ((i + 0.5) / 24) * (R + WING) * 2;
+          b.box(x, YT - 1.15, -0.5, 0.34, 0.3, 0.5, dark, { shade: { top: 1.1 } });
+        }
+        b.box(0, YT - 0.4, -0.34, R + WING + 0.25, 0.42, FACE + 0.42, light,
+          { shade: { top: 1.24 } });
+        // Coping: a thin cap that overhangs both faces, so the wall has a top
+        // edge instead of ending in mid-air.
+        b.box(0, YT + 0.2, 0, R + WING + 0.5, 0.22, FACE + 0.62, stone,
+          { shade: { top: 1.3 } });
+
+        // ---- 4. wing walls raking back into the cutting -------------------
+        // Three stepped blocks per side, dropping as they run into the slope: the
+        // read is "this structure is holding a hillside back", which is the whole
+        // difference between a portal and a decorative arch.
+        for (const sx of [-1, 1]) {
+          for (let k = 0; k < 3; k++) {
+            const z0 = 0.6 + k * 3.1;
+            const top = YT - 0.2 - k * 2.35;
+            b.box(sx * (R + WING * 0.5 + 0.25 + k * 0.55), (Y0 - 1 + top) * 0.5, z0 + 1.55,
+              WING * 0.42, (top - (Y0 - 1)) * 0.5, 1.55,
+              k % 2 ? stone : 0x827868, { shade: { top: 1.08 } });
+          }
+        }
+
+        // ---- 5. splayed reveal — three rings going in ---------------------
+        // Horizontal radius held at 13.60 (see the CLEARANCE note); the depth
+        // read comes from the z stagger plus a soffit that descends as it goes,
+        // which from a driver's eye height is the strongest depth cue available.
+        const REV: Array<[number, number, number]> = [
+          [1.9, 0.25, 0.90], [4.6, 0.62, 0.72], [8.2, 1.05, 0.56],
+        ];
+        for (const [z, drop, tone] of REV) {
+          for (let i = 1; i < 18; i++) {
+            const a = (i / 18) * Math.PI;
+            const cx = -Math.cos(a) * 13.60;
+            const cy = Y0 + Math.sin(a) * (H - drop);
+            const g = Math.round(0x6f * tone);
+            b.box(cx, cy, z, 0.9, 0.5, 0.55,
+              (g << 16) | (Math.round(0x66 * tone) << 8) | Math.round(0x5b * tone),
+              { shade: { top: 1.06, side: 0.96 } });
+          }
+        }
+
+        // ---- 6. interior lighting — the black-hole fix --------------------
+        // Two devices, both emissive (and bloom-tagged by `buildAuthored`):
+        //  * a cove strip washing the arch just inside the mouth, so the ring is
+        //    lit from within and the opening reads as a lit volume;
+        //  * four pairs of wall lamps marching 24 m into the bore, which is what
+        //    actually eases the eye in — a receding row of lights reads as depth
+        //    even when the lining beyond them is dark.
+        // `Lighting.NIGHT_EMITTERS` has a `portallamp` class so these also seat
+        // real point lights on any circuit whose preset wants artificial light.
+        for (let i = 2; i < 17; i++) {
+          const a = (i / 18) * Math.PI;
+          glow.box(-Math.cos(a) * (R - 0.55), Y0 + Math.sin(a) * (H - 0.55), 0.85,
+            0.52, 0.16, 0.3, 0xffb066);
+        }
+        for (const sx of [-1, 1]) {
+          for (let k = 0; k < 4; k++) {
+            const z = 3.4 + k * 6.4;
+            const y = Y0 + 4.9;
+            glow.box(sx * (R - 1.25), y, z, 0.14, 0.5, 0.8, 0xffc98a);
+            // A short wash bar under each fitting: the pool of light on the
+            // lining is what sells a lit tunnel, not the bulb.
+            glow.box(sx * (R - 1.05), y - 1.5, z, 0.1, 0.9, 0.34, 0xff9a4e);
+          }
+          // Low guide strip along the haunch, running the length of the reveal.
+          glow.box(sx * (R - 0.75), Y0 + 0.55, 12.5, 0.09, 0.14, 12.0, 0xff7a3a);
+        }
+
+        return {
+          geo: b.build('tunnelPortal'),
+          glow: glow.build('tunnelPortalGlow'),
+          softGlow: true,
+          cull: CULL_FAR,
+        };
       }
 
       case 'brakeboard': {
@@ -3229,8 +3564,17 @@ export class Props implements ISubsystem {
       }
 
       case 'townhouse': {
+        // ---- P0d SLIMMED across the road. `d` is the ACROSS-ROAD half-extent
+        // for a trackside prop (local +Z faces the road), and at 4.5-6.0 m plus
+        // 0.35 m of eaves the house reached 6.35 m off its own centre. Authored
+        // at lat 15 that left 1.1 m of verge, and `.probe-tmp/crowding.ts`
+        // measured `authored:townhouse` + its window pass at **8.5 % of the whole
+        // frame** — the biggest offender on Sunset Coastline, and the cause of
+        // its five worst stations (38-41 % of frame each). `w` (along the road) is
+        // untouched, so the terrace keeps its variety; it is just less deep
+        // towards the carriageway. TrackDefs also moves it out and thins it.
         const b = this.builder();
-        const w = rng.range(4.5, 6.5), d = rng.range(4.5, 6), storeys = 2 + rng.int(0, 1);
+        const w = rng.range(4.5, 6.5), d = rng.range(3.6, 4.6), storeys = 2 + rng.int(0, 1);
         const h = storeys * 3.1;
         b.box(0, h * 0.5, 0, w, h * 0.5, d, rng.next() < 0.5 ? 0xd8c9b0 : 0xc0a894,
           { shade: { top: 1.08 } });
@@ -3334,25 +3678,41 @@ export class Props implements ISubsystem {
       }
 
       case 'alleyblock': {
-        // Authored at lat 10.5 both sides: these form the alley walls and are
-        // the closest buildings to the kart anywhere on the circuit, so they
-        // carry the most surface detail per square metre of any city prop.
+        // These form the alley walls and are the closest buildings to the kart
+        // anywhere on the circuit, so they carry the most surface detail per
+        // square metre of any city prop.
+        //
+        // ---- P0d SLIMMED, and the fire escape moved to the BACK.
+        // `.probe-tmp/crowding.ts` measured this recipe at **13.8 % of the whole
+        // frame** on Neon Metropolis (8.56 % body + 5.23 % steel) across 38 of
+        // 194 chase stations — the largest figure for any prop on any circuit.
+        // Two separate causes:
+        //   * `d` is the ACROSS-ROAD half-extent (a trackside prop's local +Z
+        //     faces the road), and at 3.6-5.0 m plus the 0.77 m canopy overhang
+        //     the body reached 5.8 m off its own centre. Now 2.9-3.9 m.
+        //   * the fire escape hung at `d + 1.09`, i.e. a metre FURTHER toward the
+        //     road than the façade, which is why the steel pass alone filled
+        //     5.2 % of frame. A fire escape belongs over the back alley anyway,
+        //     so it is now on -Z, behind the building and out of the frame.
+        // `w` (along the road) is also trimmed 4.5-6.5 -> 4.0-5.6 so the terrace
+        // does not read as one continuous slab at the new wider spacing.
         const b = this.builder();
         b.uvScale = 0.5;
-        const H = rng.range(8.5, 13), w = rng.range(4.5, 6.5), d = rng.range(3.6, 5);
+        const H = rng.range(8.5, 13), w = rng.range(4.0, 5.6), d = rng.range(2.9, 3.9);
         const brick = rng.next() < 0.5 ? 0x7a4f42 : 0x6b5a4e;
         b.box(0, H * 0.5, 0, w, H * 0.5, d, brick, { shade: { top: 1.1 } });
         // Ground-floor shopfront in a darker band, with a canopy over it.
         b.box(0, 1.5, 0, w + 0.08, 1.5, d + 0.08, 0x33383e);
         b.box(0, 3.15, d + 0.35, w * 0.9, 0.1, 0.42, 0x2b6f5c, { shade: { top: 1.2 } });
         b.box(0, H + 0.28, 0, w + 0.4, 0.28, d + 0.4, 0x50463c, { shade: { top: 1.15 } });
-        // Fire escape: two landings and the diagonal runs between them.
+        // Fire escape: two landings and the diagonal runs between them, hung on
+        // the back wall (-Z) so it adds silhouette without adding road-side bulk.
         const metal = this.builder();
         for (let l = 0; l < 2; l++) {
           const ly = 3.9 + l * 3.4;
-          metal.box(w * 0.55, ly, d + 0.55, w * 0.42, 0.07, 0.55, 0x4a5158);
-          metal.box(w * 0.55, ly + 0.5, d + 1.05, w * 0.42, 0.5, 0.04, 0x4a5158);
-          metal.tube(w * 0.15, ly, d + 1.0, w * 0.95, ly + 3.4, d + 1.0, 0.05, 4, 0x4a5158);
+          metal.box(w * 0.55, ly, -(d + 0.55), w * 0.42, 0.07, 0.55, 0x4a5158);
+          metal.box(w * 0.55, ly + 0.5, -(d + 1.05), w * 0.42, 0.5, 0.04, 0x4a5158);
+          metal.tube(w * 0.15, ly, -(d + 1.0), w * 0.95, ly + 3.4, -(d + 1.0), 0.05, 4, 0x4a5158);
         }
         metal.prism(-w * 0.6, H + 0.5, -d * 0.4, 0.34, 1.5, 6, 0x3d434a, { taper: 0.9 });
         const glow = this.builder();
@@ -3488,10 +3848,16 @@ export class Props implements ISubsystem {
         // shows from a distant side-on view. Fixing it properly needs a
         // per-anchor height query, which `authoredSpec` has no access to.
         // ---------------------------------------------------------------------
+        // ---- P0d SLIMMED (spiral only). This was the worst single prop in the
+        // game: 4.42 % of frame across 90 of 193 stations on volcano and every
+        // one of that circuit's over-40 % sightline stations. TrackDefs starts
+        // the run later and halves the density; here the shaft and its helical
+        // rib come in from a 2.06 m half-width to 1.53 m, which is still a
+        // believable column for a 40 m corkscrew and a 26 % narrower silhouette.
         const spiral = key === 'spiralpylon';
         const b = this.builder();
         const D = 46;
-        const r = spiral ? 1.15 : 1.7;
+        const r = spiral ? 0.95 : 1.7;
         b.prism(0, -D, 0, r * 1.5, D, spiral ? 8 : 6, spiral ? 0x6b5f56 : 0x8f959c,
           { taper: 0.62, capTop: false, capBottom: false });
         // Capital: a widening head so the column meets the deck with a shoulder
@@ -3505,7 +3871,7 @@ export class Props implements ISubsystem {
           for (let i = 0; i < 26; i++) {
             const a0 = i * 0.62, a1 = (i + 1) * 0.62;
             const y0 = -D + i * 1.6, y1 = -D + (i + 1) * 1.6;
-            const rr = 1.9;
+            const rr = 1.37;
             b.tube(Math.cos(a0) * rr, y0, Math.sin(a0) * rr,
               Math.cos(a1) * rr, y1, Math.sin(a1) * rr, 0.16, 4, 0x5f554d);
           }
@@ -3571,20 +3937,36 @@ export class Props implements ISubsystem {
         // Giant's-Causeway hexagonal jointing: a cluster of flat-topped hex
         // prisms at different heights, which is what makes it read as basalt
         // rather than as generic rock.
+        //
+        // ---- P0d SLIMMED. The owner's screenshots of Volcano Rush show these
+        // crowding both verges, and `.probe-tmp/crowding.ts` put the recipe at
+        // 1.90 % of the whole frame across 50 of 193 chase stations. The cluster
+        // spread (`d` up to 2.3 with `r` up to 1.15) made a 3.45 m half-width
+        // body, and TrackDefs then placed 44 of them at lat +-17 / +-24 with a
+        // 1.2 scale on the start straight. Both ends are fixed: the count and
+        // offsets in TrackDefs, and the body here.
+        //   spread   0.9-2.3  -> 0.8-1.7
+        //   radius   0.7-1.15 -> 0.55-0.95   (half-width 3.45 -> 2.65 m)
+        //   height   3.5-9.5  -> 3.2-7.4     stops them towering over the road
+        // The lithology reads the same; there is just less of it in the way.
         const b = this.builder();
-        const n = 5 + rng.int(0, 3);
+        const n = 4 + rng.int(0, 2);
         for (let i = 0; i < n; i++) {
           const a = (i / n) * Math.PI * 2 + rng.range(-0.5, 0.5);
-          const d = i === 0 ? 0 : rng.range(0.9, 2.3);
-          const h = rng.range(3.5, 9.5);
-          const r = rng.range(0.7, 1.15);
+          const d = i === 0 ? 0 : rng.range(0.8, 1.7);
+          const h = rng.range(3.2, 7.4);
+          const r = rng.range(0.55, 0.95);
           const x = Math.cos(a) * d, z = Math.sin(a) * d;
-          b.prism(x, -0.4, z, r, h, 6, i % 3 === 0 ? 0x3f3a38 : 0x4a4442,
+          // Lifted off near-black: at 0x3f3a38 these read as silhouettes against
+          // the orange sky rather than as rock. The volcanic key is a saturated
+          // #ff7a45 grazing at 19 deg, so a vertical face catches ~5x the light
+          // an up-facing road does — but only if the albedo is there to catch it.
+          b.prism(x, -0.4, z, r, h, 6, i % 3 === 0 ? 0x574f4c : 0x635a56,
             { taper: 0.97, yaw: rng.range(0, 1.05), shade: { top: 1.24, side: 0.98 } });
           // Horizontal joints: basalt breaks into stacked segments.
           const joints = Math.floor(h / 2.2);
           for (let j = 1; j <= joints; j++) {
-            b.prism(x, -0.4 + j * 2.2, z, r * 1.03, 0.1, 6, 0x2e2a29, { yaw: rng.range(0, 1.05) });
+            b.prism(x, -0.4 + j * 2.2, z, r * 1.03, 0.1, 6, 0x3a3433, { yaw: rng.range(0, 1.05) });
           }
         }
         return { geo: b.build('basaltColumn'), cull: CULL_FAR };

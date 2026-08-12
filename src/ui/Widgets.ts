@@ -41,6 +41,9 @@ import { clamp, clamp01 } from '@/core/MathUtils';
 // the top of `./Catalogue`.
 import { LIVE_ITEMS } from '@/items/ItemRoulette';
 import { ITEM_NAMES, TRIPLE_ITEMS } from '@/items/ItemModels';
+// Portrait data, derived there from `DRIVERS` — this module draws, it never
+// authors a palette or a hat shape of its own.
+import type { BustSpec } from './Catalogue';
 
 // ===========================================================================
 // Host shapes
@@ -913,6 +916,859 @@ export class ItemIcons {
  * Placeholder character portrait: a helmeted racer bust over a themed
  * background. Used until KartManager can render real portraits to a texture.
  */
+// ===========================================================================
+// Character bust — canvas 2-D, one silhouette per racer
+// ===========================================================================
+//
+//  WHY THIS EXISTS, AND WHY IT IS NOT A GENERIC HELMET
+//  The racer-select cards want `KartManager.renderPortrait()`: a real offscreen
+//  render of the real 3-D rig. This is what runs when that cannot. It has been
+//  needed twice already, for two different reasons:
+//
+//    1. The 3-D path did not exist at all for most of the build, and the
+//       fallback then was `characterPortrait()` below — one grey visor ellipse
+//       with the racer's initial in the corner, identical for all ten. The
+//       visual critic failed it on exactly that.
+//    2. When the 3-D path did arrive it shipped broken (a degenerate
+//       environment probe killed every fragment shader in the portrait scene,
+//       see the header of `@/karts/Portrait`) and produced ten *blank* cards.
+//
+//  So the requirement is not "something to show" — it is "ten recognisably
+//  different characters, from the same data the rig is built from". Every colour
+//  and every shape below is driven by `BustSpec`, which `./Catalogue` derives
+//  from `DRIVERS`. The load-bearing field is `head`: `Driver.ts` states outright
+//  that at small size the headwear shape *is* the character, and all ten racers
+//  have a different `HeadKind`, so switching on it is what makes ten cards read
+//  as ten racers. A racer added with a new `HeadKind` is a compile error here,
+//  not a silently generic head.
+// ===========================================================================
+
+function bustRgb(hex: string): [number, number, number] {
+  let h = hex.trim().replace(/^#/, '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = Number.parseInt(h.slice(0, 6), 16);
+  if (!Number.isFinite(n)) return [128, 128, 128];
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Multiply toward black (`k` < 1) or toward white (`k` > 1, clamped). */
+function bustShade(hex: string, k: number): string {
+  const [r, g, b] = bustRgb(hex);
+  return `rgb(${Math.round(clamp(r * k, 0, 255))},${Math.round(clamp(g * k, 0, 255))},`
+    + `${Math.round(clamp(b * k, 0, 255))})`;
+}
+
+function bustMix(a: string, b: string, t: number): string {
+  const A = bustRgb(a);
+  const B = bustRgb(b);
+  return `rgb(${Math.round(A[0] + (B[0] - A[0]) * t)},${Math.round(A[1] + (B[1] - A[1]) * t)},`
+    + `${Math.round(A[2] + (B[2] - A[2]) * t)})`;
+}
+
+function bustFade(hex: string, a: number): string {
+  const [r, g, b] = bustRgb(hex);
+  return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+}
+
+function ell(
+  c: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, rot = 0,
+): void {
+  c.beginPath();
+  c.ellipse(x, y, Math.max(0.5, rx), Math.max(0.5, ry), rot, 0, Math.PI * 2);
+}
+
+/**
+ * The card behind the bust. Deliberately the same visual language as
+ * `paintCard()` in `@/karts/Portrait` — base wash in the racer's paint,
+ * radiating bars struck from behind the head, halo in their emissive accent,
+ * vignette, stipple — so the 3-D portrait and this one look like one system and
+ * a card that fell back is not obviously the odd one out.
+ */
+function bustCard(
+  c: CanvasRenderingContext2D, S: number,
+  colorA: string, colorB: string, glow: string, hx: number, hy: number,
+): void {
+  const wash = c.createLinearGradient(0, 0, S * 0.35, S);
+  wash.addColorStop(0, bustMix(colorA, '#ffffff', 0.30));
+  wash.addColorStop(0.52, colorA);
+  wash.addColorStop(0.86, bustMix(colorB, '#101725', 0.45));
+  wash.addColorStop(1, '#0d1220');
+  c.fillStyle = wash;
+  c.fillRect(0, 0, S, S);
+
+  c.save();
+  c.translate(hx, hy);
+  for (let i = 0; i < 11; i++) {
+    const th = (i / 11) * Math.PI * 2 + 0.35;
+    const w = 0.055 + (i % 3) * 0.028;
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.lineTo(Math.cos(th - w) * S * 1.7, Math.sin(th - w) * S * 1.7);
+    c.lineTo(Math.cos(th + w) * S * 1.7, Math.sin(th + w) * S * 1.7);
+    c.closePath();
+    c.fillStyle = `rgba(255,255,255,${i % 2 === 0 ? 0.040 : 0.020})`;
+    c.fill();
+  }
+  c.restore();
+
+  const halo = c.createRadialGradient(hx, hy, S * 0.04, hx, hy, S * 0.46);
+  halo.addColorStop(0, bustFade(glow, 0.42));
+  halo.addColorStop(0.45, bustFade(glow, 0.14));
+  halo.addColorStop(1, bustFade(glow, 0));
+  c.fillStyle = halo;
+  c.fillRect(0, 0, S, S);
+
+  const vig = c.createRadialGradient(S * 0.5, S * 0.42, S * 0.18, S * 0.5, S * 0.5, S * 0.80);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(4,7,14,0.60)');
+  c.fillStyle = vig;
+  c.fillRect(0, 0, S, S);
+}
+
+/**
+ * Does this bitmap contain a subject, or only a smooth background?
+ *
+ * The point of this function is the defect it was written for: `renderPortrait`
+ * returned a perfectly valid 220×220 canvas containing nothing but the card
+ * gradient, and every caller read "a canvas came back" as "it worked". Ten cards
+ * shipped with no character on them.
+ *
+ * The discriminator is local contrast, not colour or coverage. The blank card is
+ * a smooth wash plus 1-px stipple; downsampling to 32×32 averages the stipple
+ * away and leaves adjacent-sample deltas of a handful of levels. Any real
+ * subject has a silhouette edge against that wash — a hat brim, a muzzle, an eye
+ * — worth tens of levels. Anything unreadable (no 2-D context, a tainted
+ * canvas) reports *not* blank, so a measurement failure can never throw away a
+ * portrait that was actually fine.
+ */
+export function probablyBlank(src: HTMLCanvasElement, minStep = 30): boolean {
+  const N = 32;
+  try {
+    const small = makeCanvas(N, N);
+    const g = ctx2d(small);
+    if (!g || src.width < 2 || src.height < 2) return false;
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src, 0, 0, src.width, src.height, 0, 0, N, N);
+    const d = g.getImageData(0, 0, N, N).data;
+    const lum = new Float32Array(N * N);
+    for (let i = 0; i < N * N; i++) {
+      const o = i * 4;
+      // Weight by alpha: a transparent readback must not read as "dark ink".
+      const a = d[o + 3] / 255;
+      lum[i] = (0.2126 * d[o] + 0.7152 * d[o + 1] + 0.0722 * d[o + 2]) * a;
+    }
+    let worst = 0;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const i = y * N + x;
+        if (x + 1 < N) worst = Math.max(worst, Math.abs(lum[i] - lum[i + 1]));
+        if (y + 1 < N) worst = Math.max(worst, Math.abs(lum[i] - lum[i + N]));
+      }
+    }
+    return worst < minStep;
+  } catch {
+    return false;
+  }
+}
+
+/** A thin curved highlight along the top-left of a circle — the rim light. */
+function bustRim(
+  c: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, a: number,
+): void {
+  c.save();
+  c.beginPath();
+  c.arc(x, y, r * 0.97, Math.PI * 0.72, Math.PI * 1.62);
+  c.strokeStyle = bustFade(color, a);
+  c.lineWidth = r * 0.13;
+  c.lineCap = 'round';
+  c.stroke();
+  c.restore();
+}
+
+/**
+ * A head-and-shoulders bust for one racer, drawn entirely in canvas 2-D.
+ *
+ * Framed like the 3-D studio: three-quarter view facing the viewer's right, the
+ * head owning the upper two thirds and the shoulder line cropped by a fade at
+ * the bottom rather than a hard cut.
+ */
+export function characterBust(
+  spec: BustSpec, colorA: string, colorB: string, glow: string, size = 220,
+): HTMLCanvasElement {
+  const canvas = makeCanvas(size, size);
+  const c = ctx2d(canvas);
+  if (!c) return canvas;
+  const S = size;
+
+  // --- layout ------------------------------------------------------------
+  const r = S * 0.200 * clamp(spec.headScale, 0.86, 1.18);
+  const hx = S * 0.480;
+  const hy = S * 0.420;
+  const shoulderY = S * 0.740;
+  const halfW = S * (0.295 + 0.115 * clamp01(spec.bulk));
+  const animal = spec.species !== null;
+  const fox = spec.species === 'fox';
+
+  const pelt = animal ? spec.fur : spec.skin;
+  const peltLo = animal ? spec.furDark : bustShade(spec.skin, 0.70);
+  const peltHi = animal ? spec.furAlt : bustMix(spec.skin, '#fff3e2', 0.42);
+  /** Feature offset for the three-quarter turn — everything on the face shifts. */
+  const fx = r * 0.13;
+
+  bustCard(c, S, colorA, colorB, glow, hx, hy);
+
+  /**
+   * Every solid mass of the bust is filled with a canvas drop shadow on. This is
+   * the cheap general answer to "the hat is the same colour as the card": Capy's
+   * bucket hat IS her card's rust, and no palette juggling fixes that, but a
+   * shadow separates any shape from any background. It doubles as the depth
+   * between a hat, a skull and a shoulder line.
+   */
+  const massOn = (): void => {
+    c.shadowColor = 'rgba(3,6,13,0.62)';
+    c.shadowBlur = r * 0.34;
+    c.shadowOffsetY = r * 0.10;
+  };
+  const massOff = (): void => {
+    c.shadowColor = 'transparent';
+    c.shadowBlur = 0;
+    c.shadowOffsetY = 0;
+  };
+  massOn();
+
+  // --- neck (behind the collar, dark at the top so the chin casts) -------
+  const neckW = r * (0.42 + 0.16 * clamp01(spec.bulk));
+  const ng = c.createLinearGradient(0, hy + r * 0.5, 0, shoulderY + S * 0.02);
+  ng.addColorStop(0, bustShade(peltLo, 0.62));
+  ng.addColorStop(1, peltLo);
+  c.fillStyle = ng;
+  roundRect(c, hx - neckW + fx * 0.5, hy + r * 0.42, neckW * 2, shoulderY - hy - r * 0.30, r * 0.22);
+  c.fill();
+
+  // --- shoulders ---------------------------------------------------------
+  c.beginPath();
+  c.moveTo(hx - halfW, S * 1.04);
+  c.bezierCurveTo(
+    hx - halfW, shoulderY + S * 0.03,
+    hx - r * 0.78, shoulderY - S * 0.035,
+    hx - r * 0.30, shoulderY - S * 0.055,
+  );
+  c.lineTo(hx + r * 0.30, shoulderY - S * 0.055);
+  c.bezierCurveTo(
+    hx + r * 0.78, shoulderY - S * 0.035,
+    hx + halfW, shoulderY + S * 0.03,
+    hx + halfW, S * 1.04,
+  );
+  c.closePath();
+  const sg = c.createLinearGradient(hx - halfW, shoulderY - S * 0.05, hx + halfW * 0.6, S);
+  sg.addColorStop(0, bustShade(spec.suit, 0.52));
+  sg.addColorStop(0.40, spec.suit);
+  sg.addColorStop(1, bustShade(spec.suit, 0.46));
+  c.fillStyle = sg;
+  c.fill();
+  // Shoulder trim: knitwear gets ribbing, everyone else a piped seam.
+  c.save();
+  c.clip();
+  c.strokeStyle = bustFade(spec.suitAlt, animal ? 0.30 : 0.55);
+  c.lineWidth = S * 0.012;
+  for (let i = 0; i < (animal ? 3 : 1); i++) {
+    const y = shoulderY + S * (0.035 + i * 0.055);
+    c.beginPath();
+    c.moveTo(hx - halfW, y + S * 0.02);
+    c.quadraticCurveTo(hx, y - S * 0.03, hx + halfW, y + S * 0.02);
+    c.stroke();
+  }
+  c.restore();
+
+  // --- collar / roll-neck / scarf ---------------------------------------
+  const collarY = shoulderY - S * 0.052;
+  ell(c, hx + fx * 0.4, collarY, halfW * 0.62, S * (animal ? 0.062 : 0.046));
+  c.fillStyle = bustMix(spec.suitAlt, spec.suit, animal ? 0.25 : 0.55);
+  c.fill();
+  ell(c, hx + fx * 0.4, collarY + S * 0.012, halfW * 0.46, S * 0.034);
+  c.fillStyle = bustShade(spec.suit, 0.66);
+  c.fill();
+  if (spec.scarf) {
+    // A trailing end over the near shoulder — the pilot's and the speedster's tell.
+    c.save();
+    c.strokeStyle = spec.suitAlt;
+    c.lineWidth = S * 0.070;
+    c.lineCap = 'round';
+    c.beginPath();
+    c.moveTo(hx - halfW * 0.44, collarY + S * 0.03);
+    c.quadraticCurveTo(hx - halfW * 0.86, S * 0.90, hx - halfW * 0.62, S * 1.02);
+    c.stroke();
+    c.strokeStyle = bustFade('#000000', 0.18);
+    c.lineWidth = S * 0.020;
+    c.stroke();
+    c.restore();
+  }
+  if (fox) {
+    // Cream chest tuft rising out of the roll-neck.
+    c.beginPath();
+    c.moveTo(hx - r * 0.40, collarY + S * 0.02);
+    c.quadraticCurveTo(hx, collarY - S * 0.05, hx + r * 0.40, collarY + S * 0.02);
+    c.quadraticCurveTo(hx, collarY + S * 0.055, hx - r * 0.40, collarY + S * 0.02);
+    c.closePath();
+    c.fillStyle = peltHi;
+    c.fill();
+  }
+
+  // --- ears, behind the skull so headwear sits over their bases ---------
+  if (fox) {
+    // Big triangular dark-tipped ears. They are set WIDE and tall on purpose:
+    // the beret sits over their bases, and the first pass had it swallow them
+    // whole — which threw away half of what makes a fox read as a fox.
+    for (const s of [-1, 1] as const) {
+      const ex = hx + fx + s * r * 0.78;
+      const ey = hy - r * 0.66;
+      c.beginPath();
+      c.moveTo(ex - r * 0.34 * s, ey + r * 0.40);
+      c.lineTo(ex + r * 0.16 * s, ey - r * 0.86);
+      c.lineTo(ex + r * 0.42 * s, ey + r * 0.28);
+      c.closePath();
+      c.fillStyle = s > 0 ? pelt : bustShade(pelt, 0.80);
+      c.fill();
+      c.beginPath();
+      c.moveTo(ex - r * 0.04 * s, ey - r * 0.24);
+      c.lineTo(ex + r * 0.16 * s, ey - r * 0.80);
+      c.lineTo(ex + r * 0.28 * s, ey - r * 0.18);
+      c.closePath();
+      c.fillStyle = spec.furDark;
+      c.fill();
+    }
+  } else if (animal) {
+    // Capybara: small, high-set, almost nothing. The anti-fox.
+    for (const s of [-1, 1] as const) {
+      ell(c, hx + fx + s * r * 0.82, hy - r * 0.60, r * 0.21, r * 0.20);
+      c.fillStyle = s > 0 ? pelt : bustShade(pelt, 0.84);
+      c.fill();
+      ell(c, hx + fx + s * r * 0.84, hy - r * 0.58, r * 0.10, r * 0.09);
+      c.fillStyle = spec.furDark;
+      c.fill();
+    }
+  }
+
+  // --- skull -------------------------------------------------------------
+  const skullRx = fox ? r * 0.92 : animal ? r * 1.12 : r * 0.94;
+  const skullRy = fox ? r * 1.00 : animal ? r * 0.90 : r * 1.04;
+  const headGrad = c.createRadialGradient(
+    hx - r * 0.34, hy - r * 0.44, r * 0.10, hx + fx, hy, r * 1.30,
+  );
+  headGrad.addColorStop(0, bustMix(pelt, '#ffffff', 0.28));
+  headGrad.addColorStop(0.58, pelt);
+  headGrad.addColorStop(1, bustShade(pelt, 0.60));
+  if (spec.head === 'bubble') {
+    // Elongated cranium: taller, and it tapers to a narrow jaw.
+    c.beginPath();
+    c.moveTo(hx + fx, hy - r * 1.24);
+    c.bezierCurveTo(hx + fx + r * 1.10, hy - r * 1.10, hx + fx + r * 0.74, hy + r * 0.62,
+      hx + fx, hy + r * 0.98);
+    c.bezierCurveTo(hx + fx - r * 0.74, hy + r * 0.62, hx + fx - r * 1.10, hy - r * 1.10,
+      hx + fx, hy - r * 1.24);
+    c.closePath();
+  } else if (spec.head === 'robot') {
+    roundRect(c, hx + fx - r * 0.92, hy - r * 1.00, r * 1.84, r * 1.94, r * 0.62);
+  } else {
+    ell(c, hx + fx, hy, skullRx, skullRy);
+  }
+  c.fillStyle = headGrad;
+  c.fill();
+
+  // --- muzzle / snout ---------------------------------------------------
+  // `spec.muzzle` is the rig's length along the driver's own -Z. At a 34° three
+  // quarter view that projects to well under half of it, and taking the raw
+  // value put a cream wedge across the whole of Foxy's face.
+  let snoutX = hx + fx;
+  let snoutY = hy + r * 0.30;
+  if (spec.muzzle > 0) {
+    const mz = r * spec.muzzle * 0.56;
+    const my = hy + r * (fox ? 0.36 : 0.46);
+    if (fox) {
+      // A tapered snout: a tilted ellipse for the mass, a soft point for the tip.
+      // It was a straight-edged wedge struck from the middle of the face, which
+      // drew a hard cream diagonal across Foxy's cheek instead of a nose.
+      ell(c, hx + fx + mz * 0.34, my, mz * 0.92, r * 0.32, -0.16);
+      c.fillStyle = peltHi;
+      c.fill();
+      c.beginPath();
+      c.moveTo(hx + fx + mz * 0.20, my - r * 0.26);
+      c.quadraticCurveTo(hx + fx + mz * 1.10, my - r * 0.16, hx + fx + mz * 1.12, my + r * 0.06);
+      c.quadraticCurveTo(hx + fx + mz * 0.72, my + r * 0.28, hx + fx + mz * 0.20, my + r * 0.24);
+      c.closePath();
+    } else {
+      ell(c, hx + fx + mz * 0.50, my, mz * 0.82, r * 0.37, -0.06);
+    }
+    c.fillStyle = peltHi;
+    c.fill();
+    // Nose, and the shadow under it — that shadow is what makes a snout read.
+    snoutX = hx + fx + mz * (fox ? 1.02 : 1.14);
+    snoutY = my + (fox ? -r * 0.02 : -r * 0.06);
+    ell(c, snoutX, snoutY, r * (fox ? 0.15 : 0.18), r * (fox ? 0.11 : 0.13), -0.2);
+    c.fillStyle = spec.furDark;
+    c.fill();
+    c.beginPath();
+    c.moveTo(snoutX - r * 0.24, snoutY + r * 0.24);
+    c.quadraticCurveTo(snoutX - r * 0.02, snoutY + r * 0.38, snoutX + r * 0.14, snoutY + r * 0.24);
+    c.strokeStyle = bustFade(spec.furDark, 0.7);
+    c.lineWidth = r * 0.055;
+    c.lineCap = 'round';
+    c.stroke();
+  }
+
+  massOff();
+  bustRim(c, hx + fx, hy, Math.max(skullRx, skullRy), '#ffe9c8', 0.32);
+
+  // --- eyes + brows -----------------------------------------------------
+  const covered = spec.head === 'fullHelmet' || spec.head === 'greatHelm'
+    || spec.head === 'robot' || spec.head === 'flightCap';
+  if (!covered) {
+    const eyeR = r * 0.155 * clamp(spec.eyeSize, 0.7, 1.5);
+    const eyeY = hy - r * 0.18;
+    const alien = spec.head === 'bubble';
+    for (const s of [-1, 1] as const) {
+      const ex = hx + fx + s * r * 0.40;
+      if (alien) {
+        // Big black almonds, tilted outward.
+        c.save();
+        c.translate(ex, eyeY);
+        c.rotate(s * 0.42);
+        ell(c, 0, 0, eyeR * 1.35, eyeR * 0.80);
+        c.fillStyle = spec.eye;
+        c.fill();
+        c.restore();
+      } else {
+        ell(c, ex, eyeY, eyeR * 0.92, eyeR);
+        c.fillStyle = '#f7f3ea';
+        c.fill();
+        ell(c, ex + eyeR * 0.16, eyeY + eyeR * 0.06, eyeR * 0.60, eyeR * 0.74);
+        c.fillStyle = spec.eye;
+        c.fill();
+      }
+      ell(c, ex + eyeR * (alien ? 0.5 : 0.42), eyeY - eyeR * 0.42, eyeR * 0.24, eyeR * 0.20);
+      c.fillStyle = 'rgba(255,255,255,0.92)';
+      c.fill();
+      // Brow.
+      c.beginPath();
+      c.moveTo(ex - eyeR * 1.15, eyeY - eyeR * 1.30);
+      c.quadraticCurveTo(ex, eyeY - eyeR * 1.95, ex + eyeR * 1.15, eyeY - eyeR * 1.20);
+      c.strokeStyle = spec.brow;
+      c.lineWidth = r * 0.085;
+      c.lineCap = 'round';
+      c.stroke();
+    }
+    if (spec.mark === 'whiskers') {
+      // Anchored to the snout the muzzle actually ended at, not to a guess —
+      // they floated in mid air the moment the snout was foreshortened.
+      c.strokeStyle = 'rgba(255,255,255,0.42)';
+      c.lineWidth = r * 0.035;
+      c.lineCap = 'round';
+      for (let i = -1; i <= 1; i++) {
+        c.beginPath();
+        c.moveTo(snoutX - r * 0.12, snoutY + r * 0.10 + i * r * 0.09);
+        c.lineTo(snoutX + r * 0.44, snoutY + r * 0.02 + i * r * 0.24);
+        c.stroke();
+      }
+    } else if (spec.mark === 'moustache') {
+      c.beginPath();
+      c.moveTo(hx + fx - r * 0.34, hy + r * 0.40);
+      c.quadraticCurveTo(hx + fx, hy + r * 0.58, hx + fx + r * 0.34, hy + r * 0.40);
+      c.strokeStyle = spec.brow;
+      c.lineWidth = r * 0.13;
+      c.lineCap = 'round';
+      c.stroke();
+    } else if (spec.mark === 'freckles') {
+      c.fillStyle = bustFade(spec.brow, 0.42);
+      for (let i = 0; i < 6; i++) {
+        const s = i < 3 ? -1 : 1;
+        ell(c, hx + fx + s * r * (0.52 + (i % 3) * 0.10), hy + r * (0.16 + (i % 3) * 0.08),
+          r * 0.035, r * 0.035);
+        c.fill();
+      }
+    }
+    if (!animal) {
+      // Mouth: a short confident curve. Animals already have one on the snout.
+      c.beginPath();
+      c.moveTo(hx + fx - r * 0.22, hy + r * 0.46);
+      c.quadraticCurveTo(hx + fx, hy + r * 0.62, hx + fx + r * 0.24, hy + r * 0.44);
+      c.strokeStyle = bustShade(spec.skin, 0.52);
+      c.lineWidth = r * 0.06;
+      c.lineCap = 'round';
+      c.stroke();
+    }
+  }
+
+  massOn();
+  drawHeadwear(c, spec, hx + fx, hy, r, glow);
+  massOff();
+
+  // --- crop fade, so the chest is a fade and not a cut ------------------
+  const fadeG = c.createLinearGradient(0, S * 0.84, 0, S);
+  fadeG.addColorStop(0, 'rgba(10,14,26,0)');
+  fadeG.addColorStop(1, 'rgba(7,10,19,0.94)');
+  c.fillStyle = fadeG;
+  c.fillRect(0, S * 0.84, S, S * 0.16);
+
+  // Stipple last: a clean gradient is the loudest "made in a browser" tell.
+  const n = Math.round(S * S * 0.045);
+  for (let i = 0; i < n; i++) {
+    c.fillStyle = `rgba(255,255,255,${(0.010 + Math.random() * 0.026).toFixed(3)})`;
+    c.fillRect(Math.random() * S, Math.random() * S, 1, 1);
+  }
+  return canvas;
+}
+
+/**
+ * The headwear, switched on the driver's real `HeadKind`. This is the function
+ * that makes ten cards look like ten racers, so every arm draws a shape nobody
+ * else has. The switch is exhaustive over `HeadKind` by construction — a new hat
+ * in `Driver.ts` fails to compile here rather than falling through to nothing.
+ */
+function drawHeadwear(
+  c: CanvasRenderingContext2D, spec: BustSpec,
+  hx: number, hy: number, r: number, glow: string,
+): void {
+  // The shell is the DRIVER's colour, never the kart paint. `Driver.ts` picks
+  // `suit` explicitly so "the driver reads as a separate mass against their own
+  // machine", and the card wash is that machine's paint — the first pass of this
+  // function used the paint and five of ten helmets vanished into their own
+  // background. `clothAlt` headwear (beret, bucket hat, flight cap) takes
+  // `suitAlt`, exactly as the rig does.
+  const shell = spec.head === 'beret' || spec.head === 'bucketHat' || spec.head === 'flightCap'
+    ? spec.suitAlt : spec.suit;
+  const lit = bustMix(shell, '#ffffff', 0.34);
+  const dim = bustShade(shell, 0.58);
+  const grad = (x0: number, y0: number, x1: number, y1: number): CanvasGradient => {
+    const g = c.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, lit);
+    g.addColorStop(0.55, shell);
+    g.addColorStop(1, dim);
+    return g;
+  };
+  const visor = (rx: number, ry: number, y: number, tint: string): void => {
+    ell(c, hx, y, rx, ry, 0);
+    const g = c.createLinearGradient(hx, y - ry, hx, y + ry);
+    g.addColorStop(0, bustMix(tint, '#ffffff', 0.55));
+    g.addColorStop(0.42, tint);
+    g.addColorStop(1, bustShade(tint, 0.32));
+    c.fillStyle = g;
+    c.fill();
+    c.strokeStyle = 'rgba(6,10,18,0.85)';
+    c.lineWidth = r * 0.075;
+    c.stroke();
+    // Specular streak.
+    c.save();
+    c.globalAlpha = 0.5;
+    ell(c, hx - rx * 0.34, y - ry * 0.24, rx * 0.34, ry * 0.20, -0.42);
+    c.fillStyle = '#ffffff';
+    c.fill();
+    c.restore();
+  };
+
+  switch (spec.head) {
+    case 'cap': {
+      // Backwards baseball cap: crown over the skull, brim pointing away.
+      c.beginPath();
+      c.arc(hx, hy - r * 0.16, r * 0.99, Math.PI * 1.02, Math.PI * 1.98);
+      c.closePath();
+      c.fillStyle = grad(hx - r, hy - r, hx + r * 0.6, hy);
+      c.fill();
+      // Brim, pointing away from the lens because the cap is on backwards.
+      c.beginPath();
+      c.moveTo(hx - r * 0.94, hy - r * 0.40);
+      c.quadraticCurveTo(hx - r * 1.78, hy - r * 0.42, hx - r * 1.74, hy - r * 0.02);
+      c.quadraticCurveTo(hx - r * 1.36, hy + r * 0.12, hx - r * 0.90, hy + r * 0.02);
+      c.closePath();
+      c.fillStyle = dim;
+      c.fill();
+      // Goggles pushed up on the forehead.
+      c.strokeStyle = 'rgba(20,24,32,0.9)';
+      c.lineWidth = r * 0.12;
+      c.beginPath();
+      c.arc(hx, hy - r * 0.10, r * 0.92, Math.PI * 1.14, Math.PI * 1.86);
+      c.stroke();
+      ell(c, hx + r * 0.30, hy - r * 0.68, r * 0.26, r * 0.19);
+      c.fillStyle = bustFade('#bfe6ff', 0.75);
+      c.fill();
+      break;
+    }
+    case 'fullHelmet': {
+      // Full-face shell + chin bar + tinted visor + winglets.
+      ell(c, hx, hy - r * 0.06, r * 1.10, r * 1.14);
+      c.fillStyle = grad(hx - r, hy - r, hx + r * 0.7, hy + r);
+      c.fill();
+      c.fillStyle = dim;
+      roundRect(c, hx - r * 0.86, hy + r * 0.44, r * 1.72, r * 0.52, r * 0.24);
+      c.fill();
+      visor(r * 0.86, r * 0.40, hy - r * 0.06, '#12406f');
+      for (const s of [-1, 1] as const) {
+        c.beginPath();
+        c.moveTo(hx + s * r * 1.02, hy - r * 0.10);
+        c.lineTo(hx + s * r * 1.42, hy + r * 0.10);
+        c.lineTo(hx + s * r * 1.00, hy + r * 0.26);
+        c.closePath();
+        c.fillStyle = spec.suitAlt;
+        c.fill();
+      }
+      break;
+    }
+    case 'robot': {
+      // Chromed dome cap, single optic band, antenna.
+      c.beginPath();
+      c.moveTo(hx - r * 0.92, hy - r * 0.42);
+      c.quadraticCurveTo(hx, hy - r * 1.46, hx + r * 0.92, hy - r * 0.42);
+      c.closePath();
+      const cg = c.createLinearGradient(hx - r, hy - r * 1.3, hx + r, hy - r * 0.3);
+      cg.addColorStop(0, '#eef3f8');
+      cg.addColorStop(0.45, '#9fadbb');
+      cg.addColorStop(0.62, '#e6edf4');
+      cg.addColorStop(1, '#5d6a78');
+      c.fillStyle = cg;
+      c.fill();
+      const band = glow;
+      roundRect(c, hx - r * 0.78, hy - r * 0.30, r * 1.56, r * 0.42, r * 0.20);
+      c.fillStyle = '#10141b';
+      c.fill();
+      roundRect(c, hx - r * 0.60, hy - r * 0.22, r * 1.20, r * 0.24, r * 0.12);
+      const og = c.createLinearGradient(hx - r * 0.6, 0, hx + r * 0.6, 0);
+      og.addColorStop(0, bustFade(band, 0.55));
+      og.addColorStop(0.5, band);
+      og.addColorStop(1, bustFade(band, 0.55));
+      c.fillStyle = og;
+      c.fill();
+      c.strokeStyle = '#c9d4de';
+      c.lineWidth = r * 0.07;
+      c.beginPath();
+      c.moveTo(hx + r * 0.28, hy - r * 1.14);
+      c.lineTo(hx + r * 0.44, hy - r * 1.62);
+      c.stroke();
+      ell(c, hx + r * 0.46, hy - r * 1.70, r * 0.13, r * 0.13);
+      c.fillStyle = band;
+      c.fill();
+      break;
+    }
+    case 'trucker': {
+      // Tiny crown, very wide flat brim — the welder's cap on a huge frame.
+      // Sat 0.26r higher than the first pass, which cut Torque's eyes in half.
+      c.beginPath();
+      c.arc(hx, hy - r * 0.60, r * 0.78, Math.PI, Math.PI * 2);
+      c.closePath();
+      c.fillStyle = grad(hx - r * 0.8, hy - r * 1.3, hx + r * 0.5, hy - r * 0.5);
+      c.fill();
+      c.fillStyle = dim;
+      ell(c, hx, hy - r * 0.56, r * 1.42, r * 0.19);
+      c.fill();
+      c.fillStyle = bustFade('#000000', 0.28);
+      ell(c, hx, hy - r * 0.50, r * 1.36, r * 0.13);
+      c.fill();
+      c.strokeStyle = bustFade(spec.suitAlt, 0.8);
+      c.lineWidth = r * 0.09;
+      c.beginPath();
+      c.moveTo(hx - r * 0.74, hy - r * 0.66);
+      c.quadraticCurveTo(hx, hy - r * 0.82, hx + r * 0.74, hy - r * 0.66);
+      c.stroke();
+      break;
+    }
+    case 'aero': {
+      // Oversized teardrop shell with the tail sweeping back.
+      c.beginPath();
+      c.moveTo(hx - r * 1.06, hy - r * 0.02);
+      c.bezierCurveTo(hx - r * 1.04, hy - r * 1.36, hx + r * 1.04, hy - r * 1.36,
+        hx + r * 1.08, hy - r * 0.04);
+      c.lineTo(hx + r * 1.02, hy + r * 0.10);
+      c.bezierCurveTo(hx + r * 0.6, hy - r * 0.16, hx - r * 0.6, hy - r * 0.16,
+        hx - r * 1.02, hy + r * 0.10);
+      c.closePath();
+      c.fillStyle = grad(hx - r, hy - r * 1.2, hx + r * 0.8, hy);
+      c.fill();
+      c.beginPath();
+      c.moveTo(hx - r * 0.96, hy - r * 0.40);
+      c.quadraticCurveTo(hx - r * 1.74, hy - r * 0.20, hx - r * 1.40, hy + r * 0.24);
+      c.quadraticCurveTo(hx - r * 1.10, hy + r * 0.06, hx - r * 0.94, hy - r * 0.14);
+      c.closePath();
+      c.fillStyle = dim;
+      c.fill();
+      c.strokeStyle = bustFade(spec.suitAlt, 0.9);
+      c.lineWidth = r * 0.10;
+      c.beginPath();
+      c.moveTo(hx - r * 0.10, hy - r * 1.24);
+      c.quadraticCurveTo(hx + r * 0.06, hy - r * 0.70, hx + r * 0.02, hy - r * 0.14);
+      c.stroke();
+      break;
+    }
+    case 'bubble': {
+      // Glass dome over the elongated cranium, with a collar ring at its base.
+      ell(c, hx, hy - r * 0.16, r * 1.22, r * 1.32);
+      const gg = c.createRadialGradient(
+        hx - r * 0.5, hy - r * 0.9, r * 0.1, hx, hy - r * 0.2, r * 1.5,
+      );
+      gg.addColorStop(0, 'rgba(255,255,255,0.42)');
+      gg.addColorStop(0.45, bustFade(glow, 0.10));
+      gg.addColorStop(1, 'rgba(150,220,255,0.05)');
+      c.fillStyle = gg;
+      c.fill();
+      c.strokeStyle = bustFade(glow, 0.55);
+      c.lineWidth = r * 0.055;
+      c.stroke();
+      c.save();
+      c.globalAlpha = 0.45;
+      c.beginPath();
+      c.arc(hx, hy - r * 0.16, r * 1.10, Math.PI * 1.06, Math.PI * 1.44);
+      c.strokeStyle = '#ffffff';
+      c.lineWidth = r * 0.10;
+      c.lineCap = 'round';
+      c.stroke();
+      c.restore();
+      ell(c, hx, hy + r * 1.02, r * 0.92, r * 0.20);
+      c.fillStyle = spec.suitAlt;
+      c.fill();
+      break;
+    }
+    case 'greatHelm': {
+      // Flat-topped great-helm, tall crest, T-slit.
+      c.beginPath();
+      c.moveTo(hx - r * 1.02, hy - r * 0.72);
+      c.lineTo(hx + r * 1.02, hy - r * 0.72);
+      c.lineTo(hx + r * 0.94, hy + r * 0.86);
+      c.quadraticCurveTo(hx, hy + r * 1.16, hx - r * 0.94, hy + r * 0.86);
+      c.closePath();
+      c.fillStyle = grad(hx - r, hy - r * 0.8, hx + r * 0.8, hy + r);
+      c.fill();
+      c.fillStyle = spec.suitAlt;
+      c.beginPath();
+      c.moveTo(hx - r * 0.16, hy - r * 0.76);
+      c.quadraticCurveTo(hx, hy - r * 1.52, hx + r * 0.16, hy - r * 0.76);
+      c.closePath();
+      c.fill();
+      c.fillStyle = '#0b0f18';
+      c.fillRect(hx - r * 0.92, hy - r * 0.24, r * 1.84, r * 0.24);
+      c.fillRect(hx - r * 0.14, hy - r * 0.24, r * 0.28, r * 0.92);
+      c.strokeStyle = bustFade(spec.suitAlt, 0.85);
+      c.lineWidth = r * 0.07;
+      c.beginPath();
+      c.moveTo(hx - r * 1.00, hy - r * 0.66);
+      c.lineTo(hx + r * 1.00, hy - r * 0.66);
+      c.stroke();
+      break;
+    }
+    case 'flightCap': {
+      // Leather cap, earflaps, goggles worn over the eyes.
+      c.beginPath();
+      c.arc(hx, hy - r * 0.06, r * 1.06, Math.PI * 0.96, Math.PI * 2.04);
+      c.closePath();
+      c.fillStyle = grad(hx - r, hy - r, hx + r * 0.7, hy);
+      c.fill();
+      for (const s of [-1, 1] as const) {
+        ell(c, hx + s * r * 0.98, hy + r * 0.24, r * 0.26, r * 0.40);
+        c.fillStyle = s > 0 ? shell : dim;
+        c.fill();
+      }
+      c.strokeStyle = 'rgba(26,20,14,0.92)';
+      c.lineWidth = r * 0.16;
+      c.beginPath();
+      c.moveTo(hx - r * 1.04, hy - r * 0.14);
+      c.quadraticCurveTo(hx, hy - r * 0.02, hx + r * 1.04, hy - r * 0.14);
+      c.stroke();
+      for (const s of [-1, 1] as const) {
+        ell(c, hx + s * r * 0.46, hy - r * 0.14, r * 0.34, r * 0.30);
+        c.fillStyle = bustFade('#cfeaff', 0.82);
+        c.fill();
+        c.strokeStyle = '#8b7a5e';
+        c.lineWidth = r * 0.09;
+        c.stroke();
+      }
+      break;
+    }
+    case 'beret': {
+      // Tilted felted beret + gripped band + stalk, then the spectacles.
+      c.save();
+      // High enough that the band clears the spectacles — the beret is tilted,
+      // and a tilted disc at eye height sat on top of Foxy's own glasses.
+      c.translate(hx - r * 0.08, hy - r * 0.94);
+      c.rotate(-0.30);
+      ell(c, 0, 0, r * 1.10, r * 0.52);
+      c.fillStyle = grad(-r, -r * 0.5, r * 0.7, r * 0.5);
+      c.fill();
+      ell(c, 0, r * 0.26, r * 0.94, r * 0.28);
+      c.fillStyle = bustShade(shell, 0.72);
+      c.fill();
+      c.strokeStyle = 'rgba(255,255,255,0.20)';
+      c.lineWidth = r * 0.06;
+      c.beginPath();
+      c.moveTo(-r * 0.86, 0);
+      c.quadraticCurveTo(0, -r * 0.24, r * 0.86, 0);
+      c.stroke();
+      c.strokeStyle = lit;
+      c.lineWidth = r * 0.16;
+      c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(-r * 0.06, -r * 0.42);
+      c.quadraticCurveTo(r * 0.06, -r * 0.72, -r * 0.02, -r * 0.82);
+      c.stroke();
+      c.restore();
+      // Round dark-rimmed spectacles: two rims, a bridge, a temple.
+      c.strokeStyle = '#2b1d15';
+      c.lineWidth = r * 0.075;
+      for (const s of [-1, 1] as const) {
+        const ex = hx + s * r * 0.40;
+        ell(c, ex, hy - r * 0.18, r * 0.34, r * 0.34);
+        c.fillStyle = 'rgba(210,236,255,0.20)';
+        c.fill();
+        c.stroke();
+      }
+      c.beginPath();
+      c.moveTo(hx - r * 0.08, hy - r * 0.22);
+      c.lineTo(hx + r * 0.08, hy - r * 0.22);
+      c.stroke();
+      c.lineWidth = r * 0.055;
+      c.beginPath();
+      c.moveTo(hx - r * 0.74, hy - r * 0.20);
+      c.quadraticCurveTo(hx - r * 0.96, hy - r * 0.16, hx - r * 1.02, hy - r * 0.02);
+      c.stroke();
+      break;
+    }
+    case 'bucketHat': {
+      // Crown, grosgrain band, floppy brim all the way round. `by` is the brim
+      // plane, and it is deliberately HIGH: the first pass drooped the brim to
+      // eye level and hid Capy's whole face. A hat perched above the brows is
+      // worth more than an anatomically perfect one you cannot see under.
+      const by = hy - r * 0.88;
+      c.beginPath();
+      c.moveTo(hx - r * 0.84, by + r * 0.08);
+      c.quadraticCurveTo(hx - r * 0.78, by - r * 0.72, hx, by - r * 0.74);
+      c.quadraticCurveTo(hx + r * 0.80, by - r * 0.72, hx + r * 0.86, by + r * 0.08);
+      c.closePath();
+      c.fillStyle = grad(hx - r, by - r * 0.7, hx + r * 0.8, by);
+      c.fill();
+      c.beginPath();
+      c.moveTo(hx - r * 1.44, by - r * 0.04);
+      c.quadraticCurveTo(hx, by - r * 0.40, hx + r * 1.46, by - r * 0.04);
+      c.quadraticCurveTo(hx + r * 1.16, by + r * 0.28, hx, by + r * 0.34);
+      c.quadraticCurveTo(hx - r * 1.14, by + r * 0.28, hx - r * 1.44, by - r * 0.04);
+      c.closePath();
+      c.fillStyle = grad(hx - r * 1.4, by - r * 0.4, hx + r * 1.1, by + r * 0.3);
+      c.fill();
+      // The brim's underside, which is what makes it read as floppy and not flat.
+      c.fillStyle = bustFade('#000000', 0.34);
+      c.beginPath();
+      c.moveTo(hx - r * 1.38, by + r * 0.02);
+      c.quadraticCurveTo(hx, by - r * 0.18, hx + r * 1.40, by + r * 0.02);
+      c.quadraticCurveTo(hx + r * 1.14, by + r * 0.30, hx, by + r * 0.36);
+      c.quadraticCurveTo(hx - r * 1.12, by + r * 0.30, hx - r * 1.38, by + r * 0.02);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = bustShade(shell, 0.52);
+      c.lineWidth = r * 0.14;
+      c.beginPath();
+      c.moveTo(hx - r * 0.84, by);
+      c.quadraticCurveTo(hx, by - r * 0.20, hx + r * 0.86, by);
+      c.stroke();
+      break;
+    }
+  }
+}
+
 export function characterPortrait(
   name: string, colorA: string, colorB: string, size = 220,
 ): HTMLCanvasElement {

@@ -751,7 +751,17 @@ export function buildTrack(
       (1 - dirt) * ao + verge.g * dirt * ao,
       (1 - dirt) * ao + verge.b * dirt * ao,
     );
-    const dk = 1 - st.dark * 0.66;
+    // ---- P0d. Portal darkening was `1 - dark*0.66`, i.e. the road's albedo was
+    // cut to 34 % inside a bore. That is on TOP of the bore casting shadow, and
+    // the two multiply: measured with `.probe-tmp/volcdark.ts`, volcano's road
+    // went from linear 0.0068 in the open to **0.00175** inside the lava tube —
+    // sRGB 0 through the grade the game actually ships. Coastal and neon land at
+    // 0 as well. A bore you cannot see the floor of is not moody, it is a hole.
+    //
+    // 0.34 keeps a clear, readable step at the mouth (the reason this term exists
+    // — the entrance must read as a change in light) while leaving 66 % of the
+    // albedo for the shadow term and the portal's reveal lamps to work with.
+    const dk = 1 - st.dark * 0.34;
     out.multiplyScalar(dk);
   };
 
@@ -962,7 +972,15 @@ export function buildTrack(
         // ribbed lining
         const rib = 0.14 * Math.sin(d * 1.1) * Math.sin(a);
         _v.addScaledVector(_n2, rib);
-        const ao = (0.2 + 0.55 * Math.pow(Math.sin(a), 0.6)) * (1 - st.dark * 0.55);
+        // ---- P0d. Was `(0.2 + 0.55*sin^0.6) * (1 - dark*0.55)`: at the springing
+        // line (a = 0) the lining's vertex colour was 0.20, and 0.09 once the
+        // portal fade reached full — against a lining material that is already
+        // dark and a bore that receives no key light. The haunches, which are
+        // most of what a driver sees of a tunnel wall, were effectively black.
+        // The AO gradient is what makes a bore read as curved, so it stays; the
+        // floor is lifted and the interior fade halved so there is something for
+        // the reveal lamps to fall on.
+        const ao = (0.42 + 0.5 * Math.pow(Math.sin(a), 0.6)) * (1 - st.dark * 0.28);
         ring.push(tunnel.vertex(_v, _n2, d * 0.1, k / SEG, 0.5 + lat / (st.hw * 2), v2, ao, ao, ao));
       }
       if (prevTunnelRing && prevTunnelRing.length === ring.length) {

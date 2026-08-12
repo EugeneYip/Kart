@@ -271,6 +271,32 @@ interface EmitterClass {
 const NIGHT_EMITTERS: readonly EmitterClass[] = [
   { match: /floodhead|floodlight/i, color: 0xfff3d8, intensity: 1100, range: 90 },
   { match: /lighthouselamp/i, color: 0xfff1cf, intensity: 500, range: 80 },
+  // Tunnel-portal reveal lamps (P0d). Ranked third on purpose: inside a bore
+  // this is the ONLY light source — the road there measured linear 0.0018,
+  // sRGB 0 through the shipping grade — and the pool ranks by delivered
+  // irradiance, so a shopfront 20 m away outside the tunnel must not win a slot
+  // over the lamp six metres ahead. Warm and sodium-ish so it reads as tunnel
+  // service lighting rather than as daylight leaking in.
+  //
+  // 40 cd, and the number matters, so here is the arithmetic.
+  // `collectEmitters` seats ONE light per instance at the geometry's
+  // BOUNDING-SPHERE CENTRE, on the assumption that the mesh holds nothing but
+  // the glowing element. The portal's glow pass spans the whole reveal (a cove
+  // ring at z=0.85 out to a guide strip at z=18.5, lamps at x=+-12.65), so that
+  // centre lands about (0, 3.8, 9.5) — i.e. 3.8 m above the centreline, 9.5 m
+  // inside the mouth, which is a sensible place for a tunnel lamp but a very
+  // SHORT distance to the road directly beneath it. three's point lights are
+  // physical, so irradiance = intensity / d^2: at 3.8 m, 40 cd gives 2.8, and on
+  // volcano's 0.0467-albedo road that is radiance 0.023 against 0.018 for the
+  // open road — a 1.3x pool of warm light at each mouth. 160 cd would have been
+  // 11.1 irradiance and a blown white disc. The middle of the bore is lifted by
+  // the vertex-colour changes in `TrackBuilder` instead, not by this.
+  //
+  // Placed third for RETENTION priority, not candela: inside a bore this is the
+  // only source there is, and `collectEmitters` drops the highest class index
+  // first when it hits EMITTER_MAX. (This table was never strictly monotonic in
+  // candela — gantry lights at 120 already sit below neon at 90.)
+  { match: /portal.*glow|tunnelportalglow/i, color: 0xffb877, intensity: 40, range: 26 },
   { match: /neon/i, color: 0xff62c8, intensity: 90, range: 26 },
   { match: /gantrylights|gantry:glow/i, color: 0xffe6b0, intensity: 120, range: 32 },
   { match: /streetlamp|streetlight/i, color: 0xffcf94, intensity: 70, range: 28 },
@@ -832,9 +858,18 @@ export class Lighting implements ISubsystem {
     // term straight rather than the 0.62 fudge the old fat ambient needed.
     worldSunUniforms.uAmbientIntensity.value = p.ambientIntensity;
 
-    // Night is the only preset with artificial light. Build the pool the first
-    // time one is selected; other presets just zero it (see ensureLampPool).
-    this.lampsWanted = p.night > 0.5 || p.cityGlow >= 0.5;
+    // Which presets have artificial light. Build the pool the first time one is
+    // selected; other presets just zero it (see ensureLampPool).
+    //
+    // `embers` is in the test as of P0d. It is set only by `volcanic`, and the
+    // reason it belongs here is the tunnel-portal work: the lava tube's road was
+    // measured at linear 0.0018 — sRGB 0 through the shipping grade — because the
+    // bore casts shadow AND `TrackBuilder` darkens the road's vertex colour by up
+    // to 0.66 inside it. The portal now carries emissive lamps down the reveal
+    // (`Prop:authored:tunnelportal:glow`), and without a pool those lamps glow
+    // without lighting anything. A volcanic day is not "night", but a lava tube
+    // at midday still needs its own lighting, which is exactly what this pool is.
+    this.lampsWanted = p.night > 0.5 || p.cityGlow >= 0.5 || p.embers > 0.5;
     if (this.lampsWanted) {
       this.ensureLampPool();
       this.markShadowMaskDirty();

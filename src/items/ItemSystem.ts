@@ -49,7 +49,6 @@ const BULLET_TIME = 7.0;
 const GHOST_TIME = 6.0;
 /** Retained only so the deprecated `getInkAmount()` still normalises. */
 const INK_TIME = 4.5;
-const MAX_COINS = 10;
 /** Button must be down this long before a shell drops into shield mode. */
 const HOLD_THRESHOLD = 0.16;
 
@@ -75,7 +74,6 @@ interface Inventory {
   ghostTime: number;
   inkTime: number;
   shrinkTime: number;
-  coins: number;
   /** Latch so a single press can't fire twice. */
   fireLatch: boolean;
 }
@@ -146,7 +144,7 @@ export class ItemSystem implements ISubsystem {
         item: null, count: 0, holdTime: 0, buttonDown: false,
         orbit: [], orbitPhase: Math.random() * 6.28,
         starTime: 0, bulletTime: 0, ghostTime: 0, inkTime: 0, shrinkTime: 0,
-        coins: 0, fireLatch: false,
+        fireLatch: false,
       });
     }
   }
@@ -304,7 +302,16 @@ export class ItemSystem implements ISubsystem {
   getStarTime(kartId: number): number { return this.inv[kartId]?.starTime ?? 0; }
   getBulletTime(kartId: number): number { return this.inv[kartId]?.bulletTime ?? 0; }
   getGhostTime(kartId: number): number { return this.inv[kartId]?.ghostTime ?? 0; }
-  getCoins(kartId: number): number { return this.inv[kartId]?.coins ?? 0; }
+  /**
+   * @deprecated Coins are removed from the game (P0d follow-up). Always 0.
+   *
+   * Kept as a stub for exactly one reason: `HUD` and `Minimap` feature-detect
+   * this on the race/items object (`tryCall(this.race, 'getCoins', id)`), and a
+   * missing method and a method returning 0 are indistinguishable to them — but
+   * a *thrown* one is not. Removing the counter is the HUD's job; publishing a
+   * truthful 0 here is ours.
+   */
+  getCoins(_kartId: number): number { return 0; }
   /**
    * 0..1 squid-ink screen coverage.
    *
@@ -752,19 +759,42 @@ export class ItemSystem implements ISubsystem {
    * and cheats hand over any `ItemType`, and an item the roulette cannot produce
    * must still behave if it is forced.
    *
-   * Two arms are now *inert*, and deliberately so:
+   * Three arms are now *inert*, and deliberately so:
    *
    *   - `Lightning` was the only caller of `physics.applyStun(..., 'shock')`, so
    *     the `shock` stun kind now has no source anywhere in the game. The kind
    *     itself stays in `StunKind` (it costs nothing, `src/core/*` is off limits
    *     to this agent, and the visual-shrink branch in KartPhysics is harmless).
    *   - `Squid` was the only caller of `vfx.burst('ink')` and `sfx('squid')`.
+   *   - `Coin` was the only caller of `vfx.burst('coin')` and `sfx('coin')`.
    *
-   * The ORPHANED EFFECT CODE IS LEFT IN PLACE, unreferenced, in the two files
-   * that own it (`VfxManager`'s `ink` impact, `SfxBank`'s `squid`/`lightning`
-   * entries). Both belong to other agents, and an unreferenced branch in a
-   * switch costs nothing at runtime, whereas a half-removed effect that a future
-   * item wants back is a merge conflict. Flagged in the handoff instead.
+   * ---------------------------------------------------------------------------
+   * WHAT THE COIN WAS ACTUALLY DOING — and it was less than it looked
+   * ---------------------------------------------------------------------------
+   * Owner: *"You can remove the coin item — it doesn't do much."* Correct, and
+   * the mechanical half was already dead:
+   *
+   *   - `physics.setCoinBonus?.(kartId, coins)` — the MK-style "coins raise your
+   *     top speed" hook. **`PhysicsWorld` never implemented it.** It was declared
+   *     optional on `PhysicsLike` and called with `?.`, so every coin collected
+   *     since the method was written has silently done nothing to top speed.
+   *     Coins carried NO speed balance to preserve, so removing them changes no
+   *     pace anywhere. (Same shape of defect as the three dead mechanics in P0.)
+   *   - a 0.35 s / x1.06 boost — worth +0.4 m/s of soft cap for a third of a
+   *     second, i.e. below the noise floor of the drag term.
+   *   - `inv.coins`, capped at 10, read only by the HUD counter, now removed.
+   *
+   * `ItemRoulette` already gave the coin weight 0 in every row, so no box has
+   * been able to produce one since P0d-D5 either.
+   *
+   * The ORPHANED EFFECT CODE IS LEFT IN PLACE, unreferenced, in the files that
+   * own it (`VfxManager`'s `ink`/`coin` impacts, `ImpactEffects.coin`,
+   * `SfxBank`'s `squid`/`lightning`/`coin` entries, `AudioEngine`'s
+   * `ItemType.Coin` arm, `AIDriver`'s `ItemType.Coin` case — which shares a
+   * `default` branch and so needs no change at all). Those all belong to other
+   * agents, and an unreferenced branch in a switch costs nothing at runtime,
+   * whereas a half-removed effect that a future item wants back is a merge
+   * conflict. Flagged in the handoff instead.
    */
   private use(kartId: number, inv: Inventory, mode: AimMode): void {
     const item = inv.item;
@@ -779,11 +809,47 @@ export class ItemSystem implements ISubsystem {
     const backwards = mode === 'back' ? true : mode === 'forward' ? false : defaultBack;
 
     switch (item) {
-      // BATTERY — instant speed boost.
+      /**
+       * BATTERY — instant speed boost. **2.10 s @ strength 1.60.**
+       *
+       * Owner, P0d follow-up: *"the battery gives acceleration but feels too
+       * weak."* It was 1.60 s @ 1.35, and measured against the boost it has to
+       * beat — a purple mini-turbo, which a competent player earns several times
+       * a lap for free — that was the problem, not the absolute number:
+       *
+       *   source              dur    str   soft cap   peak    gain   dist@4s
+       *   mini-turbo tier 3   1.39s  1.09   40.7 m/s  52.2  +24.02   +19.9 m
+       *   boost pad           0.90s  1.00   39.7 m/s  46.0  +17.78   +10.6 m
+       *   BATTERY was         1.60s  1.35   43.6 m/s  59.4  +31.17   +29.4 m
+       *   BATTERY now         2.10s  1.60   46.3 m/s  66.9  +38.70   +52.7 m
+       *
+       * So the old battery was **1.30x** a free purple mini-turbo on peak speed
+       * and only **1.48x** on ground gained. Nobody spends an item slot for that.
+       * It is now 1.61x and **2.65x**. Time from press to 90 % of the gain barely
+       * moves (0.90 s -> 1.02 s), so it still hits like an item rather than
+       * winding up like a turbocharger. Measured on the real `PhysicsWorld`,
+       * `.probe-tmp/battery.ts`.
+       *
+       * ⚠️ Do not read `peak` as the design target. `PHYS.boostAccel` (30 m/s^2
+       * per unit strength) against `PHYS.overspeedDecay` (1.9 /s) settles at
+       * `softCap + 15.8 * strength`, so EVERY boost in the game overshoots its
+       * own soft cap by ~17 m/s — a purple mini-turbo reaches 52 m/s against a
+       * 40.7 cap. That is a shared property of the boost model in
+       * `src/physics/KartPhysics.ts`, flagged for its owner; the soft cap is the
+       * number this tuning is authored against.
+       *
+       * The punch is not only numeric. A boost that reads as weak is partly a
+       * presentation bug, so the burst is bigger and the player gets the same
+       * shake-and-flash treatment the Bullet gets, at about half strength.
+       */
       case ItemType.Boost:
       case ItemType.TripleBoost: {
-        this.physics.applyBoost?.(kartId, 1.6, 1.35, 'item');
-        this.vfx.burst?.('boost', k.position, undefined, 1.0);
+        this.physics.applyBoost?.(kartId, 2.1, 1.6, 'item');
+        this.vfx.burst?.('boost', k.position, undefined, 1.45);
+        if (this.isPlayer(kartId)) {
+          this.vfx.screenShake?.(0.32, 0.22);
+          this.vfx.flash?.(0xfff0c0, 0.14, 0.12);
+        }
         this.sfx('mushroom', k.position);
         break;
       }
@@ -905,14 +971,9 @@ export class ItemSystem implements ISubsystem {
         break;
       }
 
-      case ItemType.Coin: {
-        inv.coins = Math.min(MAX_COINS, inv.coins + 1);
-        this.physics.setCoinBonus?.(kartId, inv.coins);
-        this.physics.applyBoost?.(kartId, 0.35, 1.06, 'item');
-        this.vfx.burst?.('coin', k.position, undefined, 0.8);
-        this.sfx('coin', k.position);
+      // COIN — removed from the game. Unreachable; see the note above.
+      case ItemType.Coin:
         break;
-      }
     }
 
     bus.emit('item:used', { kartId, item });
@@ -1049,7 +1110,7 @@ export class ItemSystem implements ISubsystem {
       inv.orbit.length = 0;
       inv.item = null; inv.count = 0; inv.holdTime = 0; inv.buttonDown = false;
       inv.starTime = 0; inv.bulletTime = 0; inv.ghostTime = 0;
-      inv.inkTime = 0; inv.shrinkTime = 0; inv.coins = 0; inv.fireLatch = false;
+      inv.inkTime = 0; inv.shrinkTime = 0; inv.fireLatch = false;
     }
     this.roulette.reset();
     this.projectiles.clear();
