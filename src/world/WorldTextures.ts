@@ -935,6 +935,56 @@ export class TerrainField {
     // ---- stamp the road corridor -------------------------------------------
     const R = 74; // metres of influence
     const rTex = Math.ceil(R / mpt);
+
+    /**
+     * WHICH carriageway owns the ground under a texel.
+     *
+     * The stamp below picks the station nearest in **XZ only**, which is right
+     * for a flat circuit and badly wrong for one that stacks roads vertically.
+     * Volcano's helix passes directly over the lava-tube straight: at the
+     * t=0.805 tunnel portal the nearest station >60 m away along the lap is
+     * **3.5 m away in plan and 38 m overhead** (y 44.12 against the tube's
+     * 5.96), so the ground under the tube was stamped to the *helix's* height.
+     * Measured, that put terrain up to +38.8 m above the road on the racing
+     * line, and a patchwork of +1 / +4 / +14 / +32 m spikes across the portal
+     * mouth — which is the "portal buried in a hillside" report. The natural
+     * terrain there is 11.5 m BELOW the road: there is no hill at all.
+     *
+     * So: first pass records the LOWEST road height whose corridor actually
+     * covers each texel; the stamp then ignores any station riding more than
+     * `STACK_V` above it. A flyover stops paving the ground it flies over,
+     * while ordinary cut-and-fill embankments — where only one carriageway
+     * reaches the texel — are bit-for-bit unchanged.
+     *
+     * `STACK_V` has to clear the height a single carriageway varies by inside
+     * its own reach: 12 m + half-width at volcano's steepest ~15 % grade is
+     * about 3.6 m, so 7 m is ample margin without admitting a flyover.
+     */
+    const STACK_V = 7;
+    const groundPy = new Float32Array(n).fill(INF);
+    for (let si = 0; si < this.stations.length; si++) {
+      const st = this.stations[si];
+      // Only where this road's own corridor lands, not the full 74 m influence:
+      // the question is "does this carriageway pave this texel", not "is it near".
+      const reach = st.halfWidth + 12;
+      const reachTex = Math.ceil(reach / mpt);
+      const cx = (st.px - this.originX) / mpt;
+      const cz = (st.pz - this.originZ) / mpt;
+      const x0 = Math.max(0, Math.floor(cx - reachTex));
+      const x1 = Math.min(res - 1, Math.ceil(cx + reachTex));
+      const z0 = Math.max(0, Math.floor(cz - reachTex));
+      const z1 = Math.min(res - 1, Math.ceil(cz + reachTex));
+      for (let ty = z0; ty <= z1; ty++) {
+        const ddz = this.originZ + (ty + 0.5) * mpt - st.pz;
+        for (let tx = x0; tx <= x1; tx++) {
+          const ddx = this.originX + (tx + 0.5) * mpt - st.px;
+          if (ddx * ddx + ddz * ddz > reach * reach) continue;
+          const i = ty * res + tx;
+          if (st.py < groundPy[i]) groundPy[i] = st.py;
+        }
+      }
+    }
+
     for (let si = 0; si < this.stations.length; si++) {
       const st = this.stations[si];
       const cx = (st.px - this.originX) / mpt;
@@ -953,6 +1003,8 @@ export class TerrainField {
           if (d2 > R * R) continue;
           const i = ty * res + tx;
           if (d2 >= dist[i] * dist[i]) continue;
+          // A carriageway flying over a lower one does not pave the ground.
+          if (st.py > groundPy[i] + STACK_V) continue;
           const d = Math.sqrt(d2);
           dist[i] = d;
           const cross = ddx * st.bx + ddz * st.bz;

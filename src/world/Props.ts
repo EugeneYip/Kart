@@ -746,7 +746,7 @@ interface Sponsor {
   readonly weight: number;
 }
 
-const SPONSORS: readonly Sponsor[] = [
+export const SPONSORS: readonly Sponsor[] = [
   { lines: ['CAPY', 'LAB'], bg: '#1d6f63', fg: '#f6efdd', weight: 0.4 },
   { lines: ['NITRO'], bg: '#141821', fg: '#ffd23f', weight: 1 },
   { lines: ['TURBO'], bg: '#0f6bd6', fg: '#ffffff', weight: 1 },
@@ -767,7 +767,7 @@ const SPONSORS: readonly Sponsor[] = [
  * the same view. The two owner cells sit at slots 1, 5, 9 and 13, so consecutive
  * seeds can never put them side by side either.
  */
-const SPONSOR_PICK: readonly number[] = (() => {
+export const SPONSOR_PICK: readonly number[] = (() => {
   const out: number[] = [];
   // Interleaved rather than blocked, so consecutive seeds cannot land two owner
   // boards next to each other.
@@ -834,7 +834,7 @@ function fitLine(
 ): number {
   let px = wantPx;
   const measure = (): number => {
-    ctx.font = `${weight} ${Math.round(px)}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+    ctx.font = sponsorFont(px, weight);
     // `letterSpacing` is not universally available on 2D contexts, so tracking is
     // applied as an explicit per-gap allowance rather than trusted to the API.
     return ctx.measureText(text).width + tracking * px * Math.max(0, text.length - 1);
@@ -847,6 +847,97 @@ function fitLine(
     wd = measure();
   }
   return px;
+}
+
+/** One font string, so measuring and drawing can never disagree. */
+function sponsorFont(px: number, weight: number): string {
+  return `${weight} ${Math.round(px)}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+}
+
+/** One line of a wordmark, sized and measured exactly as it will be drawn. */
+export interface SponsorCellLine {
+  readonly text: string;
+  readonly px: number;
+  readonly weight: number;
+  /** Extra advance per inter-glyph gap, px. Already folded into `width`. */
+  readonly tracking: number;
+  /** Baseline offset from the cell centre, px. */
+  readonly dy: number;
+  /** Total advance width of the run as drawn, px. */
+  readonly width: number;
+}
+
+/**
+ * The drawing plan for one sponsor cell.
+ *
+ * `makeSponsorAtlas` executes this rather than sizing text inline, so the
+ * overflow question — does "TINY TRIP CLUB" fit a 2:1 cell? — is answerable
+ * without rasterising. `.probe-tmp/sponsors.ts` asserts `width <= safe` for
+ * every line of every brand off exactly the plan that ships.
+ */
+export interface SponsorCellPlan {
+  readonly cell: number;
+  /** The wordmark with its lines joined, e.g. `TINY TRIP CLUB`. */
+  readonly brand: string;
+  /** Width every line must fit inside, px. */
+  readonly safe: number;
+  readonly lines: readonly SponsorCellLine[];
+}
+
+/**
+ * Advance width of a run as it will actually be drawn: a single `fillText` for
+ * an untracked line, a glyph-by-glyph walk for a tracked one. Those differ by
+ * kerning, so each is measured the way it is drawn.
+ */
+function runWidth(
+  ctx: CanvasRenderingContext2D, text: string, px: number,
+  weight: number, tracking: number,
+): number {
+  ctx.font = sponsorFont(px, weight);
+  if (tracking <= 0) return ctx.measureText(text).width;
+  const glyphs = [...text];
+  let w = 0;
+  for (const g of glyphs) w += ctx.measureText(g).width;
+  return w + tracking * px * Math.max(0, glyphs.length - 1);
+}
+
+export function sponsorCellPlan(
+  ctx: CanvasRenderingContext2D, cell: number, cw: number, ch: number,
+): SponsorCellPlan {
+  const n = ATLAS_COLS * ATLAS_ROWS;
+  const i = ((Math.floor(cell) % n) + n) % n;
+  const { lines } = SPONSORS[i];
+  // Safe width: inside the 8 px inset and the 7 px keyline, with a margin.
+  const safe = cw - 46;
+  const out: SponsorCellLine[] = [];
+  if (lines.length === 1) {
+    const px = fitLine(ctx, lines[0], safe, ch * 0.42, 900);
+    out.push({
+      text: lines[0], px, weight: 900, tracking: 0, dy: 0,
+      width: runWidth(ctx, lines[0], px, 900, 0),
+    });
+  } else {
+    // Two-line lockup: the long line takes the width, the short line sits under
+    // it a size down and tracked out, which is how a club wordmark is set and
+    // keeps "CLUB" from looking like a truncation of the line above.
+    const top = fitLine(ctx, lines[0], safe, ch * 0.34, 900);
+    out.push({
+      text: lines[0], px: top, weight: 900, tracking: 0, dy: -top * 0.44,
+      width: runWidth(ctx, lines[0], top, 900, 0),
+    });
+    // 0.78 of the first line, not 0.62. The first line is the one that had to
+    // shrink to fit — "TINY TRIP" lands at 90 px of a 512 px cell — and deriving
+    // the second line from it compounded the shrink: "CLUB" came out at 56 px
+    // filling 40 % of a cell it had all the room in the world in. Sizing it as a
+    // subordinate line of the lockup and letting `fitLine` clip it back if it
+    // ever does run wide reads as a wordmark and stays legible at racing speed.
+    const botPx = fitLine(ctx, lines[1], safe * 0.82, top * 0.78, 700, 0.22);
+    out.push({
+      text: lines[1], px: botPx, weight: 700, tracking: 0.22, dy: top * 0.60,
+      width: runWidth(ctx, lines[1], botPx, 700, 0.22),
+    });
+  }
+  return { cell: i, brand: lines.join(' '), safe, lines: out };
 }
 
 /**
@@ -864,7 +955,7 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
     const cw = w / 4, ch = h / 2;
     for (let i = 0; i < 8; i++) {
       const x = (i % 4) * cw, y = Math.floor(i / 4) * ch;
-      const { lines, bg, fg } = SPONSORS[i];
+      const { bg, fg } = SPONSORS[i];
       const grad = ctx.createLinearGradient(x, y, x, y + ch);
       grad.addColorStop(0, bg);
       grad.addColorStop(1, shade(bg, 0.72));
@@ -895,31 +986,29 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
       ctx.fillStyle = fg;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      // Safe width: inside the 8 px inset and the 7 px keyline, with a margin.
-      const safe = cw - 46;
       ctx.save();
       ctx.translate(x + cw * 0.5, y + ch * 0.5);
       ctx.transform(1, 0, -0.14, 1, 0, 0);
-      if (lines.length === 1) {
-        fitLine(ctx, lines[0], safe, ch * 0.42, 900);
-        ctx.fillText(lines[0], 0, 0);
-      } else {
-        // Two-line lockup: the long line takes the width, the short line sits
-        // under it a size down and tracked out, which is how a club wordmark is
-        // set and keeps "CLUB" from looking like a truncation of the line above.
-        const top = fitLine(ctx, lines[0], safe, ch * 0.34, 900);
-        ctx.fillText(lines[0], 0, -top * 0.44);
-        const botPx = fitLine(ctx, lines[1], safe * 0.82, top * 0.62, 700, 0.22);
-        // Tracking has to be drawn glyph by glyph: the measurement above allowed
-        // for it, so the string must actually carry it or the line reads narrow.
-        const gap = botPx * 0.22;
-        const glyphs = [...lines[1]];
-        let total = -gap * (glyphs.length - 1);
-        for (const g of glyphs) total += ctx.measureText(g).width;
-        let gx = -(total + gap * (glyphs.length - 1)) * 0.5;
-        for (const g of glyphs) {
+      // Sized by `sponsorCellPlan` rather than inline, so what the overflow
+      // probe measures is what gets drawn.
+      for (const ln of sponsorCellPlan(ctx, i, cw, ch).lines) {
+        ctx.font = sponsorFont(ln.px, ln.weight);
+        if (ln.tracking <= 0) {
+          ctx.fillText(ln.text, 0, ln.dy);
+          continue;
+        }
+        // Tracking has to be drawn glyph by glyph: the plan's width allowed for
+        // it, so the string must actually carry it or the line reads narrow.
+        //
+        // The run to centre is the glyph widths PLUS the gaps between them. The
+        // previous arithmetic subtracted the gaps and then added them straight
+        // back, so it centred the glyph widths alone and pushed the whole line
+        // right by half the total tracking — 71 px of a 512 px cell for "CLUB".
+        const gap = ln.tracking * ln.px;
+        let gx = -ln.width * 0.5;
+        for (const g of [...ln.text]) {
           const gw = ctx.measureText(g).width;
-          ctx.fillText(g, gx + gw * 0.5, top * 0.60);
+          ctx.fillText(g, gx + gw * 0.5, ln.dy);
           gx += gw + gap;
         }
       }
@@ -3328,6 +3417,53 @@ export class Props implements ISubsystem {
               WING * 0.42, (top - (Y0 - 1)) * 0.5, 1.55,
               k % 2 ? stone : 0x827868, { shade: { top: 1.08 } });
           }
+        }
+
+        // ---- 4b. the CUT FACE on the approach side ------------------------
+        // Everything above meets the hill BEHIND the headwall. Nothing held the
+        // ground back in FRONT of it, and measurement says something has to:
+        // with the heightfield's phantom embankment gone (see the STACK_V note
+        // in `TerrainField.bake`) volcano t=0.805 is a mild side-hill cut —
+        // ground +1.2 to +1.8 m above the road on the left flank and -1.9 to
+        // -2.9 m on the right, over an opening that springs at -0.50 m. So on
+        // the high side ~2 m of the arch's haunch has soil against it and on the
+        // low side the headwall base is left in the air.
+        //
+        // Two returns per side fix both ends of that range: they run FORWARD out
+        // of the face and step down, so the bank is retained by masonry instead
+        // of spilling against the jamb, and the wall visibly continues below
+        // grade on the falling side. This is the difference between "a hole in a
+        // slope" and "a road entering a cutting".
+        //
+        // Kept to 8.1 m of forward reach, with every inner face at |x| >= 13.57 m:
+        // the CLEARANCE note above allows nothing inside 13.4 m of the centreline
+        // below the springing, and the widest shoulder edge at any portal is
+        // 12.65 m. The outer faces stay inside the 17.97 m the coping already
+        // reaches, so the prop's across-half does not grow.
+        for (const sx of [-1, 1]) {
+          for (let k = 0; k < 2; k++) {
+            const zc = -1.5 - k * 4.3;          // forward of the face
+            const half = 2.15;                   // along-z half length
+            const top = Y0 + 6.6 - k * 2.6;      // steps down as it runs out
+            const bot = YB - 0.4;                // and continues below grade
+            b.box(sx * (R + 1.35 + k * 0.42), (bot + top) * 0.5, zc,
+              1.05 + k * 0.16, (top - bot) * 0.5, half,
+              k % 2 ? 0x827868 : stone, { shade: { top: 1.1, side: 1.02 } });
+            // Coping, so the return has a top edge rather than ending in air.
+            b.box(sx * (R + 1.35 + k * 0.42), top + 0.16, zc,
+              1.28 + k * 0.16, 0.2, half + 0.16, light, { shade: { top: 1.28 } });
+          }
+          // Splayed plinth along the flank of the face: the footing course that
+          // makes the headwall meet grade instead of being cut off by it.
+          //
+          // Placed so its inner face lands at 13.94 m. `.probe-tmp/portalclear.ts`
+          // reads the built vertices back and reports the nearest approach to the
+          // centreline below the springing: it is 13.55 m, and that is step 1's
+          // pre-existing splayed footing (`WING*0.5 + 0.35` at `R + WING*0.5`),
+          // not anything added here. Everything in step 4b stays at 13.94 m or
+          // wider so it is never the binding constraint.
+          b.box(sx * (R + WING * 0.6), Y0 + 0.35, -0.42,
+            WING * 0.5 + 0.3, 1.35, FACE + 0.5, dark, { shade: { top: 1.14 } });
         }
 
         // ---- 5. splayed reveal — three rings going in ---------------------
