@@ -318,6 +318,13 @@ export interface KartBody {
   counterTime: number;
   hopTime: number;
   hopHeld: boolean;
+  /**
+   * A drift button press that has not yet been spent. Set on the press edge,
+   * cleared when the button comes up and by `cancelDrift` — so one press buys
+   * exactly one drift, but it buys it for as long as the button is held rather
+   * than only on the landing tick. See DriftSystem's header note 2 (P0g).
+   */
+  driftArmed: boolean;
   /** Seconds left in which a drift press still counts as "at the lip". */
   airDriftGrace: number;
 
@@ -489,6 +496,7 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     counterTime: 0,
     hopTime: 0,
     hopHeld: false,
+    driftArmed: false,
     airDriftGrace: 0,
 
     trickArmed: false,
@@ -675,6 +683,12 @@ export function cancelDrift(b: KartBody, grantBoost: boolean): void {
   b.counterTime = 0;
   b.hopTime = 0;
   b.hopHeld = false;
+  // Spend the arm. Every way a drift can end goes through here — the release
+  // payoff, the counter-steer cancel, grinding to a halt, a shell, a respawn, a
+  // heavy wall hit — and none of them should hand back a drift the player did not
+  // ask for again. Holding the button through a cancel must NOT re-latch: that
+  // is the difference between a forgiving entry and an automatic one.
+  b.driftArmed = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +793,14 @@ export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
 
   let gravMag = WORLD.gravity;
   if (b.gliding) gravMag *= PHYS.glideGravity;
-  else if (b.driftPhase === DriftPhase.Hop && !b.grounded) gravMag *= PHYS.hopGravity;
+  // Keyed off `hopTime` rather than the phase: since P0g a drift can be entered
+  // on the press tick, so the kart is often DRIFTING and mid-hop at the same
+  // time. `hopTime` is the hop's own clock (set on the impulse, zeroed on
+  // touchdown by DriftSystem), so the hang time is identical whether or not the
+  // press also started a drift — which is the point of keeping the hop as a
+  // flourish instead of a gate.
+  else if (!b.grounded && (b.driftPhase === DriftPhase.Hop || b.hopTime > 0))
+    gravMag *= PHYS.hopGravity;
 
   if (b.antiGravity) {
     // Gravity follows the road normal, and a magnetic term glues us to it.
@@ -846,6 +867,16 @@ export function stepKart(b: KartBody, dt: number, track: ITrackService): void {
     const inward = clamp(steer * b.driftDir, -1, 1);
     const tighten = lerp(0.52, 1.0 + t.driftTurnBonus, (inward + 1) * 0.5);
     targetYaw = -b.driftDir * authority * tighten * speedGate;
+    // NOTE (P0g): a drift can now begin on the press tick, so this branch also
+    // runs for the ~0.32 s the hop is in the air. The chassis therefore swings
+    // into the slide *during* the hop, which is both what MK8 looks like and
+    // where the small entry cost comes from: with no tyre to pull the velocity
+    // round, ~10 % of the drive that 25° of slip points sideways is spent, so a
+    // press-tick entry retains 92.3 % of |v| through 2.5 s of drift against
+    // 93.4 % for a landing entry. An explicit taper that stopped the chassis at
+    // the commanded slip angle was tried and measured EXACTLY zero difference
+    // (`driftAngle` ramps as fast as the slip grows, so it never binds), so it
+    // was removed rather than shipped as decoration.
   } else if (!b.grounded) {
     targetYaw = -steer * t.turnRate * PHYS.airYawFactor;
   } else {

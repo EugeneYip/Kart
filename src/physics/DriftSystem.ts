@@ -14,9 +14,34 @@
  *      genuinely airborne, the suspension extends, and the landing squats. That
  *      physicality is why MK8's hop feels like a decision and not a button.
  *
- *   2. THE DRIFT ONLY ENGAGES ON LANDING, and only if the stick is still held.
- *      This gives the player a free "cancel" (hop straight, land straight) and
- *      makes the drift entry a deliberate act.
+ *   2. ONE PRESS ARMS ONE DRIFT; IT COMMITS THE MOMENT YOU ARE ACTUALLY
+ *      CORNERING.  (P0g — owner: *"it is really hard to perform, it'd be better
+ *      to have it removed unless it's easier to activate"*.)
+ *
+ *      This used to be the opposite: the drift engaged ONLY on the landing tick
+ *      of the hop, and only if `|steer| >= 0.26` at that exact instant. Three
+ *      things had to line up inside one 8 ms tick — press, ~0.32 s of air, and
+ *      half a stick of lock at touchdown — with no feedback when they didn't, and
+ *      because the press edge had already been consumed, a held button could
+ *      never retry: the player had to release and press again. Measured on the
+ *      entry grid (`.probe-tmp/drift-entry.ts`), 40 % of plausible attempts
+ *      committed and 60 % silently did nothing.
+ *
+ *      Now the press ARMS the drift (`driftArmed`) and the arm stays live for as
+ *      long as the button is held. The drift commits on the first tick that the
+ *      kart is grounded, above `minSpeed` and steering past `engageSteer` —
+ *      which may be the press tick itself (already mid-corner: instant), the
+ *      landing tick (the classic hop-into-drift), or any tick after it (turn-in
+ *      arrived late: the grace window is "as long as you're still holding").
+ *
+ *      The skill is untouched because it never lived here. It lives in the hold
+ *      and the release: the charge tiers, the counter-steer cancel, and the fact
+ *      that a cancel or a payoff DISARMS — so the next drift needs its own
+ *      press, exactly as before. The free "cancel" is now "let go of the button"
+ *      (hop straight, release: it was just a hop) rather than "land straight".
+ *
+ *      The hop survives as the flourish it should always have been, not the gate
+ *      in front of the mechanic.
  *
  *   3. THE CHASSIS YAWS, THE VELOCITY DOESN'T (much). We command a slip angle
  *      (`driftAngle`, 12°–38°) and KartPhysics' tyre model relaxes the velocity
@@ -46,8 +71,18 @@ import type { KartBody } from './KartPhysics';
 import { DriftPhase, PHYS, WORLD_UP, applyBoostTo, cancelDrift, TRICK_NAMES } from './KartPhysics';
 
 export const DRIFT = {
-  /** Stick deflection required, on landing, to commit to a drift. */
-  engageSteer: 0.26,
+  /**
+   * Stick deflection that reads as "I am cornering", and so commits an armed
+   * drift. **0.26 → 0.12 (P0g).**
+   *
+   * `Input.curve` puts a 0.14 radial dead-zone and a mild expo under this, so the
+   * number is not the stick position — it is the *output*. Inverting the curve:
+   * the old 0.26 needed the stick at 46 % of physical travel, held at the exact
+   * tick of touchdown. 0.12 needs 30 %, which is still an unmistakable turn (a
+   * dead-zone-grazing stick outputs ~0.01, and noise outputs nothing at all) but
+   * is now comfortably below what anyone aiming at a corner is already holding.
+   */
+  engageSteer: 0.12,
   /** ...and to keep it alive once committed (hysteresis: you may straighten). */
   holdSteer: 0.04,
   /** Below this speed a drift is pointless and gets dropped. */
@@ -108,6 +143,7 @@ export class DriftSystem {
     // --- stunned / respawning: no drifting, no tricks ------------------------
     if (b.stunTime > 0 || b.respawnTime > 0) {
       if (b.driftPhase !== DriftPhase.None) cancelDrift(b, false);
+      b.driftArmed = false;
       b.trickActive = false;
       b.trickArmed = false;
       b.hopTime = 0;
@@ -121,18 +157,28 @@ export class DriftSystem {
     // --- tricks -------------------------------------------------------------
     this.tricks(b, dt, pressed, justLeftGround, justLanded);
 
-    // --- hop ----------------------------------------------------------------
+    // --- press: arm the drift, then hop -------------------------------------
     if (pressed && !b.gliding) {
       b.airDriftGrace = DRIFT.trickGrace;
+      // The press is the player's intent, and intent does not expire in 8 ms. It
+      // stays live until the button comes up, or until a drift it produced ends.
+      if (b.driftPhase === DriftPhase.None) b.driftArmed = true;
       if (b.driftPhase === DriftPhase.None && b.trickCooldown <= 0) {
         if (b.grounded) {
           // A genuine impulse. The suspension extends, the wheels leave the
           // ground, and the landing compresses — all of it emergent.
           b.velocity.addScaledVector(b.up, PHYS.hopSpeed);
-          b.driftPhase = DriftPhase.Hop;
           b.hopTime = 1e-6;
           b.hopHeld = true;
           bus.emit('kart:hop', { kartId: b.id, position: b.position });
+          // Already turning? Then the answer to "is this a drift" is known NOW,
+          // and making the player wait out the hop to be told is what made entry
+          // feel unreliable. Commit on the press and let the hop happen *over*
+          // the drift — `st.hopping` already reports that combination, and
+          // `hopGravity` in KartPhysics keys off `hopTime`, so the flourish is
+          // identical either way.
+          if (this.engageReady(b, absSpeed)) this.begin(b, sign(b.ctrlSteer));
+          else b.driftPhase = DriftPhase.Hop;
         } else {
           // Pressed mid-air (off a ramp, or after a bump): arm the landing so
           // you can pre-load a drift before you touch down. MK8 lets you do this
@@ -143,6 +189,8 @@ export class DriftSystem {
         }
       }
     }
+    // Letting go always spends the arm — a fresh drift needs a fresh press.
+    if (!b.ctrlDrift) b.driftArmed = false;
 
     // --- state machine ------------------------------------------------------
     switch (b.driftPhase) {
@@ -156,12 +204,11 @@ export class DriftSystem {
         }
         const airborneEnough = b.hopTime > DRIFT.hopMinAir || !b.grounded;
         if (b.grounded && airborneEnough) {
-          const steerMag = Math.abs(b.ctrlSteer);
-          if (steerMag >= DRIFT.engageSteer && absSpeed >= DRIFT.minSpeed) {
-            this.begin(b, sign(b.ctrlSteer));
-          } else {
-            b.driftPhase = DriftPhase.None;
-          }
+          // The classic entry. A miss is no longer fatal: the arm survives, so
+          // the `None` branch below keeps offering to commit for as long as the
+          // button is down.
+          if (this.engageReady(b, absSpeed)) this.begin(b, sign(b.ctrlSteer));
+          else b.driftPhase = DriftPhase.None;
           b.hopTime = 0;
           b.hopHeld = false;
         }
@@ -169,6 +216,15 @@ export class DriftSystem {
       }
 
       case DriftPhase.Drifting: {
+        // A drift entered on the press tick is still inside its hop for ~0.32 s;
+        // the hop is over when the wheels come back down. Both `st.hopping` and
+        // `PHYS.hopGravity` read `hopTime`, so it has to be closed here as well
+        // as in the Hop case. (The time bound is defensive: a hop that somehow
+        // never left the ground must not leave the kart flagged as hopping.)
+        if (b.hopTime > 0 && (justLanded || (b.grounded && b.hopTime > 0.5))) {
+          b.hopTime = 0;
+          b.hopHeld = false;
+        }
         if (!b.ctrlDrift) {
           cancelDrift(b, true); // release → the payoff
           break;
@@ -231,6 +287,15 @@ export class DriftSystem {
       }
 
       default: {
+        // --- the forgiving entry --------------------------------------------
+        // Button still held from an earlier press, and NOW the kart is cornering
+        // fast enough: commit. This is the whole of the P0g fix — it turns a
+        // one-tick timing window into "hold it and turn", and it subsumes the
+        // post-landing grace window the old design needed but never had.
+        if (this.engageReady(b, absSpeed)) {
+          this.begin(b, sign(b.ctrlSteer));
+          break;
+        }
         // Not drifting: unwind the commanded angle so a re-entry starts clean.
         b.driftAngle = damp(b.driftAngle, 0, 0.09, dt);
         b.driftAngleTarget = 0;
@@ -241,6 +306,26 @@ export class DriftSystem {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * The three gates that are left, and the only three there should be: the button
+   * is down and its press has not been spent, the tyres are on the ground, the
+   * kart is cornering, and it is moving fast enough for a slide to mean anything.
+   *
+   * `ctrlSteer` (the stick) rather than `steerCmd` (the rack) on purpose — entry
+   * should answer to what the player is asking for, not to the ~0.14 s the
+   * steering rack takes to get there.
+   */
+  private engageReady(b: KartBody, absSpeed: number): boolean {
+    return (
+      b.driftArmed &&
+      b.ctrlDrift &&
+      b.grounded &&
+      !b.gliding &&
+      absSpeed >= DRIFT.minSpeed &&
+      Math.abs(b.ctrlSteer) >= DRIFT.engageSteer
+    );
+  }
 
   private begin(b: KartBody, dir: number): void {
     b.driftPhase = DriftPhase.Drifting;
