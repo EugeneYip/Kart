@@ -2683,8 +2683,18 @@ export class Props implements ISubsystem {
     }
 
     // ---- streetlights --------------------------------------------------------
+    //
+    // `min: 2.6` was the single worst thing the driver sees from the edge of the
+    // road on neon. Measured with the eye at 0.85 of the half-width
+    // (`.probe-tmp/edgefill.ts`): 2.69 % of the frame on the left and 3.09 % on
+    // the right, across 84-87 of 155 stations, with the nearest instance leaving
+    // **0.6 m** of verge. Nothing else on the circuit is both that close and
+    // that relentless — a 9 m mast every 27 m on both sides, and at 0.6 m of
+    // clearance it sweeps past the camera at kart height rather than reading as
+    // street furniture. 5.5-8.0 m still puts them on the pavement (the authored
+    // `streetLamp` runs sit at lat 17-18) without them brushing the kerb.
     {
-      const anchors = roadside(ctx, rng, { spacing: 27, min: 2.6, max: 4.0, sides: 2, limit: this.count(70) });
+      const anchors = roadside(ctx, rng, { spacing: 27, min: 5.5, max: 8.0, sides: 2, limit: this.count(70) });
       const b = this.builder();
       b.prism(0, 0, 0, 0.13, 8.2, 8, 0x3d434a, { capBottom: true, taper: 0.62 });
       b.tube(0, 8.1, 0, 0, 8.9, -2.0, 0.09, 6, 0x3d434a);
@@ -3014,18 +3024,56 @@ export class Props implements ISubsystem {
     this.emit('barn', b.build('barn'), this.matte, anchors, { cull: CULL_MID });
   }
 
-  /** Rock clusters — the cheapest way to stop terrain looking like a bedsheet. */
+  /**
+   * Rock clusters — the cheapest way to stop terrain looking like a bedsheet.
+   *
+   * ==========================================================================
+   * THE ROCK CLUSTER WAS AUTHORED 63-75 % UNDERGROUND.
+   * ==========================================================================
+   * Each lump was `sphere(..., -r * 0.35 + rng * 0.2, ..., { squash: 0.62-0.92 })`
+   * — centre a third of a radius BELOW y = 0, then a squashed half-height on top
+   * of that. So the lump's own bottom sat at −(0.35 + squash)·r while its top
+   * only reached (squash − 0.35)·r: measured on the real scene, 63 % of the
+   * cluster's height was below the heightfield on coastal, 68 % on neon and
+   * **75 % on volcano**, where the biggest one is 10.6 m across and 5.1 m tall
+   * with 3.8 m of that underground. 1.2 m of a 5 m rock showing over a 10.6 m
+   * footprint is not a rock bedded into the ground; it is a wide flat-topped
+   * slab lying in the dirt.
+   *
+   * That matters here rather than anywhere else because `roadside()` marches
+   * from **arc 0**, so this band guarantees one of these within a metre or two
+   * of the start/finish line on every circuit — measured at arc +0/-2 m
+   * (coastal), +2 m (neon) and +1 m (volcano), 18-27 m to the side, 32-57 px
+   * tall in the real grid-slot chase frame at 800x450. A faceted 7-segment lump
+   * with three quarters of itself buried reads, at a glance and from the grid,
+   * as a box-shaped prop half sunk into the ground.
+   *
+   * `y = r * (0.24 + …)` puts the lump's centre a quarter of a radius ABOVE the
+   * anchor, which lands the cluster ~35 % into the ground: still bedded — a rock
+   * resting on the surface looks like a prop dropped on a table — but reading as
+   * a boulder rather than a lid. Nothing else about the silhouette changes.
+   *
+   * The near-road band is also thinned: a 10 m boulder standing proud 0.3 m from
+   * the tarmac would be a worse defect than a buried one, so that band now keeps
+   * 7 m of clearance and takes the small end of the scale range, leaving the big
+   * ones to the annulus out in the landscape.
+   */
   private buildRocks(count: number, hexA: number, hexB: number, size: number): void {
     const rng = this.rng;
     const anchors = annulus(this.ctx, rng, {
       count, min: 40, max: this.field.extent * 0.44, minRoadDist: 17, maxSlope: 1.4,
     });
-    // Add a band close to the road so the verges have structure too.
-    for (const a of roadside(this.ctx, rng, {
-      spacing: 17, min: 5, max: 30, sides: 2, limit: Math.round(count * 0.7),
-      faceRoad: false, maxSlope: 1.1,
-    })) anchors.push(a);
     for (const a of anchors) a.scale = (0.55 + rng.next() * 1.7) * size;
+    // A band close to the road so the verges have structure too — but small
+    // ones. These are the instances the driver's eye passes at 0.85 of the
+    // half-width, and the ones that flank the start line.
+    for (const a of roadside(this.ctx, rng, {
+      spacing: 17, min: 7, max: 30, sides: 2, limit: Math.round(count * 0.7),
+      faceRoad: false, maxSlope: 1.1,
+    })) {
+      a.scale = (0.45 + rng.next() * 0.7) * size;
+      anchors.push(a);
+    }
 
     const b = this.builder();
     b.jitter = 0.09;
@@ -3033,7 +3081,7 @@ export class Props implements ISubsystem {
       const a = rng.next() * Math.PI * 2;
       const d = rng.next() * 1.3;
       const r = 0.7 + rng.next() * 0.9;
-      b.sphere(Math.cos(a) * d, -r * 0.35 + rng.next() * 0.2, Math.sin(a) * d, r, 7, 4,
+      b.sphere(Math.cos(a) * d, r * (0.24 + rng.next() * 0.14), Math.sin(a) * d, r, 7, 4,
         i % 2 ? hexA : hexB, { squash: 0.62 + rng.next() * 0.3 });
     }
     this.emit('rock', b.build('rock'), this.matte, anchors, { cull: 380 });

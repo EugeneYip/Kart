@@ -669,9 +669,50 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'brakeBoard', t: 0.395, lat: -15 },
       // the tower
       { type: 'arcologyTower', t: 0.455, lat: -62, scale: 2.4 },
-      { type: 'energyPylon', t: 0.415, lat: -15, step: 0.005, end: 0.53 },
-      // anti-grav / wall ride
-      { type: 'agPylon', t: 0.545, lat: 13.5, step: 0.006, end: 0.645, mirror: true },
+      // `bank: 25` through the tower, so this 13 m column leaned 5.5 m inward as
+      // it rose: at lat -15 its head sat at lat -9.5 against a 10-11.5 m
+      // half-width, i.e. over the tarmac. Same mechanism as `agPylon` below, one
+      // third the roll. -19 keeps the whole column outside the carriageway, and
+      // takes 2.49 % of the left-edge frame with it (`.probe-tmp/edgefill.ts`).
+      { type: 'energyPylon', t: 0.415, lat: -19, step: 0.005, end: 0.53 },
+      // ---- anti-grav / wall ride ------------------------------------------
+      //
+      // `lat` IS MEASURED ALONG THE BINORMAL, AND THIS SECTION ROLLS TO 88 DEG.
+      //
+      // N6 is authored `bank: 84` and the spline overshoots slightly, so the
+      // carriageway's roll measures 87-89 deg from t=0.550 to t=0.587. There the
+      // binormal is within 2 deg of VERTICAL, so an authored `lat` buys altitude
+      // instead of sideways clearance: a `lat: 13.5` anchor sits **0.3 m** from
+      // the centreline in plan and 13.5 m down the wall, and `agPylon` — a 9.3 m
+      // vertical column — then grows along world +Y straight back through the
+      // carriageway. Measured on the real scene: 10 instances over d=846-930 m,
+      // each occupying **5.8 m of the 20 m road** at a rise of -1.4 m, i.e.
+      // *behind the surface the kart is driving on*. Only the `+lat` copy does
+      // it: the binormal's vertical component is negative here, so the +side
+      // column leans back toward the centreline as it rises while the mirrored
+      // -side one leans away.
+      //
+      // This is NOT the `alleyBlock` failure mode. `agPylon`'s built mesh is
+      // 2.00 m across (half-width 1.00 m) against a 27 m corridor, so it does
+      // not overrun its authored `lat` at all — `crowding.ts`'s lat audit reads
+      // +2.13 m of verge. A flat-road width audit cannot see this defect,
+      // because the defect is the roll, and that is why the probe finding was
+      // written off as "a false positive of a flat-road test on tube geometry".
+      // Re-run in the road's own frame the same section shows 23 % of the
+      // visible road ahead hidden at t=0.598 and puts six `agpylon` instances in
+      // neon's twelve worst occluders.
+      //
+      // A vertical column cannot be authored clear of a vertical wall with `lat`
+      // (it would need |lat| > 19.3 m just to keep its tip off the tarmac, by
+      // which point it is a silhouette in the sky rather than a marker). So the
+      // run is split around the vertical section, which keeps its energy rails
+      // on both walls, its glowing anti-gravity plating and the holoAd overhead.
+      // `lat` also goes 13.5 -> 19 on the ramps: at 51 deg of roll a 9.3 m
+      // column at 13.5 leaned in to lat 6.3 — 3.7 m over the tarmac at 5 m up —
+      // and 19 keeps the whole column outside the carriageway at every roll the
+      // run now covers.
+      { type: 'agPylon', t: 0.527, lat: 19, step: 0.008, end: 0.543, mirror: true },
+      { type: 'agPylon', t: 0.599, lat: 19, step: 0.008, end: 0.645, mirror: true },
       { type: 'holoAd', t: 0.58, lat: -20, up: 4, step: 0.02, end: 0.64 },
       // wet straight
       { type: 'streetLamp', t: 0.70, lat: 18, step: 0.016, end: 0.79, mirror: true },
