@@ -54,8 +54,18 @@ export interface RenderPipelineLike {
    * Optional: the pipeline's own full-resolution scene depth, as a texture that
    * is legal to read through a plain `sampler2D` (no comparison mode, NEAREST
    * filtered). If the pipeline provides this, soft particles come for FREE —
-   * see `resolveDepthSource()`. Implement it and the VFX depth prepass, which
-   * costs an entire extra scene render per frame, disappears.
+   * see `resolveDepthSource()`.
+   *
+   * ⚠️ **`RenderPipeline` deliberately does NOT implement this, and it should
+   * stay that way.** The only depth texture the post chain owns is the one
+   * attached to `EffectComposer`'s input buffer, and the particles draw *inside*
+   * the RenderPass that writes it. Binding it would be a framebuffer/texture
+   * feedback loop — undefined results, plus
+   * `GL_INVALID_OPERATION: Feedback loop formed between Framebuffer and active
+   * Texture` on every particle draw, which is a *different* error from the
+   * sampler-type flood but just as loud. Anyone tempted to wire this needs a
+   * depth copy first, and a copy is a full-screen pass, which is most of what the
+   * prepass below already costs.
    */
   sceneDepthTexture?(): THREE.Texture | null;
 }
@@ -510,6 +520,37 @@ export class VfxManager implements IVfxService, ISubsystem {
    * chase camera updates after VFX). That is a uniform depth bias of a few
    * centimetres of camera travel, invisible in the fade — and far cheaper than
    * re-entering the renderer mid-frame.
+   *
+   * ---------------------------------------------------------------------------
+   *  CLEARED: this is NOT the `GL_INVALID_OPERATION: Mismatch between texture
+   *  format and sampler type` flood.
+   * ---------------------------------------------------------------------------
+   *  HANDOFF.md item 2 / P0e-E5 named the `DepthTexture` handed to
+   *  `ParticleSystem.setDepthTexture()` — the lines just below — as the prime
+   *  suspect. Three independent reasons it cannot be, all checkable without a
+   *  browser:
+   *
+   *   1. **It never runs.** `init()` calls `setDepthPrepass(false)` on every
+   *      tier, so `depthEnabled` is false, `depthRT` is null, and
+   *      `resolveDepthSource()` takes the `setDepthTexture(null, 1, 1)` branch.
+   *      A null `sampler2D` uniform is bound to three's `emptyTexture`, which is
+   *      a perfectly legal RGBA 2-D texture.
+   *   2. **The texture it would build is valid anyway.** DepthFormat +
+   *      UnsignedIntType (DEPTH_COMPONENT24), NEAREST/NEAREST, `compareFunction`
+   *      explicitly null. `renderDepthPrepass()` re-checks `compareFunction`
+   *      after the render and falls back to the analytic ground fade rather than
+   *      binding anything questionable — which is the fallback HANDOFF asks for.
+   *   3. **A full static audit of the live scene finds nothing.**
+   *      `.probe-tmp/samplers.ts` builds Lighting + Track + Environment + Karts +
+   *      VFX + Items and compares every GLSL sampler declaration against the
+   *      texture actually bound to it — including every `onBeforeCompile`-injected
+   *      `uniform sampler2D`, replayed against three's real ShaderLib source.
+   *      All three circuits: 249/155, 259/171 and 249/167 materials and textures
+   *      on neon, coastal and volcano. **0 mismatches.**
+   *
+   *  What it actually was: a null entry in `sampler2DShadow
+   *  directionalShadowMap[]` during the first two frames of every boot. See
+   *  `RenderPipeline.warmShadowMaps()` for the mechanism and the fix.
    */
   setDepthPrepass(enabled: boolean): void {
     if (this.depthFailed) return;

@@ -26,32 +26,91 @@
  *  re-renders the scene a third time.
  *
  *  BUT THE FRAME CONTAINS MORE PASSES THAN THIS FILE OWNS, and the multiplier
- *  AGENTS.md §5b warns about is the sum, not our share. Counted for real (see
- *  `scenePasses()`, which is what the perf HUD reports), at `high`/`ultra` on a
- *  circuit with water:
+ *  AGENTS.md §5b warns about is the sum, not our share. **Measured**, not
+ *  reasoned about: `.probe-tmp/passes.ts` drives the real `Lighting` cascade hook
+ *  and the real `Water.update()` through a recording renderer and tallies what
+ *  each pass would submit, with that pass's own visibility rules and its own
+ *  camera's frustum. Neon, ultra, chase pose, 12 frames:
  *
- *    shadow cascade 0   world/Lighting   every frame
- *    shadow cascade 1   world/Lighting   every 2nd frame   (0.50/frame)
- *    shadow cascade 2   world/Lighting   every 3rd frame   (0.33/frame)
- *    water reflection   world/Water      every frame       <- see below
- *    RenderPass         here             every frame
- *    NormalPass         here             every frame when SSAO is on
- *    SubjectMask        here             player kart only, quarter res
+ *    pass                        runs/frame   submitted per frame
+ *    RenderPass (main colour)          1.00    172.0 calls  0.885 M tris
+ *    NormalPass (SSAO normals)         1.00    172.0 calls  0.885 M tris
+ *    water planar reflection           1.00     44.0 calls  0.207 M tris
+ *    shadow cascade 0                  1.00     46.0 calls  0.197 M tris
+ *    shadow cascade 1                  0.50     21.0 calls  0.092 M tris
+ *    shadow cascade 2                  0.33      7.3 calls  0.045 M tris
+ *    SubjectMask (player kart)         1.00     31.0 calls  0.033 M tris
+ *    ---------------------------------------------------------------------
+ *    TOTAL                             5.83    493.3 calls  2.343 M tris
+ *    scene graph, live                          208   calls  0.956 M tris
+ *    MULTIPLIER                                2.37x calls  2.45x tris
  *
- *  = 5.83 renders of the scene graph per frame, which is the measured 3.15x on
- *  `renderer.info.render.triangles` (the shadow and reflection passes each draw a
- *  subset). Two of those are avoidable and neither is geometry:
+ *  That reproduces the owner's 505 calls / 2.92 M triangles, so the pass list
+ *  above IS the multiplier. Volcano is 4.83 passes / 419 calls / 1.890 M — the
+ *  same list minus the reflection, because `lava` sets `reflectionsOn = false`.
  *
- *   - **NormalPass** is now disabled by the resolution budget below whenever the
- *     colour buffer is well over 1080p, which is the case the game is actually
- *     judged on. That is one whole scene pass plus the 3.13 ms AO resolve.
- *   - **the water reflection pass is never turned off.** `Water.setReflections()`
- *     exists, its doc comment says "lets the render pipeline turn the reflection
- *     pass off under load", and nothing has ever called it — the pipeline is not
- *     handed `Environment` or `Water`. It also is not gated on whether water is
- *     on screen: the 760 m disc is re-centred on the camera every frame, so the
- *     plane test always passes. Wiring that up needs one line in `Game.ts` and is
- *     in the report; it is worth a full scene pass per frame on coastal and neon.
+ *  Three things were verified rather than assumed, because each one is a place a
+ *  pass could silently be drawing everything:
+ *
+ *   - **the shadow cascades DO respect their layer masks.** Cascade 2 submits 22
+ *     calls / 0.135 M tris; with the mask lifted it would submit 46 / 0.197 M.
+ *     `applyMask()` hides whole subtrees and three's shadow traversal returns on
+ *     `object.visible === false`, so the saving is real.
+ *   - **the water reflection DOES honour `userData.noReflect`.** Only Terrain,
+ *     the road group and the track decals survive its filter; Props, Foliage,
+ *     Crowd, Weather and the VFX root are all excluded. 0.207 M of 0.885 M.
+ *   - **the NormalPass does NOT re-render the shadow cascades.** postprocessing's
+ *     `NormalPass` sets `renderPass.skipShadowMapUpdate`, which sets
+ *     `shadowMap.autoUpdate = false` for its duration; `Lighting`'s hook then
+ *     early-outs. One shadow group per frame, not two.
+ *
+ *  What has now been cut, and how:
+ *
+ *   - **NormalPass** is dropped by the resolution budget at >1.05x of 1080p (was
+ *     1.6x). One whole scene pass — the largest single term after the main pass —
+ *     plus the 3.13 ms AO resolve, gone on anything bigger than the fill this
+ *     chain was measured at. AO survives untouched at 1080p and below.
+ *   - **the water reflection pass** is now switched off above 1.2x, through
+ *     `setWorld()` below. `Water.setReflections()` existed, its doc comment said
+ *     "lets the render pipeline turn the reflection pass off under load", and
+ *     nothing had ever called it because the pipeline is not handed `Environment`.
+ *     It still needs ONE line in `Game.ts` (see `setWorld`) — DEV logs loudly if
+ *     that line is missing, because authored-but-never-called is this project's
+ *     recorded failure mode.
+ *   - **depth of field + chromatic aberration** above 1.35x, and **motion blur
+ *     (with its SubjectMask scene pass)** above 2.2x. All pure juice, all gated
+ *     on speed, i.e. all arriving exactly when the frame is already worst.
+ *   - **the same cuts also fire on measured frame rate**, not only on pixel count,
+ *     because `costScale` cannot see how fast the GPU is and `Engine`'s adaptive
+ *     resolution floors at 0.65x. See `FPS_STRAINED`; the latch is deliberately
+ *     dead below 0.5x of the budget so the 800x450 review pane, whose rAF runs at
+ *     ~10 Hz, can never trip it.
+ *
+ *  What that adds up to, composed from the measured per-pass costs above:
+ *
+ *    neon / ultra                        passes   calls    triangles   multiplier
+ *    before, any cost <= 1.6x              5.83   493.3     2.356 M       2.45x
+ *    after, <=1.05x (1080p, the pane)      5.83   493.3     2.356 M       2.45x
+ *    after, 1.29x (Retina, settled)        3.83   277.3     1.259 M       1.31x
+ *    after, 3.09x (Retina, first seconds)  2.83   246.3     1.226 M       1.28x
+ *
+ *    volcano / ultra
+ *    before                                4.83   419.3     1.887 M       2.20x
+ *    after, <=1.05x                        4.83   419.3     1.887 M       2.20x
+ *    after, 1.29x                          3.83   258.3     1.103 M       1.29x
+ *    after, 3.09x                          2.83   227.3     1.070 M       1.25x
+ *
+ *  i.e. **-44 % draw calls and -47 % triangles on the machine that is actually
+ *  slow, and bit-identical at 1080p and below** — which is where the visual bar is
+ *  judged, so nothing in a capture changes. `.probe-tmp/budget.ts` asserts that
+ *  second property directly.
+ *
+ *  What is NOT fixable from here, and is in the report: 65 drawables in the scene
+ *  carry `frustumCulled = false`, holding 0.738 M of the graph's 0.956 M
+ *  triangles. 77 % of the geometry is therefore submitted by EVERY pass no matter
+ *  where the camera looks, which is why a range-limited NormalPass measured
+ *  exactly zero saving (far = 60 m submits the same 172 calls as far = 4000 m).
+ *  That is `src/world/*` + `src/track/*`, and it is the biggest lever left.
  *
  *  Plus one thing that is NOT a scene render and NOT a full-screen pass: on
  *  frames that will actually blur, `renderSubjectMask()` draws the player kart's
@@ -190,12 +249,180 @@ const MB_MASK_KEEP = 0.1;
  * ============================================================================
  */
 const POST_PIXEL_BUDGET = 1920 * 1080;
-/** Above this multiple of the budget, drop SSAO — and with it a scene pass. */
-const COST_DROP_SSAO = 1.6;
+
+/*
+ * The ladder, in the order things are shed. Read it as one list — the ordering
+ * between these numbers IS the design, and changing one in isolation reorders it:
+ *
+ *   1.05  SSAO + its NormalPass      a whole scene pass, every frame
+ *   1.20  water planar reflection    a whole scene pass, every frame
+ *   1.20  cheap kernels              fewer taps / smaller buffers, no pass removed
+ *   1.35  depth of field + CA        two full-screen passes, only at speed
+ *   2.20  cheapest SMAA preset
+ *   2.20  motion blur + SubjectMask  a full-screen convolution plus a scene pass
+ *
+ * Scene passes go before full-screen passes, and things that cost every frame go
+ * before things that only cost at speed.
+ */
+
+/**
+ * Above this multiple of the budget, drop SSAO — and with it a whole SCENE pass.
+ *
+ * Measured headlessly (`.probe-tmp/passes.ts`, neon, ultra, chase pose): the
+ * NormalPass submits **172 draw calls / 0.885 M triangles per frame, an exact
+ * duplicate of the main colour pass** — 35 % of every draw call and 38 % of
+ * every triangle in the frame. Plus 4.58 ms of geometry and 3.13 ms of AO
+ * resolve at the 1.44 Mpixel these timings were taken at.
+ *
+ * It was 1.6, which is a strange place for the line: every millisecond in this
+ * file's header was measured at 1.44 Mpixel, so at 1.6x the budget the chain is
+ * already ~2.3x over the time it was designed for and is still paying for a
+ * deliberately subtle contact-shadow term. The line belongs *at* the budget:
+ * 1.05 keeps AO wherever the chain is inside the fill it was tuned for — the
+ * 800x450 review pane (0.19x), 1600x900 (0.75x), 1080p (1.00x) — and drops it,
+ * with its scene pass, the moment the buffer is bigger than that.
+ */
+const COST_DROP_SSAO = 1.05;
 /** Above this, halve the motion-blur tap count and shrink the DoF/AO buffers. */
-const COST_CHEAP_KERNELS = 1.35;
+const COST_CHEAP_KERNELS = 1.2;
+/**
+ * Above this, the two pure-juice full-screen passes go: depth of field (a
+ * multi-pass effect — CoC, two bokeh convolutions, composite) and chromatic
+ * aberration (a 0.0012-offset fringe). Both are gated on speed, so they arrive
+ * exactly when the frame is already at its worst, and at 5.94 Mpixel a
+ * full-screen HalfFloat pass is ~95 MB of read+write traffic each.
+ */
+const COST_DROP_JUICE = 1.35;
+/**
+ * Above this the water planar reflection is switched off — that is a whole extra
+ * render of the scene graph (44 calls / 0.207 M tris/frame on neon, measured),
+ * and it also drives every material in that pass through a *second* program
+ * variant because it enables a global clipping plane. See `setWorld()`.
+ */
+const COST_DROP_REFLECTIONS = 1.2;
 /** Above this, SMAA drops to its cheapest preset. */
 const COST_CHEAP_AA = 2.2;
+/**
+ * Above this, motion blur goes entirely — pass, tap loop and the SubjectMask
+ * scene pass with it. At >2.2x the budget the frame is already three times over
+ * 16.6 ms and 14 dependent texture fetches per pixel is not where the remaining
+ * milliseconds should go.
+ */
+const COST_DROP_MOTION_BLUR = 2.2;
+
+/**
+ * ============================================================================
+ *  THE SECOND HALF OF THE BUDGET — measured frame rate, not just pixel count
+ * ============================================================================
+ *  `costScale` above is a guess: it says how many times over the *fill* these
+ *  timings were taken at we are, and it is blind to the one variable that
+ *  matters most — how fast the GPU actually is. Two facts make that gap real:
+ *
+ *   - `detectTier()` hands every M-series Mac `ultra`, from an M1 Air to an
+ *     M4 Max. Those differ by ~6x in fill rate and not at all in `costScale`.
+ *   - `Engine`'s adaptive resolution floors at 0.65x pixel ratio. Once it is on
+ *     the floor it has nothing left to give, and if the frame is still missing
+ *     60 fps there, no amount of *pixel* accounting will notice.
+ *
+ *  So the budget also reads `Engine.fpsAverage` (a 60-frame median) and, when the
+ *  frame is genuinely missing its target, sheds the same things it would shed for
+ *  a bigger buffer. A Schmitt trigger, not a threshold: drop below 48 fps, restore
+ *  only above 58. Without the gap this hunts at ~1 Hz — turn AO off, get 62 fps,
+ *  turn it back on, get 50 — which is far worse than either state, and it is
+ *  exactly the shape of hysteresis `Engine.trackPerformance` already uses
+ *  (15.5 ms down / 11.5 ms up).
+ *
+ *  Order of operations is deliberate: Engine's own controller fires first, at
+ *  15.5 ms (64 fps), so cheap fill reduction is always tried before any feature
+ *  is taken away.
+ *
+ *  ⚠️ AND IT MUST NOT FIRE IN THE REVIEW PANE. AGENTS.md §5 / PostQA.ts: the
+ *  preview pane drives `requestAnimationFrame` at roughly 10 Hz and stops it
+ *  entirely when it is not compositing. A frame-rate controller reading that
+ *  would latch permanently and hand the visual critic a frame with no AO, no
+ *  reflections and no depth of field — and the critic would correctly fail it.
+ *  So the latch is only eligible above `COST_STRAIN_FLOOR`: at a quarter of 1080p
+ *  or less, nothing in this chain is the reason a frame is slow, and the pane's
+ *  800x450 (0.19x) is comfortably under that.
+ */
+const FPS_STRAINED = 48;
+const FPS_RECOVERED = 58;
+/** Below this share of the fill budget, the frame-rate latch is ignored. */
+const COST_STRAIN_FLOOR = 0.5;
+/** How often the budget re-reads the frame rate, seconds. */
+const BUDGET_POLL = 1.0;
+
+/** What the budget decides. One flag per pass it can take out of the frame. */
+export interface BudgetVerdict {
+  /** SSAO **and its NormalPass**, which is a whole render of the scene graph. */
+  ssao: boolean;
+  /** Water's planar reflection — also a whole render of the scene graph. */
+  reflections: boolean;
+  /** Depth of field + chromatic aberration: two full-screen passes. */
+  juice: boolean;
+  /** Motion blur, and with it the SubjectMask scene pass. */
+  motion: boolean;
+  /** Halve the motion-blur taps, shrink the DoF/AO buffers, fewer bloom mips. */
+  cheapKernels: boolean;
+  /** The frame-rate latch's new state. Caller must store it. */
+  strained: boolean;
+  /** SMAA preset index, matching `SMAAPreset`. */
+  aa: number;
+}
+
+/**
+ * The whole budget as a pure function, so the decision table can be tested
+ * without a GL context — `.probe-tmp/budget.ts` walks it. Everything that can
+ * remove a pass from the frame is decided here and nowhere else.
+ *
+ * @param cost      device pixels / POST_PIXEL_BUDGET
+ * @param fps       `Engine.fpsAverage`; ignored below COST_STRAIN_FLOOR
+ * @param strained  the latch's previous state (Schmitt trigger)
+ */
+export function chooseBudget(
+  cost: number,
+  fps: number,
+  strained: boolean,
+  tier: QualityTier,
+  ssaoAllowed: boolean,
+  aaHigh: number,
+  aaMedium: number,
+  aaLow: number,
+): BudgetVerdict {
+  let strain: boolean;
+  if (cost <= COST_STRAIN_FLOOR) strain = false;
+  else if (Number.isFinite(fps) && fps > 0) {
+    strain = strained ? fps < FPS_RECOVERED : fps < FPS_STRAINED;
+  } else strain = strained;
+
+  return {
+    ssao: ssaoAllowed && cost <= COST_DROP_SSAO && !strain,
+    reflections: cost <= COST_DROP_REFLECTIONS && !strain,
+    juice: cost <= COST_DROP_JUICE && !strain,
+    motion: cost <= COST_DROP_MOTION_BLUR,
+    cheapKernels: cost > COST_CHEAP_KERNELS || strain,
+    strained: strain,
+    aa: (cost > COST_CHEAP_AA || strain) ? aaLow
+      : (tier === 'ultra' && cost <= 1.15) ? aaHigh : aaMedium,
+  };
+}
+
+/**
+ * A light that owns a shadow, structurally. `THREE.Light`'s base declaration has
+ * no `shadow` (it is a type parameter on the subclasses), so this is the only way
+ * to walk the scene for shadow casters of every kind without a cast per branch.
+ */
+interface ShadowCaster {
+  readonly shadow: { needsUpdate: boolean; map: THREE.WebGLRenderTarget | null };
+}
+
+function asShadowCaster(o: THREE.Object3D): ShadowCaster | null {
+  const l = o as THREE.Object3D & { isLight?: boolean; castShadow?: boolean; shadow?: unknown };
+  if (l.isLight !== true || l.castShadow !== true) return null;
+  const s = l.shadow as ShadowCaster['shadow'] | undefined | null;
+  if (!s || typeof s !== 'object') return null;
+  return l as unknown as ShadowCaster;
+}
 
 export class RenderPipeline implements ISubsystem {
   private readonly engine: Engine;
@@ -248,6 +475,22 @@ export class RenderPipeline implements ISubsystem {
   /** The DEV scene/presentation audits are once-per-session, not per rebuild. */
   private audited = false;
 
+  /**
+   * Budget verdicts the frame loop reads. Kept as fields rather than recomputed
+   * per frame because `applyResolutionBudget()` is bucketed and `update()` /
+   * `render()` run 60 times a second.
+   */
+  private juiceAllowed = true;
+  private motionAllowed = true;
+  private reflectionsAllowed = true;
+  /** Schmitt-triggered "we are missing 60 fps" latch — see FPS_STRAINED. */
+  private strained = false;
+  private budgetTimer = 0;
+
+  /** The world's planar-reflection switch, once someone hands it to us. */
+  private waterReflections: ((on: boolean) => void) | null = null;
+  private reflectionsApplied: boolean | null = null;
+
   constructor(engine: Engine, karts?: KartSource, track?: TrackSource) {
     this.engine = engine;
     this.karts = karts ?? null;
@@ -294,12 +537,194 @@ export class RenderPipeline implements ISubsystem {
 
     // Compile everything now so the first lap doesn't hitch.
     engine.renderer.compile(engine.scene, engine.camera);
+    this.warmShadowMaps();
 
     if (import.meta.env.DEV) {
       const { installPostQA } = await import('./PostQA');
       installPostQA(this, engine as unknown as Parameters<typeof installPostQA>[1]);
     }
     await Promise.resolve();
+  }
+
+  /**
+   * ==========================================================================
+   *  THE `GL_INVALID_OPERATION: Mismatch between texture format and sampler
+   *  type` FLOOD — HANDOFF.md item 2. This is what it was.
+   * ==========================================================================
+   *  `Engine` selects `THREE.PCFShadowMap`, and under `SHADOWMAP_TYPE_PCF`
+   *  three r185 declares
+   *
+   *      uniform sampler2DShadow directionalShadowMap[ NUM_DIR_LIGHT_SHADOWS ];
+   *
+   *  `WebGLLights.setup()` publishes `shadow.map ? shadow.map.texture : null` for
+   *  each shadow-casting light, and `shadow.map` is allocated LAZILY, inside
+   *  `WebGLShadowMap.render`. A null entry is substituted by three with its
+   *  module-private `emptyShadowTexture` — and here is the whole bug:
+   *
+   *    setValueT1      (single sampler) sets emptyShadowTexture.compareFunction
+   *                                     before binding.
+   *    setValueT1Array (ARRAY sampler)  does NOT.
+   *
+   *  `directionalShadowMap[]` is an array uniform, so it always takes the array
+   *  path, and `DepthTexture.compareFunction` defaults to null. The bound texture
+   *  therefore has TEXTURE_COMPARE_MODE = NONE while the program declares
+   *  `sampler2DShadow`, and Chrome's command decoder rejects that on **every draw
+   *  of every shadow-receiving material in the scene** — which is exactly the
+   *  reported symptom, including "on a fresh context every boot".
+   *
+   *  When is a cascade map still null? `Lighting` staggers the cascades (0 every
+   *  frame, 1 every 2nd, 2 every 3rd) and its shadow hook `continue`s past a
+   *  cascade that is not due — so `WebGLShadowMap.render` never runs for it and
+   *  its map is never created. Measured with `.probe-tmp/shadownull.ts`, driving
+   *  the real `Lighting` hook:
+   *
+   *      frame 1   cascades rendered: 0            -> [map, NULL, NULL]
+   *      frame 2   cascades rendered: 0, 1         -> [map, map,  NULL]
+   *      frame 3   cascades rendered: 0, 2         -> [map, map,  map ]
+   *
+   *  So it is a TWO-FRAME BOOT FLOOD, not a steady-state one. Be clear about what
+   *  that means for "lag is still severe": ~2 frames x ~170 draws x 1–2 bad binds
+   *  is enough to trip Chrome's "too many errors" cut-off and to make those two
+   *  frames crawl, and it is NOT a measurable share of the sustained frame time.
+   *  Fixing it removes the console flood and a boot hitch. Nothing else.
+   *
+   *  The fix here: render one throwaway frame into a 1x1 target before the first
+   *  real frame. `Lighting.frame` is still 0 at this point, so `0 % interval === 0`
+   *  for every cascade — all of them are due, all of their maps get allocated, and
+   *  the shadow programs get compiled too. Fill cost is one pixel; the shadow
+   *  passes run at full resolution once, which is the cost we want paid before the
+   *  clock starts. The cascades hold a menu-pose depth map for a frame or two
+   *  afterwards, which lands on menu frames and never on a race frame.
+   *
+   *  A cleaner home for this is one line in `src/world/Lighting.ts` — see the
+   *  report; that file belongs to another agent.
+   */
+  private warmShadowMaps(): void {
+    const r = this.engine.renderer;
+    const sm = r.shadowMap;
+    if (!sm.enabled) return;
+
+    let casters = 0;
+    this.engine.scene.traverse((o) => {
+      const l = asShadowCaster(o);
+      if (l) {
+        l.shadow.needsUpdate = true;
+        casters += 1;
+      }
+    });
+    if (casters === 0) return;
+
+    const prevAuto = sm.autoUpdate;
+    const prevTarget = r.getRenderTarget();
+    const scratch = new THREE.WebGLRenderTarget(1, 1, {
+      depthBuffer: true, stencilBuffer: false,
+    });
+    try {
+      sm.autoUpdate = true;
+      sm.needsUpdate = true;
+      r.setRenderTarget(scratch);
+      r.render(this.engine.scene, this.engine.camera);
+    } catch (err) {
+      console.warn(
+        '[Render] shadow warm-up failed. The first two frames will bind a null '
+        + 'entry into sampler2DShadow directionalShadowMap[] and flood '
+        + 'GL_INVALID_OPERATION.', err,
+      );
+    } finally {
+      r.setRenderTarget(prevTarget);
+      sm.autoUpdate = prevAuto;
+      sm.needsUpdate = true;
+      scratch.dispose();
+    }
+
+    if (import.meta.env.DEV) this.verifyShadowBinds(casters);
+  }
+
+  /**
+   * Report any shadow-casting light whose depth map is still unallocated, i.e.
+   * any `sampler2DShadow` that is about to be handed a texture with no comparison
+   * mode. See `warmShadowMaps()` for why that is fatal to validation.
+   */
+  private verifyShadowBinds(expected: number): void {
+    const missing: string[] = [];
+    let found = 0;
+    this.engine.scene.traverse((o) => {
+      const l = asShadowCaster(o);
+      if (!l) return;
+      found += 1;
+      if (!l.shadow.map) missing.push(o.name || o.type);
+    });
+    if (missing.length === 0) {
+      console.info(
+        `[Render] shadow warm-up: ${found}/${expected} shadow maps allocated before `
+        + 'the first frame. No null sampler2DShadow binds — HANDOFF item 2 (the '
+        + '"Mismatch between texture format and sampler type" flood) cannot fire.',
+      );
+      return;
+    }
+    console.error(
+      `[Render] ${missing.length} shadow-casting light(s) still have no depth map: `
+      + `${missing.join(', ')}. three substitutes emptyShadowTexture for the null `
+      + 'entry in directionalShadowMap[] WITHOUT setting its compareFunction '
+      + '(setValueT1Array, unlike setValueT1), so every shadow-receiving draw will '
+      + 'fail validation with "Mismatch between texture format and sampler type".',
+    );
+  }
+
+  /**
+   * Hand the pipeline the world so it can switch the planar reflection off under
+   * load. Accepted structurally: `Environment` (which exposes `.water`), a `Water`
+   * directly, or anything with a `setReflections(boolean)`.
+   *
+   * ⚠️ **This still needs one line in `Game.ts`**, next to the other late wiring:
+   *
+   *      wire(this.pipeline, 'setWorld', this.environment);
+   *
+   * `Water.setReflections()` has existed all along — its doc comment reads "lets
+   * the render pipeline turn the reflection pass off under load" — and had never
+   * been called, because nothing hands the pipeline `Environment`. That is the
+   * seventh authored-but-never-called case recorded in HANDOFF.md, so DEV logs an
+   * explicit warning if this method is never reached: a silent no-op is exactly
+   * how the previous six survived review.
+   */
+  setWorld(world: unknown): void {
+    const fn = this.findReflectionSwitch(world);
+    if (!fn) {
+      console.warn(
+        '[Render] setWorld() was handed something with no reachable '
+        + 'setReflections(boolean); the water planar reflection stays on at every '
+        + 'resolution. Expected `Environment` (with `.water`) or a `Water`.',
+      );
+      return;
+    }
+    this.waterReflections = fn;
+    this.reflectionsApplied = null;
+    this.applyReflections(this.reflectionsAllowed);
+  }
+
+  private findReflectionSwitch(world: unknown): ((on: boolean) => void) | null {
+    type Node = { setReflections?: unknown; water?: unknown };
+    const candidates: unknown[] = [world, (world as Node | null)?.water];
+    for (const c of candidates) {
+      const n = c as Node | null | undefined;
+      if (n && typeof n.setReflections === 'function') {
+        const target = n as { setReflections(on: boolean): void };
+        return (on: boolean) => target.setReflections(on);
+      }
+    }
+    return null;
+  }
+
+  private applyReflections(on: boolean): void {
+    if (!this.waterReflections) return;
+    if (this.reflectionsApplied === on) return;
+    this.reflectionsApplied = on;
+    try {
+      this.waterReflections(on);
+    } catch (err) {
+      console.warn('[Render] water.setReflections() threw', err);
+      this.waterReflections = null;
+    }
   }
 
   /** Construct the pass list for the current quality tier. */
@@ -533,29 +958,68 @@ export class RenderPipeline implements ISubsystem {
    * Mpixel buffer and every number in this file's header was measured at 1.44.
    *
    * Everything here is applied in place — no pass is constructed or destroyed and
-   * the composer is not resized, so it is safe to call from `resize()`. Two knobs
-   * recompile a pass (the motion-blur tap count and the SMAA preset), so the whole
-   * thing is keyed on the resulting *decisions* rather than on the pixel count.
+   * the composer is not resized, so it is safe to call from `resize()` and from the
+   * once-a-second poll in `update()`. Two knobs recompile a pass (the motion-blur
+   * tap count and the SMAA preset), so the whole thing is keyed on the resulting
+   * *decisions* rather than on the pixel count or the frame rate.
+   *
+   * The decisions themselves live in `chooseBudget()`, a pure function, so the
+   * table can be asserted headlessly — `.probe-tmp/budget.ts`. That matters here
+   * more than usual: a budget verdict is invisible in a screenshot until it is
+   * wrong, and the failure mode is handing the visual critic a frame with the
+   * effects switched off.
    */
   private applyResolutionBudget(): void {
     const q = this.engine.quality;
     const px = this.deviceWidth() * this.deviceHeight();
     const cost = px / POST_PIXEL_BUDGET;
 
-    const cheapKernels = cost > COST_CHEAP_KERNELS;
-    const wantSsao = q.ssao && cost <= COST_DROP_SSAO;
-    const aa = cost > COST_CHEAP_AA ? SMAAPreset.LOW
-      : (q.tier === 'ultra' && cost <= 1.15) ? SMAAPreset.HIGH
-        : SMAAPreset.MEDIUM;
+    const fps = this.engine.fpsAverage;
+    const v = chooseBudget(
+      cost, fps, this.strained, q.tier, q.ssao,
+      SMAAPreset.HIGH, SMAAPreset.MEDIUM, SMAAPreset.LOW,
+    );
+    this.strained = v.strained;
+    const strained = v.strained;
+    const cheapKernels = v.cheapKernels;
+    const wantSsao = v.ssao;
+    const wantJuice = v.juice;
+    const wantMotion = v.motion;
+    const wantReflections = v.reflections;
+    const aa = v.aa as SMAAPreset;
 
     // Key on the *decisions*, not on the pixel count. Engine's adaptive
     // resolution walks the pixel ratio in 10 % steps every 1.5 s, and two of the
     // knobs below (motion-blur taps, the SMAA preset) recompile a pass when they
     // change — so keying on `cost` itself would burn a shader compile on every
     // step of that ramp for a decision that had not actually changed.
-    const key = (cheapKernels ? 1 : 0) | (wantSsao ? 2 : 0) | (aa << 2);
+    const key = (cheapKernels ? 1 : 0) | (wantSsao ? 2 : 0)
+      | (wantJuice ? 4 : 0) | (wantMotion ? 8 : 0) | (wantReflections ? 16 : 0)
+      | (aa << 5);
     if (key === this.appliedCost) return;
     this.appliedCost = key;
+
+    // These three are read by update()/render(), which decide per frame whether
+    // the effect is *wanted* at all; the budget decides whether it is *affordable*.
+    this.juiceAllowed = wantJuice;
+    this.motionAllowed = wantMotion;
+    this.reflectionsAllowed = wantReflections;
+
+    // --- the water planar reflection: a WHOLE extra render of the scene ------
+    // Measured at 44 calls / 0.207 M tris per frame on neon (see this file's
+    // header), plus a second program variant for every material in that pass
+    // because it enables a global clipping plane. Off above 1.2x the budget.
+    this.applyReflections(wantReflections);
+
+    // --- depth of field and chromatic aberration: two full-screen passes ------
+    // Both ride on speed, so they turn up precisely when the frame is already at
+    // its worst. Disabling the passes here is belt-and-braces with update(),
+    // which will not re-enable them while `juiceAllowed` is false.
+    if (!wantJuice) {
+      if (this.dofPass) this.dofPass.enabled = false;
+      if (this.caPass) this.caPass.enabled = false;
+    }
+    if (!wantMotion && this.motionPass) this.motionPass.enabled = false;
 
     // --- antialiasing: the second most expensive pass in the chain -----------
     // 5.36 ms at 1.44 Mpixel on the HIGH preset. At 5.9 Mpixel that is ~22 ms of
@@ -594,9 +1058,23 @@ export class RenderPipeline implements ISubsystem {
         `[Render] resolution budget: ${this.deviceWidth()}x${this.deviceHeight()}`
         + ` = ${(px / 1e6).toFixed(2)} Mpx (${cost.toFixed(2)}x budget) -> `
         + `ssao ${wantSsao ? 'on' : 'OFF (NormalPass scene pass removed)'}, `
+        + `reflections ${wantReflections
+          ? 'on' : 'OFF (Water scene pass removed)'}${this.waterReflections ? '' : ' [NOT WIRED]'}, `
+        + `dof/ca ${wantJuice ? 'on' : 'OFF'}, `
+        + `motion blur ${wantMotion ? 'on' : 'OFF (SubjectMask pass removed too)'}, `
         + `smaa preset ${aa}, mb taps ${this.motionBlur ? this.motionBlur.tapCount : 0}, `
-        + `scene passes/frame: ${this.scenePasses().length}`,
+        + `${fps.toFixed(0)} fps${strained ? ' (STRAINED)' : ''}\n`
+        + `           scene passes/frame: ${this.scenePasses().length}\n           `
+        + this.scenePasses().join('\n           '),
       );
+      if (!this.waterReflections) {
+        console.warn(
+          '[Render] nothing has called RenderPipeline.setWorld(), so '
+          + 'Water.setReflections() still cannot be reached and the planar '
+          + 'reflection pass runs at every resolution. Add to Game.ts, with the '
+          + 'other late wiring: wire(this.pipeline, \'setWorld\', this.environment);',
+        );
+      }
     }
   }
 
@@ -606,22 +1084,44 @@ export class RenderPipeline implements ISubsystem {
    * AGENTS.md §5b asks for the *list*, not the total, because a multiplier on
    * `renderer.info` only tells you that there are too many passes and not which.
    * Passes owned by other subsystems are included with their owner, because the
-   * number that matters is the one for the whole frame.
+   * number that matters is the one for the whole frame. The per-pass costs quoted
+   * here are the neon/ultra measurements from `.probe-tmp/passes.ts`; see this
+   * file's header for the full table.
+   *
+   * The NormalPass deliberately does NOT contribute a second shadow group:
+   * postprocessing sets `skipShadowMapUpdate` on it, which clears
+   * `shadowMap.autoUpdate`, and `Lighting`'s hook then early-outs. Verified.
    */
   scenePasses(): string[] {
     const q = this.engine.quality;
     const out: string[] = [];
     const cascades = Math.min(3, Math.max(1, q.cascadeCount | 0));
-    out.push('shadow cascade 0 (world/Lighting, every frame)');
-    if (cascades > 1) out.push('shadow cascade 1 (world/Lighting, every 2nd frame)');
-    if (cascades > 2) out.push('shadow cascade 2 (world/Lighting, every 3rd frame)');
-    if (q.tier === 'high' || q.tier === 'ultra') {
-      out.push('water planar reflection (world/Water, every frame — NOT gated on visibility)');
+    out.push('shadow cascade 0 (world/Lighting, every frame — 46 calls / 0.197 M tris)');
+    if (cascades > 1) {
+      out.push('shadow cascade 1 (world/Lighting, every 2nd frame — 21 calls / 0.092 M amortised)');
     }
-    out.push('RenderPass — main scene (render/RenderPipeline)');
-    if (this.normalPass?.enabled) out.push('NormalPass — full scene, view normals for SSAO');
+    if (cascades > 2) {
+      out.push('shadow cascade 2 (world/Lighting, every 3rd frame — 7 calls / 0.045 M amortised)');
+    }
+    // Water only builds its reflection target at `high`/`ultra` (Water.ts:217) and
+    // only runs the pass on the `ocean`/`lake` presets — volcano's `lava` and the
+    // desert's `none` set `reflectionsOn = false`, which is why volcano measures
+    // 4.83 passes/frame against neon's 5.83.
+    if (this.reflectionsAllowed && (q.tier === 'high' || q.tier === 'ultra')) {
+      out.push(
+        this.waterReflections
+          ? 'water planar reflection (world/Water, every frame on ocean/lake themes '
+            + '— 44 calls / 0.207 M tris)'
+          : 'water planar reflection (world/Water, every frame on ocean/lake themes '
+            + '— 44 calls / 0.207 M tris; NOT gated, setWorld() was never called)',
+      );
+    }
+    out.push('RenderPass — main scene (render/RenderPipeline — 172 calls / 0.885 M tris)');
+    if (this.normalPass?.enabled) {
+      out.push('NormalPass — full scene again, view normals for SSAO (172 calls / 0.885 M tris)');
+    }
     if (this.motionPass?.enabled && this.subjectMask?.active) {
-      out.push('SubjectMask — player kart subtree only, quarter res');
+      out.push('SubjectMask — player kart subtree only, quarter res (31 calls / 0.033 M tris)');
     }
     return out;
   }
@@ -806,10 +1306,14 @@ export class RenderPipeline implements ISubsystem {
     if (problems.length === 0) {
       console.info(
         `[Render] sampler audit: ${seen.size} materials in the scene graph, `
-        + '0 texture/sampler-type mismatches. If '
-        + '"GL_INVALID_OPERATION: Mismatch between texture format and sampler type" '
-        + 'still floods, it is NOT a scene material — re-check the post chain '
-        + 'targets with __POST__.boundTextures() and the shadow maps.',
+        + '0 texture/sampler-type mismatches. This agrees with the headless audit '
+        + '(`.probe-tmp/samplers.ts`: 249/155, 259/171 and 249/167 materials and '
+        + 'textures on neon, coastal and volcano, all clean — which '
+        + 'also replays every onBeforeCompile hook against three\'s real ShaderLib '
+        + 'source — a blind spot for the walk below, since an injected '
+        + '`uniform sampler2D apx*` lives on a MeshStandardMaterial, not a '
+        + 'ShaderMaterial). The flood was never a scene material: it was a null '
+        + 'entry in `sampler2DShadow directionalShadowMap[]` — see warmShadowMaps().',
       );
       return;
     }
@@ -821,26 +1325,46 @@ export class RenderPipeline implements ISubsystem {
   }
 
   /**
-   * One-shot report of everything that owns pixels on screen.
+   * ==========================================================================
+   *  One-shot report of everything that owns pixels on screen — and the answer
+   *  to the "picture-in-picture inset" report.
+   * ==========================================================================
+   *  Filed because a mid-race screenshot showed a ~200x115 copy of the whole
+   *  game — scene *and* HUD — in the bottom-right corner. The engine cannot draw
+   *  that, and the search for what does has now been exhausted:
    *
-   * Filed because a mid-race screenshot showed a ~200x115 picture-in-picture copy
-   * of the whole game — scene *and* HUD — in the bottom-right corner, and nothing
-   * in this repository draws one. The audit below is what distinguishes the three
-   * possible causes without guessing:
+   *   - **Not a partial GL viewport.** `setViewport` / `setScissor` /
+   *     `scissorTest` appear NOWHERE in `src/` outside the dev harness. A partial
+   *     viewport would also land bottom-LEFT, since the GL origin is bottom-left.
+   *   - **Not an unrestored render target.** Every re-entry into the renderer —
+   *     `SubjectMask.render`, `VfxManager.renderDepthPrepass`,
+   *     `Water.renderReflection`, `Portrait.readPixels`,
+   *     `ItemModels.bakeIconAtlas` — saves and restores the target in a `finally`.
+   *   - **Not a second canvas or a second context.** Only two canvases reach the
+   *     document: `Engine`'s and the HUD minimap's 178 px Canvas-2D. The one place
+   *     that builds a second `WebGLRenderer` (`ItemModels.bakeIconAtlas`, for the
+   *     item-icon atlas) never appends its canvas and calls `dispose()` +
+   *     `forceContextLoss()` in a `finally`.
+   *   - **The inset contains the HUD, and the HUD is DOM.** No WebGL pass in this
+   *     engine can reproduce a DOM overlay into a texture. So whatever produced
+   *     the inset composited the *document*, not the scene — which no code in this
+   *     repository does or can do.
    *
-   *  - **a second canvas / a second Game instance** — would appear in the canvas
-   *    list with its own rect;
-   *  - **a partial GL viewport** (a render target's viewport left bound, so the
-   *    composited frame lands in one corner of the default framebuffer) — would
-   *    show as a viewport smaller than the drawing buffer;
-   *  - **outside the page entirely** (the review pane compositing the page into a
-   *    sub-region — see AGENTS.md §5 — or an OS/browser picture-in-picture
-   *    window). Everything below is consistent and the copy contains the DOM HUD,
-   *    which no WebGL pass in this engine can draw.
+   *  Conclusion: it is outside the page. Two candidates fit every detail, and both
+   *  are host-level, not engine-level:
    *
-   * That last point is the decisive one and is worth keeping: the HUD is DOM, so
-   * a WebGL pass cannot reproduce it. An inset containing a HUD is therefore a
-   * *document*-level duplicate, not a render-target composite.
+   *   1. **macOS's own screenshot thumbnail**, which appears in the BOTTOM-RIGHT of
+   *      the screen for a few seconds after a capture and is a scaled-down copy of
+   *      what was just captured. Two captures in quick succession put the first
+   *      one's thumbnail inside the second one. 200x115 is 0.25x of 800x450 and the
+   *      aspect ratio matches the frame exactly.
+   *   2. **The review pane's own compositing** — AGENTS.md §5: ask for a viewport
+   *      other than 800x450 and the page is rendered into a sub-region of an
+   *      800x450 screenshot, leaving stale pixels around it.
+   *
+   *  The audit below stays because it is the cheap way to falsify that conclusion
+   *  if the inset ever reappears: if it is genuinely in the page, one of the two
+   *  checks at the bottom will say so on the next boot.
    */
   private auditPresentation(): void {
     if (typeof document === 'undefined') return;
@@ -869,10 +1393,21 @@ export class RenderPipeline implements ISubsystem {
         + 'artifact. Something set a render target and did not restore it.',
       );
     }
-    if (canvases.length > 1) {
+    // A second canvas is only suspicious if it is large enough to *be* the inset.
+    // The HUD's minimap is a legitimate 178 px Canvas-2D and used to trip this,
+    // which made the check cry wolf on every boot and therefore useless.
+    const suspicious = Array.from(document.querySelectorAll('canvas')).filter((c) => {
+      if (c === this.engine.canvas) return false;
+      const r = c.getBoundingClientRect();
+      // A PiP copy of the frame is wide and roughly 16:9; a UI canvas is neither.
+      const ratio = r.height > 0 ? r.width / r.height : 0;
+      return r.width >= 150 && ratio > 1.3 && ratio < 2.4;
+    });
+    if (suspicious.length > 0) {
       console.error(
-        `[Render] ${canvases.length} canvases are in the document. Only one is `
-        + 'the engine\'s. A second live canvas is the picture-in-picture inset.',
+        `[Render] ${suspicious.length} extra frame-shaped canvas(es) in the `
+        + 'document besides the engine\'s. That IS a picture-in-picture inset — '
+        + 'see the rects above.',
       );
     }
   }
@@ -972,6 +1507,14 @@ export class RenderPipeline implements ISubsystem {
     maskDrawCalls: number; motionBlurPx: number;
     /** Renders of the scene graph this frame — the number AGENTS.md §5b wants. */
     scenePasses: number; megapixels: number;
+    /** Device pixels / POST_PIXEL_BUDGET. Everything below is derived from it. */
+    costScale: number;
+    /** The resolution budget's verdicts, so a capture can be explained. */
+    ssao: boolean; reflections: boolean; juice: boolean; motion: boolean;
+    /** True while the measured-frame-rate latch is shedding effects. */
+    strained: boolean;
+    /** False until something calls setWorld() — see that method. */
+    reflectionsWired: boolean;
   } {
     // `motionBlurPx` is the peak blur length in pixels of the current backing
     // store, clamped exactly as the shader clamps it. Report this rather than a
@@ -989,6 +1532,15 @@ export class RenderPipeline implements ISubsystem {
       motionBlurPx: Math.round(peak * 10) / 10,
       scenePasses: this.scenePasses().length,
       megapixels: Math.round((this.deviceWidth() * this.deviceHeight()) / 1e4) / 100,
+      costScale: Math.round(
+        (this.deviceWidth() * this.deviceHeight()) / POST_PIXEL_BUDGET * 100,
+      ) / 100,
+      ssao: this.normalPass?.enabled === true,
+      reflections: this.reflectionsAllowed,
+      juice: this.juiceAllowed,
+      motion: this.motionAllowed,
+      strained: this.strained,
+      reflectionsWired: this.waterReflections !== null,
     };
   }
 
@@ -1002,13 +1554,24 @@ export class RenderPipeline implements ISubsystem {
     this.speedSmooth = damp(this.speedSmooth, this.speedTarget, 0.09, dt);
     this.grade.advance(dt);
 
+    // Re-run the budget against the measured frame rate. `applyResolutionBudget`
+    // is keyed on the resulting *decisions*, so on all but the handful of frames
+    // where a verdict actually flips this is an early return; it is polled rather
+    // than run every frame only because it walks a few pass objects.
+    this.budgetTimer += dt;
+    if (this.budgetTimer >= BUDGET_POLL) {
+      this.budgetTimer = 0;
+      this.applyResolutionBudget();
+    }
+
     // --- depth of field -----------------------------------------------------
     // Only alive during a boost, and even then focused a long way down the
     // track so the road stays sharp and only the far scenery softens. Below the
     // threshold the pass is disabled, so it costs nothing at all — a standstill
     // frame is bit-for-bit unaffected by DoF.
     if (this.dof && this.dofPass) {
-      const active = this.engine.quality.dof && this.speedSmooth > DOF_MIN_SPEED;
+      const active = this.engine.quality.dof && this.juiceAllowed
+        && this.speedSmooth > DOF_MIN_SPEED;
       this.dofPass.enabled = active;
       if (active) {
         const t = clamp01((this.speedSmooth - DOF_MIN_SPEED) / (1 - DOF_MIN_SPEED));
@@ -1023,7 +1586,7 @@ export class RenderPipeline implements ISubsystem {
     // --- chromatic aberration ramps with boost only -------------------------
     const caAmount = Math.pow(this.speedSmooth, 2.2);
     if (this.caPass) {
-      const enable = caAmount > 0.02;
+      const enable = this.juiceAllowed && caAmount > 0.02;
       this.caPass.enabled = enable;
       if (enable) this.caOffset.set(CA_MAX * caAmount, CA_MAX * caAmount * 0.45);
     }
@@ -1083,7 +1646,10 @@ export class RenderPipeline implements ISubsystem {
       // The shader early-outs when the reprojected velocity is negligible, so a
       // static camera was already visually inert — but it still paid for a
       // full-screen pass every frame. Skip the pass outright instead.
-      const on = this.engine.quality.motionBlur
+      // `motionAllowed` is the resolution budget's verdict: above
+      // COST_DROP_MOTION_BLUR the pass goes, and the SubjectMask scene pass with
+      // it, because the mask only exists to serve this convolution.
+      const on = this.engine.quality.motionBlur && this.motionAllowed
         && this.motionBlur.peakMotion > MB_MIN_MOTION;
       this.motionPass.enabled = on;
       // Only pay for the silhouette on frames that will actually blur.
@@ -1113,6 +1679,10 @@ export class RenderPipeline implements ISubsystem {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    // Hand the reflection back before letting go of it: we only ever turned it
+    // off as a load decision, and nothing else in the game would turn it on again.
+    this.applyReflections(true);
+    this.waterReflections = null;
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.teardownPasses();

@@ -68,7 +68,26 @@ export class Engine {
       logarithmicDepthBuffer: false,
     });
 
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Pixel ratio is capped by a PIXEL BUDGET, not just by devicePixelRatio.
+    //
+    // This used to be `min(devicePixelRatio, 2)`, which on a Retina 16"
+    // (1512x982 CSS) asks for a 3024x1964 = 5.94 Mpx buffer. The post chain's
+    // ~17 ms was measured at 1.44 Mpx, so that is 3.09x the fill it was designed
+    // for — roughly 80 ms/frame before a single triangle of geometry. Adaptive
+    // resolution does claw it back, but it takes ~6 s to ramp and floors at
+    // 1.29x, so the first seconds of every race were unplayable and the steady
+    // state was still over budget. This was the largest single cause of the
+    // owner's "lag is still severe".
+    //
+    // `fit` is the ratio that lands on a 1920x1080-equivalent fill for whatever
+    // CSS size we actually got; we take the smaller of that and the display's
+    // own ratio, and never go below 1.
+    const cssW = container.clientWidth || window.innerWidth || 1920;
+    const cssH = container.clientHeight || window.innerHeight || 1080;
+    const fit = Math.sqrt((1920 * 1080) / Math.max(1, cssW * cssH));
+    this.renderer.setPixelRatio(
+      Math.max(1, Math.min(Math.min(window.devicePixelRatio, 2), fit)),
+    );
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Tone mapping lives in the post chain (RenderPipeline's GradeEffect), which

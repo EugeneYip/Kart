@@ -170,6 +170,12 @@ export class Game {
     await this.pipeline.init();
     engine.setRenderCallback((dt) => this.pipeline.render(dt));
     wire(this.vfx, 'setPipeline', this.pipeline);
+    // Lets the resolution budget switch the water's planar reflection off under
+    // load. `Water.setReflections()` has existed all along, doc-commented for
+    // exactly this, and nothing had ever called it — so the reflection pass ran
+    // at every resolution no matter how far over budget the frame was. It is a
+    // whole extra pass over the scene (44 calls / 0.207 M tris on neon).
+    wire(this.pipeline, 'setWorld', this.environment);
     wire(this.hud, 'setAudio', this.audio);
     // Without this the HUD never receives the items module, so `ItemIcons` never
     // calls `useAtlas()` and silently falls back to its own procedural drawings.

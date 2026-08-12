@@ -589,7 +589,19 @@ export class Lighting implements ISubsystem {
         for (let i = 0; i < this.cascades.length; i++) {
           const light = this.cascades[i].light;
           const shadow = light.shadow;
-          if (!shadow.autoUpdate && !shadow.needsUpdate) continue;
+          // `shadow.map !== null` first, deliberately. `shadow.map` is allocated
+          // LAZILY inside `WebGLShadowMap.render`, so skipping a not-due cascade
+          // before it has ever rendered leaves its map null forever. three then
+          // substitutes its private `emptyShadowTexture` — and while
+          // `setValueT1` sets `compareFunction` before binding, the ARRAY path
+          // `setValueT1Array` (which is what `directionalShadowMap[]` always
+          // uses) does not. `DepthTexture.compareFunction` defaults to null, so
+          // the bound texture has TEXTURE_COMPARE_MODE = NONE against a
+          // `sampler2DShadow` declaration, and every draw of every
+          // shadow-receiving material raises
+          // "GL_INVALID_OPERATION: Mismatch between texture format and sampler
+          // type". Letting each cascade render once closes it at the source.
+          if (shadow.map !== null && !shadow.autoUpdate && !shadow.needsUpdate) continue;
           if (lights.indexOf(light) < 0) continue;
           bucket.length = 0;
           bucket.push(light);
