@@ -636,7 +636,7 @@ export class Track implements ITrackService, ISubsystem {
   }
 
   getHazardHints(): Array<{
-    kind: 'oil' | 'boulder' | 'fireball' | 'slider' | 'snapper' | 'traffic';
+    kind: 'oil' | 'boulder' | 'fireball' | 'slider' | 'snapper';
     distance: number;
     lateral?: number;
     span?: number;

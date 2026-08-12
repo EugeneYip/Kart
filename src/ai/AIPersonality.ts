@@ -20,9 +20,28 @@
  *       random jitter (which reads as a bug).
  *    2. Missed apexes — a slow noise channel biases the lateral target, so a
  *       driver occasionally runs a corner two metres wide.
- *    3. Mistake events — a Poisson-ish process whose rate climbs with pressure
+ *    3. Mistake events — a Poisson process whose rate climbs with pressure
  *       (a kart alongside, a kart on the bumper, the player nearby). Under
  *       pressure, humans lock up. So do these.
+ *
+ *  ⚠️ 2026-08 (D2): mechanism 3 had NEVER FIRED. `ErrorModel.update` drew its
+ *  Bernoulli sample from `NoiseField.at()` — smooth multi-octave gradient noise
+ *  — as if it were `uniform(0,1)`. It is not: measured over 36 000 samples the
+ *  minimum value is 0.147 and it never once goes below 0.02, while the trigger
+ *  threshold is `rate·dt·60` ≤ 0.099 for every authored personality. Zero
+ *  mistakes in 300 s × 8 personalities × 12 seeds. `mistakeRate`, `mistakeKind`,
+ *  `brakingLate` and `lifting` were all dead. Event sampling now uses `Rand`
+ *  (xorshift32, genuinely uniform); the *continuous* channels still use
+ *  `NoiseField`, which is what it is good at.
+ *
+ *  PER-RACER FORM (also D2)
+ *  ------------------------
+ *  Eight personalities across eleven AI karts means clones. `DriverForm` adds a
+ *  per-kart, per-RACE pace/mistake/error offset drawn from a seeded shuffle, so
+ *  (a) two `clean` drivers are not identical and (b) the pecking order is not
+ *  the same every race. `assignForms()` lays the pace offsets out as an EVEN
+ *  ladder rather than 12 independent draws — independent draws clump, and a
+ *  clump is exactly the "field travels as one block" defect.
  * ============================================================================
  */
 
@@ -78,6 +97,36 @@ export class NoiseField {
   }
 }
 
+/**
+ * Genuinely uniform deterministic RNG (xorshift32). Used for *event* sampling —
+ * anything of the form "does this happen this tick?" — because smooth noise is
+ * catastrophically wrong for that: see the ⚠️ note at the top of this file.
+ */
+export class Rand {
+  private s: number;
+
+  constructor(seed: number) {
+    this.s = (Math.floor(seed) * 2654435761) >>> 0 || 0x9e3779b9;
+  }
+
+  /** Uniform in [0,1). */
+  next(): number {
+    let s = this.s;
+    s ^= s << 13;
+    s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    this.s = s;
+    return s / 4294967296;
+  }
+
+  /** Uniform in [a,b). */
+  range(a: number, b: number): number {
+    return a + (b - a) * this.next();
+  }
+}
+
 // ---------------------------------------------------------------------------
 //  Personality definition
 // ---------------------------------------------------------------------------
@@ -106,7 +155,20 @@ export interface Personality {
   readonly laneTolerance: number;
 
   // ---- pace --------------------------------------------------------------
-  /** Multiplier on the speed profile. ~1 = drives it exactly. */
+  /**
+   * Multiplier on the achievable pace. **1.0 = flat out** — the kart's own
+   * `tuning.maxSpeed` and the racing line's profile, whichever is lower. Values
+   * above 1.0 buy nothing (the chassis is the ceiling), so the authored ladder
+   * runs DOWNWARD from 1.0: this is the primary dial that decides where a racer
+   * sits in the field, and 1 % here is worth roughly 0.5 s a lap.
+   *
+   * It only started doing that in D2. Before, the target speed was the racing
+   * line's own profile (≤36 m/s) with no reference to the kart, so every AI
+   * asked for 33–37 m/s while topping out at 26–32: the throttle was saturated
+   * 85–95 % of the lap and the multiplier was multiplying an unreachable number.
+   * `cautious` (0.945, the slowest authored pace) posted the FASTEST mean lap of
+   * the twelve. The ladder was inverted and 10 of 12 karts lapped within 1 s.
+   */
   readonly paceFactor: number;
   /** >1 = brakes earlier than necessary. */
   readonly brakeMargin: number;
@@ -158,7 +220,7 @@ const BASE: Omit<Personality, 'id' | 'label' | 'description'> = {
   lineBias: 0,
   lineSwitchiness: 0.5,
   laneTolerance: 1.0,
-  paceFactor: 1.0,
+  paceFactor: 0.985,
   brakeMargin: 1.0,
   aggression: 0.5,
   aggressionRadius: 30,
@@ -196,7 +258,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
     {
       lineBias: -0.55,
       lineSwitchiness: 0.9,
-      paceFactor: 1.02,
+      paceFactor: 1.0,
       brakeMargin: 0.9,
       aggression: 1.0,
       aggressionRadius: 42,
@@ -224,7 +286,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: -0.75,
       lineSwitchiness: 0.25,
       laneTolerance: 0.7,
-      paceFactor: 0.975,
+      paceFactor: 0.955,
       brakeMargin: 1.06,
       aggression: 0.55,
       aggressionRadius: 26,
@@ -251,7 +313,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: 0.05,
       lineSwitchiness: 0.2,
       laneTolerance: 0.55,
-      paceFactor: 1.01,
+      paceFactor: 0.995,
       brakeMargin: 1.0,
       aggression: 0.2,
       aggressionRadius: 22,
@@ -280,7 +342,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: 0.6,
       lineSwitchiness: 1.0,
       laneTolerance: 2.4,
-      paceFactor: 0.985,
+      paceFactor: 0.965,
       brakeMargin: 0.95,
       aggression: 0.75,
       aggressionRadius: 36,
@@ -338,7 +400,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: 0.15,
       lineSwitchiness: 0.15,
       laneTolerance: 0.8,
-      paceFactor: 0.945,
+      paceFactor: 0.925,
       brakeMargin: 1.22,
       aggression: 0.1,
       aggressionRadius: 20,
@@ -367,7 +429,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: -0.35,
       lineSwitchiness: 0.6,
       laneTolerance: 1.4,
-      paceFactor: 1.0,
+      paceFactor: 0.985,
       brakeMargin: 0.94,
       aggression: 0.6,
       aggressionRadius: 32,
@@ -396,7 +458,7 @@ export const PERSONALITIES: Record<PersonalityId, Personality> = {
       lineBias: -0.5,
       lineSwitchiness: 0.45,
       laneTolerance: 1.1,
-      paceFactor: 0.965,
+      paceFactor: 0.945,
       brakeMargin: 1.04,
       aggression: 0.7,
       aggressionRadius: 30,
@@ -455,11 +517,35 @@ export const PERSONALITY_IDS: readonly PersonalityId[] = Object.keys(
  * The per-driver imperfection generator. Holds three independent noise
  * channels plus a mistake timer.
  */
+export const MISTAKE = {
+  /**
+   * Global calibration on the authored `mistakeRate` values. Those numbers
+   * describe the *relative* fallibility of the archetypes, which is the design;
+   * their absolute scale had never been calibrated because the sampler could not
+   * fire (see the file header). At 1.0 the `chaotic` pair makes a mistake every
+   * ~9 s — roughly one per corner, which reads as a broken AI. 0.28 gives about
+   * five mistakes a race for `chaotic`, one for `clean` and none for `cautious`,
+   * which is the "one corner in eight" the archetypes are written to.
+   */
+  rateScale: 0.28,
+  /** Shortest / longest a `wide` (missed apex) lasts, seconds. */
+  wideSeconds: [0.34, 0.85] as const,
+  /** Extra steer units held during a `wide`. Enough to cost time, not the race. */
+  wideAmount: [0.10, 0.27] as const,
+  /** `brake` = braked too late: carries 14 % too much speed for this long. */
+  brakeSeconds: [0.35, 0.8] as const,
+  /** `lift` = spooked, backs out of the throttle. */
+  liftSeconds: [0.3, 0.8] as const,
+  /** Enforced quiet time after a mistake, seconds. */
+  cooldown: [1.6, 4.2] as const,
+} as const;
+
 export class ErrorModel {
   private readonly steerNoise: NoiseField;
   private readonly apexNoise: NoiseField;
   private readonly paceNoise: NoiseField;
-  private readonly rng: NoiseField;
+  /** Event sampling. Deliberately NOT a NoiseField — see the file header. */
+  private rand: Rand;
 
   /** Seconds remaining on the current mistake, 0 = none. */
   mistakeTime = 0;
@@ -467,6 +553,10 @@ export class ErrorModel {
   mistakeAmount = 0;
   /** 'wide' = missed the apex, 'brake' = braked too late, 'lift' = spooked. */
   mistakeKind: 'none' | 'wide' | 'brake' | 'lift' = 'none';
+  /** Lifetime count, for probes and the debug overlay. */
+  mistakeCount = 0;
+  /** Per-racer multiplier on the mistake rate (`DriverForm.mistake`). */
+  rateScale = 1;
   private mistakeCooldown = 1.5;
   private phase: number;
 
@@ -474,16 +564,27 @@ export class ErrorModel {
     this.steerNoise = new NoiseField(seed * 7 + 11);
     this.apexNoise = new NoiseField(seed * 13 + 29);
     this.paceNoise = new NoiseField(seed * 19 + 47);
-    this.rng = new NoiseField(seed * 23 + 71);
+    this.rand = new Rand(seed * 23 + 71);
     this.phase = (seed % 97) * 3.37;
   }
 
+  /** Re-seed the event stream (new race) without disturbing the noise phases. */
+  reseed(seed: number): void {
+    this.rand = new Rand(seed * 23 + 71);
+    this.mistakeTime = 0;
+    this.mistakeKind = 'none';
+    this.mistakeAmount = 0;
+    this.mistakeCooldown = 1.5;
+    this.mistakeCount = 0;
+  }
+
   /**
-   * Advance the model.
+   * Advance the model. No longer takes `elapsed`: the event sampler is a proper
+   * RNG now, not a function of the clock (which is what made it never fire).
    * @param pressure 0..1 — how contested the driver's situation is.
    * @param skill    0..1 — 1 makes mistakes rare and small.
    */
-  update(dt: number, elapsed: number, pressure: number, skill: number, p: Personality): void {
+  update(dt: number, pressure: number, skill: number, p: Personality): void {
     if (this.mistakeTime > 0) {
       this.mistakeTime -= dt;
       if (this.mistakeTime <= 0) {
@@ -497,27 +598,34 @@ export class ErrorModel {
       this.mistakeCooldown -= dt;
       return;
     }
-    // Rate climbs steeply with pressure, falls with skill.
-    const rate = p.mistakeRate * (0.35 + 1.65 * clamp01(pressure)) * (1.35 - 0.9 * clamp01(skill));
+    // Rate climbs steeply with pressure, falls with skill. Units: per second.
+    const rate =
+      p.mistakeRate *
+      MISTAKE.rateScale *
+      this.rateScale *
+      (0.35 + 1.65 * clamp01(pressure)) *
+      (1.35 - 0.9 * clamp01(skill));
     if (rate <= 0) return;
-    // Sample the noise as a pseudo-uniform so the whole model stays seeded.
-    const u = (this.rng.at(elapsed * 3.1 + this.phase) + 1) * 0.5;
-    if (u < rate * dt * 60) {
-      const pick = (this.rng.at(elapsed * 7.7 + this.phase * 1.7) + 1) * 0.5;
+    if (this.rand.next() < rate * dt) {
+      const pick = this.rand.next();
+      const r = this.rand.next();
       if (pick < 0.5) {
         this.mistakeKind = 'wide';
-        this.mistakeTime = 0.55 + pick * 1.1;
-        this.mistakeAmount = (pick < 0.25 ? -1 : 1) * (0.18 + pick * 0.5);
+        this.mistakeTime = lerp(MISTAKE.wideSeconds[0], MISTAKE.wideSeconds[1], r);
+        this.mistakeAmount =
+          (this.rand.next() < 0.5 ? -1 : 1) *
+          lerp(MISTAKE.wideAmount[0], MISTAKE.wideAmount[1], r);
       } else if (pick < 0.8) {
         this.mistakeKind = 'brake';
-        this.mistakeTime = 0.4 + (pick - 0.5) * 0.9;
-        this.mistakeAmount = 0.35 + (pick - 0.5) * 0.6;
+        this.mistakeTime = lerp(MISTAKE.brakeSeconds[0], MISTAKE.brakeSeconds[1], r);
+        this.mistakeAmount = 0;
       } else {
         this.mistakeKind = 'lift';
-        this.mistakeTime = 0.3 + (pick - 0.8) * 1.2;
-        this.mistakeAmount = 0.4 + (pick - 0.8) * 1.5;
+        this.mistakeTime = lerp(MISTAKE.liftSeconds[0], MISTAKE.liftSeconds[1], r);
+        this.mistakeAmount = 0;
       }
-      this.mistakeCooldown = 2.2 + u * 3.5;
+      this.mistakeCount++;
+      this.mistakeCooldown = lerp(MISTAKE.cooldown[0], MISTAKE.cooldown[1], this.rand.next());
     }
   }
 
@@ -553,6 +661,141 @@ export class ErrorModel {
 //  Skill blending
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-racer, per-RACE variation. Eight personalities have to cover eleven AI
+ * karts, so without this the roster contains literal clones — and a field of
+ * clones is a field with no gaps in it.
+ *
+ * `pace` is laid out as an even ladder by `assignForms()` rather than drawn
+ * independently per kart: twelve independent draws clump (that is what a normal
+ * distribution does), and a clump of five karts on identical pace is a train the
+ * player cannot pass and cannot rejoin once knocked out of it.
+ */
+export interface DriverForm {
+  /** Multiplier on pace. Always ≤ 1 — nobody is faster than their own chassis. */
+  pace: number;
+  /** Multiplier on the mistake rate. */
+  mistake: number;
+  /** Multiplier on steering/apex error amplitude. */
+  error: number;
+  /** Multiplier on drift eagerness. */
+  drift: number;
+}
+
+export const NEUTRAL_FORM: DriverForm = { pace: 1, mistake: 1, error: 1, drift: 1 };
+
+export const FORM = {
+  /**
+   * Fraction of pace between one rung of the field's ladder and the next.
+   * `AIManager` turns this into an even ladder of *effective* cruise speeds and
+   * then solves each racer's `pace` backwards from its own chassis, so the ladder
+   * survives the roster's 20 % top-speed spread instead of being cancelled by it.
+   *
+   * Measured sensitivity on both shipping circuits: 1 % of pace ≈ 0.55 % of lap
+   * time ≈ 0.32 s. So 0.011 per rung ≈ 0.35 s a lap between neighbours, which is
+   * about 9 m of gap growth per lap — enough that a hit costs two or three
+   * places instead of eight, and enough that the kart ahead of the player is
+   * genuinely catchable.
+   */
+  ladderStep: 0.011,
+  /** Nobody is asked to drive slower than this fraction of their own pace. */
+  paceFloor: 0.86,
+  /**
+   * How much the rung order is allowed to disagree with the authored order.
+   * The ladder is assigned by sorting on `chassis × paceFactor × (1 ± this)`, so
+   * a `cautious` driver usually gets a slow rung and an `aggressive` one usually
+   * gets a quick rung — but not always, and not the same way twice.
+   */
+  orderJitter: 0.05,
+  /** Legacy even-ladder width, used when no chassis information is available. */
+  paceLadder: 0.03,
+  /** Random jitter added on top of the ladder rung, ± this fraction. */
+  paceJitter: 0.004,
+  mistakeRange: [0.55, 1.6] as const,
+  errorRange: [0.82, 1.22] as const,
+  driftRange: [0.88, 1.12] as const,
+} as const;
+
+/**
+ * Deterministic per-kart form for a whole field.
+ *
+ * @param kartIds every kart in the race (the player included — they get a
+ *                neutral rung, they are not driven by this)
+ * @param seed    the race seed. Same seed ⇒ same field, so replays and probes
+ *                are reproducible; a new seed each race is what makes the
+ *                pecking order stop being identical every single time.
+ */
+export function assignForms(
+  kartIds: readonly number[],
+  seed: number,
+  playerId = -1,
+): Map<number, DriverForm> {
+  const rand = new Rand(seed || 1);
+  const ids = kartIds.filter((id) => id !== playerId);
+  // Seeded Fisher-Yates: which racer gets which rung of the ladder.
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(rand.next() * (i + 1));
+    const t = ids[i];
+    ids[i] = ids[j];
+    ids[j] = t;
+  }
+  const out = new Map<number, DriverForm>();
+  const n = Math.max(1, ids.length - 1);
+  for (let i = 0; i < ids.length; i++) {
+    const rung = i / n; // 0 = quickest rung, 1 = slowest
+    out.set(ids[i], {
+      pace:
+        1 -
+        rung * FORM.paceLadder +
+        (rand.next() * 2 - 1) * FORM.paceJitter,
+      mistake: lerp(FORM.mistakeRange[0], FORM.mistakeRange[1], rand.next()),
+      error: lerp(FORM.errorRange[0], FORM.errorRange[1], rand.next()),
+      drift: lerp(FORM.driftRange[0], FORM.driftRange[1], rand.next()),
+    });
+  }
+  if (playerId >= 0) out.set(playerId, NEUTRAL_FORM);
+  return out;
+}
+
+/**
+ * Personalities for a whole field, shuffled per race. One `rival` always
+ * exists (it is the one that races the human); everybody else is drawn from the
+ * remaining archetypes without repeating until the pool is exhausted, so a
+ * twelve-kart grid gets maximum variety rather than four duplicated pairs.
+ */
+export function assignPersonalities(
+  kartIds: readonly number[],
+  seed: number,
+  playerId = -1,
+): Map<number, Personality> {
+  const rand = new Rand((seed || 1) * 7919 + 13);
+  const ids = kartIds.filter((id) => id !== playerId);
+  const out = new Map<number, Personality>();
+  if (ids.length === 0) return out;
+
+  // The rival goes to a random grid slot, not always kart 1.
+  const rivalIdx = Math.floor(rand.next() * ids.length);
+  out.set(ids[rivalIdx], PERSONALITIES.rival);
+
+  const pool: PersonalityId[] = [];
+  const refill = (): void => {
+    const rest = PERSONALITY_IDS.filter((p) => p !== 'rival');
+    for (let i = rest.length - 1; i > 0; i--) {
+      const j = Math.floor(rand.next() * (i + 1));
+      const t = rest[i];
+      rest[i] = rest[j];
+      rest[j] = t;
+    }
+    for (const p of rest) pool.push(p);
+  };
+  for (let i = 0; i < ids.length; i++) {
+    if (i === rivalIdx) continue;
+    if (pool.length === 0) refill();
+    out.set(ids[i], PERSONALITIES[pool.shift() as PersonalityId]);
+  }
+  return out;
+}
+
 export interface SkillProfile {
   /** Multiplier on the speed profile's target speed. */
   pace: number;
@@ -571,14 +814,18 @@ export interface SkillProfile {
 }
 
 /**
- * Fold a personality and a CC-class profile into the numbers the driver
- * actually reads each tick.
+ * Fold a personality, a CC-class profile and this racer's form into the numbers
+ * the driver actually reads each tick.
  */
-export function blendSkill(p: Personality, cc: SkillProfile): SkillProfile {
+export function blendSkill(
+  p: Personality,
+  cc: SkillProfile,
+  form: DriverForm = NEUTRAL_FORM,
+): SkillProfile {
   return {
-    pace: p.paceFactor * cc.pace,
-    error: cc.error,
-    drift: p.driftEagerness * cc.drift,
+    pace: p.paceFactor * cc.pace * form.pace,
+    error: cc.error * form.error,
+    drift: p.driftEagerness * cc.drift * form.drift,
     reaction: p.reactionTime * cc.reaction,
     item: p.itemSkill * cc.item,
     lineAccuracy: clamp01(cc.lineAccuracy * lerp(0.85, 1.15, 1 - clamp01(p.errorAmp / 0.25))),

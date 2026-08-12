@@ -67,8 +67,14 @@ export interface ItemRowSpec {
   spread?: number;
 }
 
+/**
+ * P0d-D1: `traffic` is gone. Non-race vehicles entered the frame from behind the
+ * player — the one hazard nobody could see coming, which is why it read as unfair
+ * rather than hard. Removing the kind, not just the instance, so it cannot be
+ * re-authored by accident.
+ */
 export interface HazardSpec {
-  kind: 'oil' | 'boulder' | 'fireball' | 'slider' | 'snapper' | 'traffic';
+  kind: 'oil' | 'boulder' | 'fireball' | 'slider' | 'snapper';
   t: number;
   lat?: number;
   span?: number;
@@ -624,7 +630,14 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'brakeBoard', t: 0.074, lat: -14 },
       { type: 'tyreStack', t: 0.086, lat: 12.5, step: 0.004, end: 0.105 },
       // the alley
-      { type: 'alleyBlock', t: 0.115, lat: 10.5, step: 0.006, end: 0.20, mirror: true },
+      // `lat` is the block's CENTRE, and the recipe randomises its own half-width
+      // to 4.5–6.5 m plus a 0.4 m roof cap. At the old `lat: 10.5` the near wall
+      // landed at 3.6 m against a 7.5–8.5 m road half-width, so these stood up to
+      // 5.3 m INSIDE the drivable road and hid 40 %+ of the road ahead on 18 of
+      // 259 stations through the alley S-bend. No building width fits at 10.5.
+      // 17 clears the widest variant with margin; `Props.clearRoadSurface` is the
+      // runtime backstop and should now find nothing to push here.
+      { type: 'alleyBlock', t: 0.115, lat: 17, step: 0.006, end: 0.20, mirror: true },
       { type: 'ventStack', t: 0.13, lat: 10, step: 0.012, end: 0.195 },
       { type: 'barrelStack', t: 0.145, lat: -10, step: 0.017, end: 0.19 },
       { type: 'holoAd', t: 0.16, lat: 0, up: 11 },
@@ -661,11 +674,10 @@ export const TRACKS: Record<string, TrackDef> = {
       { t: 0.50, count: 3, spread: 14 },
       { t: 0.775, count: 5 },
     ],
-    // `slider` was at lat 0 (dead centre). Traffic sweeps halved in span and
-    // slowed; one of the two dropped entirely.
+    // The last `traffic` sweep on any circuit is gone (P0d-D1). Two hazards left
+    // and they are 60 %+ of a lap apart, so nothing can chain-hit.
     hazards: [
       { kind: 'oil', t: 0.72, lat: 7 },
-      { kind: 'traffic', t: 0.29, lat: 9, span: 30, speed: 8 },
       { kind: 'slider', t: 0.155, lat: -9, span: 10, speed: 3 },
     ],
   },

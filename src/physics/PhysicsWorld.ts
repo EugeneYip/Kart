@@ -185,10 +185,27 @@ export class PhysicsWorld implements ISubsystem {
     if (b) beginRespawn(b, this.track);
   }
 
-  /** Star power / bullet: temporary invulnerability without a stun. */
+  /**
+   * Star power / bullet: temporary invulnerability without a stun.
+   *
+   * Note that the *post-hit* forgiveness window is NOT wired from here — it is
+   * granted inside `applyStunTo` (see `POST_HIT_GRACE` in KartPhysics), because
+   * that is the one choke point every damage path passes through. This setter is
+   * for effects that want immunity without first taking a hit.
+   */
   setInvulnerable(kartId: number, seconds: number): void {
     const b = this.byId.get(kartId);
     if (b) b.invulnTime = Math.max(b.invulnTime, seconds);
+  }
+
+  /** Seconds of invulnerability left (0 when vulnerable). */
+  invulnTimeOf(kartId: number): number {
+    return this.byId.get(kartId)?.invulnTime ?? 0;
+  }
+
+  /** Seconds of stun left (0 when the kart has control). */
+  stunTimeOf(kartId: number): number {
+    return this.byId.get(kartId)?.stunTime ?? 0;
   }
 
   /** Drop the drift with no payout — used when an item interrupts you. */

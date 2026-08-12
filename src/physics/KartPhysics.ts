@@ -582,12 +582,35 @@ export function applyBoostTo(
   bus.emit('kart:boost', { kartId: b.id, duration: seconds, source });
 }
 
+/**
+ * Seconds of guaranteed input authority handed back after a stun ends.
+ *
+ * P0d-D1: a stun is not the punishment players complained about — being hit
+ * *again* the instant it ends is. One rolling boulder was enough to pin a kart
+ * for ever: `Hazards` re-armed 0.9 s after a 1.55 s stun, so the second contact
+ * landed while the kart was still spinning and refreshed the stun to full. The
+ * loop had no exit because a stunned kart cannot steer out of the hazard's
+ * radius.
+ *
+ * The window is granted here, inside `applyStunTo`, rather than at each call
+ * site, because that is the single choke point every damage path in the game
+ * funnels through (hazard contact, shell/bomb strike, blast falloff, a starred
+ * kart's body-check). `applyStunTo` already early-returns while `invulnTime` is
+ * live, so one line buys both halves of the fix: nothing can re-stun during the
+ * spin, and nothing can re-stun for GRACE seconds after it.
+ */
+export const POST_HIT_GRACE = 1.5;
+
 export function applyStunTo(b: KartBody, seconds: number, kind: StunKind): void {
   if (b.invulnTime > 0 || b.state.starTime > 0) return;
   if (b.respawnTime > 0) return;
   b.stunKind = kind;
   b.stunTime = Math.max(b.stunTime, seconds);
   b.stunTotal = b.stunTime;
+  // Stun duration + forgiveness window. Published as `KartState.invulnerable`,
+  // which KartManager already renders as the respawn blink, so the player can
+  // see that they are protected.
+  b.invulnTime = Math.max(b.invulnTime, b.stunTime + POST_HIT_GRACE);
   cancelDrift(b, false);
   b.boostTime = 0;
   b.boostStrength = 0;

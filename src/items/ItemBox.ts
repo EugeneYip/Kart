@@ -46,11 +46,25 @@ export const BOX_RESPAWN = 6.0;
 /**
  * Height of a box's centre above the road, metres.
  *
- * NOT a free parameter. The box tumbles (±0.32 rad) and bobs (±0.10 m), so its
- * lowest corner reaches ~1.47 m below centre; 1.70 m leaves ~0.23 m of
- * clearance over the road crown. Anything that positions a box — the authored
- * path in TrackBuilder and the fallback in ItemSystem alike — must use this,
- * or boxes clip through the tarmac.
+ * NOT a free parameter. The box tumbles (±0.32 rad about X, free yaw, ±0.22 rad
+ * about Z), bobs ±0.10 m and breathes ±2.2 % of scale, and the outer rim shell is
+ * 1.075× the body — so its lowest point sweeps below its centre as it animates.
+ *
+ * MEASURED, not estimated (`.probe-tmp/boxclear.ts`, which drives the same
+ * transform maths over the whole incommensurate tumble cycle and takes the true
+ * minimum over both shells' vertices):
+ *
+ *     lowest point below centre   1.3164 m   (rim shell, at x=0.27 z=0.53)
+ *     clearance at 1.70 m lift    0.3836 m   on flat road
+ *     worst on any circuit        0.2789 m   (Neon Metropolis, animation extreme)
+ *
+ * An earlier revision of this comment claimed 1.47 m. That over-estimated the
+ * drop by 15 cm — it took the half-diagonal of a *hard* cube, where the rounded
+ * corners pull the extreme in. The lift is right either way, but the margin is
+ * bigger than the comment implied.
+ *
+ * Anything that positions a box — the authored path in TrackBuilder and the
+ * fallback in ItemSystem alike — must use this, or boxes clip through the tarmac.
  */
 export const ITEM_BOX_LIFT = 1.7;
 

@@ -250,15 +250,25 @@ export function starShape(points: number, outer: number, inner: number, round = 
   return s;
 }
 
-/** Classic jagged lightning bolt outline. */
+/**
+ * Classic jagged lightning bolt outline, as a closed polygon in [-1,1] space.
+ *
+ * The Lightning item is gone (P0d-D5) so nothing extrudes this any more, but the
+ * BATTERY's printed bolt is the same outline — `buildBattery` point-in-polygons
+ * these vertices to drive its albedo, emissive mask and normal map from one
+ * definition. Kept here so the shape has exactly one home.
+ */
+export const BOLT_OUTLINE: ReadonlyArray<readonly [number, number]> = [
+  [0.30, 1.00], [-0.34, 0.10], [-0.02, 0.10], [-0.26, -1.00],
+  [0.40, -0.06], [0.05, -0.06], [0.42, 0.62],
+];
+
 export function boltShape(scale = 1): THREE.Shape {
-  const p: Array<[number, number]> = [
-    [0.30, 1.00], [-0.34, 0.10], [-0.02, 0.10], [-0.26, -1.00],
-    [0.40, -0.06], [0.05, -0.06], [0.42, 0.62],
-  ];
   const s = new THREE.Shape();
-  s.moveTo(p[0][0] * scale, p[0][1] * scale);
-  for (let i = 1; i < p.length; i++) s.lineTo(p[i][0] * scale, p[i][1] * scale);
+  s.moveTo(BOLT_OUTLINE[0][0] * scale, BOLT_OUTLINE[0][1] * scale);
+  for (let i = 1; i < BOLT_OUTLINE.length; i++) {
+    s.lineTo(BOLT_OUTLINE[i][0] * scale, BOLT_OUTLINE[i][1] * scale);
+  }
   s.closePath();
   return s;
 }
@@ -283,48 +293,73 @@ function wavySkirt(geo: THREE.BufferGeometry, profileLen: number, amp: number, l
 // Model ids
 // ---------------------------------------------------------------------------
 
+/**
+ * P0d-D5 re-skin. Four prototypes replace six:
+ *
+ *     'rocket'   replaces 'redShell'   — ItemType.RedShell / TripleRedShell
+ *     'bottle'   replaces 'banana'     — ItemType.Banana   / TripleBanana
+ *     'battery'  replaces 'mushroom'   — ItemType.Boost    / TripleBoost
+ *     'ninja'    replaces 'ghost'      — ItemType.Ghost
+ *
+ * `'lightning'` and `'squid'` are deleted outright: their items are gone from the
+ * set, so building them would cost boot time and an atlas cell for something no
+ * player can ever be handed. `'greenShell'`, `'blueShell'`, `'bomb'`, `'bullet'`
+ * and `'coin'` survive because `Projectiles` still pools those kinds and
+ * `grantItem()` can still force them — the roulette cannot.
+ */
 export type ItemModelId =
-  | 'greenShell' | 'redShell' | 'blueShell' | 'banana' | 'bomb' | 'mushroom'
-  | 'star' | 'lightning' | 'bullet' | 'coin' | 'ghost' | 'squid';
+  | 'greenShell' | 'blueShell' | 'bomb'
+  | 'rocket' | 'bottle' | 'battery' | 'ninja'
+  | 'star' | 'bullet' | 'coin';
 
+/**
+ * `Record<ItemType, …>` must stay total — `ItemType` is in `src/core/Types.ts`
+ * and off limits to this agent — so the two removed items point at the nearest
+ * surviving prototype. Neither is reachable: `ItemRoulette` gives both weight 0
+ * in every row, and `ItemSystem.use()` treats both as no-ops.
+ */
 export const MODEL_FOR_ITEM: Record<ItemType, ItemModelId> = {
-  [ItemType.Boost]: 'mushroom',
-  [ItemType.TripleBoost]: 'mushroom',
+  [ItemType.Boost]: 'battery',
+  [ItemType.TripleBoost]: 'battery',
   [ItemType.GreenShell]: 'greenShell',
   [ItemType.TripleGreenShell]: 'greenShell',
-  [ItemType.RedShell]: 'redShell',
-  [ItemType.TripleRedShell]: 'redShell',
-  [ItemType.Banana]: 'banana',
-  [ItemType.TripleBanana]: 'banana',
+  [ItemType.RedShell]: 'rocket',
+  [ItemType.TripleRedShell]: 'rocket',
+  [ItemType.Banana]: 'bottle',
+  [ItemType.TripleBanana]: 'bottle',
   [ItemType.Bomb]: 'bomb',
   [ItemType.Star]: 'star',
-  [ItemType.Lightning]: 'lightning',
-  [ItemType.Ghost]: 'ghost',
+  [ItemType.Lightning]: 'battery', // unreachable
+  [ItemType.Ghost]: 'ninja',
   [ItemType.Bullet]: 'bullet',
   [ItemType.BlueShell]: 'blueShell',
   [ItemType.Coin]: 'coin',
-  [ItemType.Squid]: 'squid',
+  [ItemType.Squid]: 'bottle', // unreachable
 };
 
-/** Items that come as a set of three. */
-export const TRIPLE_ITEMS: ReadonlySet<ItemType> = new Set([
-  ItemType.TripleBoost, ItemType.TripleGreenShell,
-  ItemType.TripleRedShell, ItemType.TripleBanana,
-]);
+/**
+ * Items that come as a set of three.
+ *
+ * EMPTY as of P0d-D5 — every item is single-tier now, so nothing auto-orbits on
+ * pickup. The set (and `itemUses`) survive so a triple forced through
+ * `grantItem()` still behaves like a triple, and so the hold-to-shield path in
+ * `ItemSystem.updateOrbits` keeps working for a single Rocket or Bottle.
+ */
+export const TRIPLE_ITEMS: ReadonlySet<ItemType> = new Set<ItemType>();
 
 export const ITEM_NAMES: Record<ItemType, string> = {
-  [ItemType.Boost]: 'Mushroom',
-  [ItemType.TripleBoost]: 'Triple Mushroom',
+  [ItemType.Boost]: 'Battery',
+  [ItemType.TripleBoost]: 'Battery',
   [ItemType.GreenShell]: 'Green Shell',
-  [ItemType.TripleGreenShell]: 'Triple Green Shell',
-  [ItemType.RedShell]: 'Red Shell',
-  [ItemType.TripleRedShell]: 'Triple Red Shell',
-  [ItemType.Banana]: 'Banana',
-  [ItemType.TripleBanana]: 'Triple Banana',
+  [ItemType.TripleGreenShell]: 'Green Shell',
+  [ItemType.RedShell]: 'Rocket',
+  [ItemType.TripleRedShell]: 'Rocket',
+  [ItemType.Banana]: 'Plastic Bottle',
+  [ItemType.TripleBanana]: 'Plastic Bottle',
   [ItemType.Bomb]: 'Bob-omb',
   [ItemType.Star]: 'Star',
   [ItemType.Lightning]: 'Lightning',
-  [ItemType.Ghost]: 'Boo',
+  [ItemType.Ghost]: 'Ninja',
   [ItemType.Bullet]: 'Bullet',
   [ItemType.BlueShell]: 'Blue Shell',
   [ItemType.Coin]: 'Coin',
@@ -342,6 +377,8 @@ export const PART = {
   fuseSpark: 'fuseSpark',
   starFlare: 'starFlare',
   thrusterFlame: 'thrusterFlame',
+  /** The rocket's exhaust plume — scaled by Projectiles while it flies. */
+  rocketFlame: 'rocketFlame',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -383,17 +420,17 @@ export class ItemModels {
     this.buildSharedTextures();
 
     this.protos.set('greenShell', this.buildShell(0x2fbf3f, 0x0d6b1c, false));
-    this.protos.set('redShell', this.buildShell(0xe8302a, 0x8c0f0c, false));
     this.protos.set('blueShell', this.buildShell(0x2b6fe8, 0x0d2f80, true));
-    this.protos.set('banana', this.buildBanana());
     this.protos.set('bomb', this.buildBomb());
-    this.protos.set('mushroom', this.buildMushroom());
+    // --- P0d-D5 re-skins ---
+    this.protos.set('rocket', this.buildRocket());
+    this.protos.set('bottle', this.buildBottle());
+    this.protos.set('battery', this.buildBattery());
+    this.protos.set('ninja', this.buildNinja());
+    // --- retained ---
     this.protos.set('star', this.buildStar());
-    this.protos.set('lightning', this.buildLightning());
     this.protos.set('bullet', this.buildBullet());
     this.protos.set('coin', this.buildCoin());
-    this.protos.set('ghost', this.buildGhost());
-    this.protos.set('squid', this.buildSquid());
 
     await this.bakeIconAtlas();
     this.ready = true;
@@ -728,79 +765,375 @@ export class ItemModels {
   }
 
   // -------------------------------------------------------------------------
-  // BANANA
+  // ROCKET  (replaces the red shell — homes on the kart ahead)
   // -------------------------------------------------------------------------
 
-  private buildBanana(): THREE.Group {
+  /**
+   * A stubby model rocket: ogive nose, banded body, three swept fins, a flared
+   * nozzle and a live exhaust plume.
+   *
+   * ORIENTATION MATTERS HERE. The profile is lathed about +Y and then rotated
+   * `-π/2` about X, which maps +Y -> -Z, so the nose points down the project's
+   * forward axis (AGENTS §2). `Projectiles.update` can then aim -Z along the
+   * velocity and the rocket flies nose-first. The red shell it replaces was
+   * spun about Y instead, which for a rocket would read as a helicopter blade —
+   * that visual branch is changed in Projectiles alongside this.
+   *
+   * Readability at HUD size comes from three things, in order: the red-on-white
+   * two-tone split at the nose, the fin triangle breaking the cylinder's
+   * silhouette, and the emissive plume.
+   */
+  private buildRocket(): THREE.Group {
     const g = new THREE.Group();
-    const pts: THREE.Vector3[] = [];
-    const SEG = 9;
-    for (let i = 0; i <= SEG; i++) {
-      const t = i / SEG;
-      const a = lerp(-1.22, 1.22, t);
-      pts.push(new THREE.Vector3(Math.sin(a) * 0.60, -Math.cos(a) * 0.40 + 0.40, 0));
-    }
-    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
-    const geo = this.reg(sweep(curve, 48, 18, (t) => {
-      const belly = Math.pow(Math.sin(Math.PI * clamp01(t)), 0.62);
-      const taper = 0.10 + 0.90 * belly;
-      // Slightly fatter at the stem end, pointed at the tip.
-      return 0.152 * taper * (1 + (1 - t) * 0.13);
-    }, 0.86));
+    const R = 0.195;
+    const NOSE_Y = 0.62;
+    const BODY_TOP = 0.24;
+    const BODY_BOT = -0.24;
 
-    const cSkin = new THREE.Color(0xf7d23a);
-    const cDeep = new THREE.Color(0xc9902a);
-    const cTip = new THREE.Color(0x5d4321);
+    // --- profile: nose tip -> nozzle lip -----------------------------------
+    const pts: THREE.Vector2[] = [];
+    const NN = 14;
+    for (let i = 0; i <= NN; i++) {
+      // Ogive: r = R * sin^0.62(a) gives a fuller, less needle-like nose.
+      const a = (i / NN) * Math.PI * 0.5;
+      pts.push(new THREE.Vector2(
+        Math.max(0.0006, R * Math.pow(Math.sin(a), 0.62)),
+        BODY_TOP + (NOSE_Y - BODY_TOP) * Math.cos(a),
+      ));
+    }
+    pts.push(new THREE.Vector2(R, BODY_BOT + 0.10));
+    // Boat-tail into the throat, then flare out to the nozzle lip.
+    pts.push(new THREE.Vector2(R * 0.86, BODY_BOT - 0.02));
+    pts.push(new THREE.Vector2(R * 0.62, BODY_BOT - 0.09));
+    pts.push(new THREE.Vector2(R * 0.90, BODY_BOT - 0.20));
+    pts.push(new THREE.Vector2(R * 1.02, BODY_BOT - 0.24));
+    pts.push(new THREE.Vector2(R * 0.74, BODY_BOT - 0.245));
+    pts.push(new THREE.Vector2(0.0006, BODY_BOT - 0.20));
+
+    // v runs nose(0) -> nozzle(1) along the profile.
+    const NOSE_END = NN / (pts.length - 1);
+    const TAIL_START = (NN + 2) / (pts.length - 1);
+
+    const cRed = new THREE.Color(0xe33a26);
+    const cRedDeep = new THREE.Color(0x8e1a10);
+    const cShell = new THREE.Color(0xeef1f6);
+    const cShellShade = new THREE.Color(0xa8b0bd);
+    const cGraphite = new THREE.Color(0x2a2f3a);
+
+    /** Ring grooves + rivets + the raised chevron band, as a height field. */
+    const relief = (u: number, v: number): number => {
+      let h = 0.5;
+      // Two panel joint rings.
+      for (const rv of [0.42, 0.66]) h -= (1 - smoothstep((Math.abs(v - rv) - 0.004) / 0.012)) * 0.16;
+      // Rivet line around the shoulder.
+      const rivet = Math.abs(Math.sin(u * Math.PI * 22));
+      h += (1 - smoothstep((Math.abs(v - 0.36) - 0.004) / 0.010)) * Math.pow(rivet, 8) * 0.20;
+      // Chevron band: a saw wave in (u,v) so it reads as painted-on relief.
+      const saw = Math.abs(((u * 8 + v * 3) % 1) - 0.5) * 2;
+      if (v > 0.48 && v < 0.62) h += (1 - smoothstep((saw - 0.55) / 0.25)) * 0.08;
+      return h + ringNoise(u, v, 24, 3) * 0.05;
+    };
+
     const albedo = this.regT(pixelTexture(512, (u, v, o) => {
-      // u = along the banana, v = around it
-      const tipA = smoothstep((0.055 - u) / 0.055);
-      const tipB = smoothstep((u - 0.955) / 0.045);
-      const facet = Math.abs(Math.sin(v * Math.PI * 3)) * 0.5 + 0.5;
-      const c = cDeep.clone().lerp(cSkin, 0.35 + facet * 0.65);
-      // Longitudinal ridges darken slightly in the valleys.
-      c.multiplyScalar(0.9 + facet * 0.14);
-      const n = fbm(u * 26, v * 9, 4);
-      if (n > 0.71) c.lerp(cTip, (n - 0.71) * 2.4);
-      c.offsetHSL((n - 0.5) * 0.012, 0.02, (n - 0.5) * 0.05);
-      c.lerp(cTip, clamp01(tipA + tipB));
+      const noseK = 1 - smoothstep((v - NOSE_END * 0.86) / 0.10);
+      const tailK = smoothstep((v - TAIL_START * 0.97) / 0.06);
+      const shade = clamp01(0.30 + Math.pow(Math.sin(u * Math.PI), 0.7) * 0.85);
+      // Body: cool white with a lit side, so the cylinder never reads flat.
+      const c = cShellShade.clone().lerp(cShell, shade);
+      // Nose cone: red, hottest at the tip.
+      c.lerp(cRedDeep.clone().lerp(cRed, shade), noseK);
+      // Warning chevrons around the waist.
+      const saw = Math.abs(((u * 8 + v * 3) % 1) - 0.5) * 2;
+      if (v > 0.48 && v < 0.62) {
+        c.lerp(saw < 0.5 ? cRed : cGraphite, (1 - smoothstep((Math.abs(v - 0.55) - 0.045) / 0.02)) * 0.9);
+      }
+      // A single crisp red band under the nose reads as "rocket" instantly.
+      c.lerp(cRed, (1 - smoothstep((Math.abs(v - 0.40) - 0.012) / 0.010)) * 0.95);
+      // Nozzle: scorched graphite.
+      c.lerp(cGraphite, tailK);
+      // Grain + a touch of AO in the ring grooves.
+      const h = relief(u, v);
+      c.multiplyScalar(0.78 + clamp01(h) * 0.44);
+      const n = ringNoise(u, v, 11, 4);
+      c.offsetHSL(0, 0, (n - 0.5) * 0.05);
       o.r = Math.round(clamp01(c.r) * 255);
       o.g = Math.round(clamp01(c.g) * 255);
       o.b = Math.round(clamp01(c.b) * 255);
     }));
-    const normal = this.regT(normalFromHeight(256, (u, v) =>
-      0.5 + Math.sin(v * Math.PI * 3) * 0.08 + fbm(u * 30, v * 12, 3) * 0.09, 1.7));
+    const normal = this.regT(normalFromHeight(256, relief, 2.6));
+    const rough = this.regT(pixelTexture(256, (u, v, o) => {
+      // Painted shell is glossy; the nozzle end is burnt and matte.
+      const r = 0.18 + smoothstep((v - TAIL_START * 0.9) / 0.12) * 0.55
+        + ringNoise(u, v, 14, 3) * 0.10;
+      const q = Math.round(clamp01(r) * 255);
+      o.r = q; o.g = q; o.b = q;
+    }, false));
 
-    const mat = this.regM(new THREE.MeshPhysicalMaterial({
+    const shellMat = this.regM(new THREE.MeshPhysicalMaterial({
       map: albedo,
       normalMap: normal,
-      normalScale: new THREE.Vector2(0.85, 0.85),
-      roughness: 0.42,
-      metalness: 0.0,
-      clearcoat: 0.75,
-      clearcoatRoughness: 0.28,
-      sheen: 0.5,
-      sheenColor: new THREE.Color(0xfff0a8),
-      envMapIntensity: 1.0,
+      normalScale: new THREE.Vector2(1.15, 1.15),
+      roughnessMap: rough,
+      roughness: 1.0,
+      metalness: 0.22,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.07,
+      sheen: 0.3,
+      sheenColor: new THREE.Color(0xffd9cf),
+      envMapIntensity: 1.2,
     }));
-    const body = new THREE.Mesh(geo, mat);
+    this.trackMetal(shellMat, 0.22, 0.10);
+
+    const body = new THREE.Mesh(this.reg(lathe(pts, 48)), shellMat);
+    body.rotation.x = -Math.PI / 2; // +Y -> -Z: nose forward
     body.castShadow = true;
     body.receiveShadow = true;
     g.add(body);
 
-    // Stem
-    const stemMat = this.regM(new THREE.MeshStandardMaterial({
-      color: 0x6b4f22, roughness: 0.72, metalness: 0.0,
+    // --- fins ---------------------------------------------------------------
+    // Swept delta with a rounded trailing corner, extruded and bevelled so the
+    // edge catches the rim light instead of aliasing into a black line.
+    const finShape = new THREE.Shape();
+    finShape.moveTo(0, 0.16);
+    finShape.quadraticCurveTo(0.10, 0.05, 0.28, -0.14);
+    finShape.quadraticCurveTo(0.20, -0.20, 0.06, -0.21);
+    finShape.lineTo(0, -0.18);
+    finShape.closePath();
+    const finGeo = this.reg(new THREE.ExtrudeGeometry(finShape, {
+      depth: 0.030, bevelEnabled: true, bevelSize: 0.012,
+      bevelThickness: 0.010, bevelSegments: 2, curveSegments: 8,
     }));
-    const stem = new THREE.Mesh(this.reg(new THREE.CylinderGeometry(0.035, 0.055, 0.14, 10, 1)), stemMat);
-    const p0 = curve.getPointAt(0, new THREE.Vector3());
-    const t0 = curve.getTangentAt(0, new THREE.Vector3());
-    stem.position.copy(p0).addScaledVector(t0, -0.05);
-    stem.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), t0.clone().negate());
-    g.add(stem);
+    finGeo.translate(0, 0, -0.015);
+    const finMat = this.regM(new THREE.MeshPhysicalMaterial({
+      color: 0xd8352a,
+      roughness: 0.26,
+      metalness: 0.18,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.08,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(0xffb0a4),
+      envMapIntensity: 1.25,
+    }));
+    for (let i = 0; i < 3; i++) {
+      // rotation.x = -PI/2 maps the shape's +Y (chord) onto -Z and its extrusion
+      // axis onto +Y (thickness), so the fin plane contains the body axis.
+      const fin = new THREE.Mesh(finGeo, finMat);
+      fin.rotation.x = -Math.PI / 2;
+      // Root buried inside the skin, chord sitting over the boat-tail.
+      fin.position.set(R * 0.55, 0, 0.14);
+      fin.castShadow = true;
+      const holder = new THREE.Group();
+      holder.rotation.z = (i / 3) * Math.PI * 2;
+      holder.add(fin);
+      g.add(holder);
+    }
 
-    g.rotation.y = Math.PI * 0.12;
+    // --- exhaust ------------------------------------------------------------
+    const flameMat = this.regM(new THREE.MeshBasicMaterial({
+      color: 0xffb347,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }));
+    const flame = new THREE.Mesh(this.reg(new THREE.ConeGeometry(0.155, 0.62, 18, 3, true)), flameMat);
+    flame.rotation.x = Math.PI / 2; // tip trailing at +Z, mouth on the nozzle
+    flame.position.z = 0.76;
+    flame.name = PART.rocketFlame;
+    g.add(flame);
+
+    const glow = new THREE.Sprite(this.regM(new THREE.SpriteMaterial({
+      map: this.glowTexture!,
+      color: 0xffcf7a,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.85,
+    })));
+    glow.scale.setScalar(0.78);
+    glow.position.z = 0.50;
+    g.add(glow);
+
     return g;
   }
+
+  // -------------------------------------------------------------------------
+  // PLASTIC BOTTLE  (replaces the banana — a small obstacle)
+  // -------------------------------------------------------------------------
+
+  /**
+   * A PET drinks bottle: petaloid base, ribbed body, threaded neck, coloured cap
+   * and a printed shrink label.
+   *
+   * Built lathed about +Y and then laid on its side (+Y -> -X) because that is
+   * how it comes to rest on the road: `Projectiles.stepBanana` settles the
+   * obstacle and hands `update()` the ground normal as the node's up axis, so
+   * the model's local +Y has to be the bottle's *up when standing*, not its long
+   * axis.
+   *
+   * The clear body would vanish at HUD-icon size, so the label is a separate
+   * opaque sleeve in a saturated teal with a white cap band. That sleeve is
+   * doing all the icon-scale legibility work.
+   */
+  private buildBottle(): THREE.Group {
+    const g = new THREE.Group();
+    const stand = new THREE.Group(); // upright bottle, rotated as a whole below
+    const R = 0.135;
+
+    // --- profile: base -> cap ----------------------------------------------
+    const pts: THREE.Vector2[] = [
+      new THREE.Vector2(0.0006, -0.345),
+      new THREE.Vector2(0.055, -0.375),
+      new THREE.Vector2(0.100, -0.385),
+      new THREE.Vector2(0.124, -0.360),
+      new THREE.Vector2(R, -0.300),
+      new THREE.Vector2(R, -0.170),
+      new THREE.Vector2(R * 0.93, -0.140),   // rib
+      new THREE.Vector2(R, -0.110),
+      new THREE.Vector2(R, -0.010),
+      new THREE.Vector2(R * 0.93, 0.020),    // rib
+      new THREE.Vector2(R, 0.050),
+      new THREE.Vector2(R, 0.120),
+      new THREE.Vector2(R * 0.86, 0.200),    // shoulder
+      new THREE.Vector2(R * 0.58, 0.268),
+      new THREE.Vector2(R * 0.40, 0.310),
+      new THREE.Vector2(0.052, 0.340),
+      new THREE.Vector2(0.052, 0.392),       // neck
+      new THREE.Vector2(0.074, 0.398),       // cap lip
+      new THREE.Vector2(0.074, 0.474),
+      new THREE.Vector2(0.062, 0.486),
+      new THREE.Vector2(0.0006, 0.492),
+    ];
+
+    // Clear PET: transmission plus a very slight green cast, and a normal map of
+    // stress lines so it does not read as smooth glass.
+    const petNrm = this.regT(normalFromHeight(256, (u, v) =>
+      0.5
+      + Math.sin(v * Math.PI * 26) * 0.012
+      + ringNoise(u * 1.4, v * 2.2, 9, 4) * 0.09
+      // A couple of crush creases: this bottle is litter, not shop stock.
+      + (1 - smoothstep((Math.abs(v - 0.46) - 0.01) / 0.03)) * Math.sin(u * Math.PI * 5) * 0.10,
+    1.9));
+    const petMat = this.regM(new THREE.MeshPhysicalMaterial({
+      color: 0xd8f2ea,
+      normalMap: petNrm,
+      normalScale: new THREE.Vector2(0.9, 0.9),
+      roughness: 0.10,
+      metalness: 0.0,
+      transmission: 0.88,
+      thickness: 0.22,
+      ior: 1.46,
+      transparent: true,
+      opacity: 0.62,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+      attenuationColor: new THREE.Color(0x9fe8d4),
+      attenuationDistance: 0.55,
+      side: THREE.DoubleSide,
+      envMapIntensity: 1.35,
+      depthWrite: false,
+    }));
+    const shell = new THREE.Mesh(this.reg(lathe(pts, 44)), petMat);
+    shell.castShadow = true;
+    stand.add(shell);
+
+    // --- cap ---------------------------------------------------------------
+    const capTex = this.regT(pixelTexture(128, (u, v, o) => {
+      // Vertical knurling round the cap, plus a moulded top.
+      const knurl = Math.abs(Math.sin(u * Math.PI * 26)) > 0.45 ? 1 : 0;
+      const c = new THREE.Color(0x2f6ef0).offsetHSL(0, 0, knurl * 0.06 - 0.03);
+      c.lerp(new THREE.Color(0x1b3f9c), smoothstep(v) * 0.45);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const capNrm = this.regT(normalFromHeight(128, (u) =>
+      0.5 + (Math.abs(Math.sin(u * Math.PI * 26)) > 0.45 ? 0.12 : 0), 2.2));
+    const capMat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: capTex,
+      normalMap: capNrm,
+      roughness: 0.34,
+      metalness: 0.0,
+      clearcoat: 0.9,
+      clearcoatRoughness: 0.14,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(0x9fc0ff),
+      envMapIntensity: 1.1,
+    }));
+    const cap = new THREE.Mesh(
+      this.reg(new THREE.CylinderGeometry(0.079, 0.079, 0.082, 28, 1)),
+      capMat,
+    );
+    cap.position.y = 0.436;
+    cap.castShadow = true;
+    stand.add(cap);
+    const capTop = new THREE.Mesh(this.reg(new THREE.CircleGeometry(0.079, 28)), capMat);
+    capTop.rotation.x = -Math.PI / 2;
+    capTop.position.y = 0.4775;
+    stand.add(capTop);
+
+    // --- label sleeve -------------------------------------------------------
+    const labelTex = this.regT(pixelTexture(512, (u, v, o) => {
+      const teal = new THREE.Color(0x0f9d8c);
+      const dark = new THREE.Color(0x075a52);
+      const white = new THREE.Color(0xf4fbf9);
+      // Base: teal with a lit side.
+      const c = dark.clone().lerp(teal, clamp01(0.35 + Math.pow(Math.sin(u * Math.PI), 0.7) * 0.8));
+      // Two white bands top and bottom — this is the icon-scale read.
+      c.lerp(white, 1 - smoothstep((Math.abs(v - 0.12) - 0.035) / 0.02));
+      c.lerp(white, 1 - smoothstep((Math.abs(v - 0.88) - 0.030) / 0.02));
+      // A big soft droplet mark in the middle third.
+      const dx = (((u * 3) % 1) - 0.5) * 1.5;
+      const dy = (v - 0.5) * 2.1;
+      const drop = Math.hypot(dx, dy * (dy < 0 ? 0.7 : 1.35));
+      c.lerp(white, (1 - smoothstep((drop - 0.30) / 0.06)) * 0.85);
+      // Barcode block, bottom right of each repeat.
+      if (v > 0.66 && v < 0.80 && ((u * 3) % 1) > 0.62 && ((u * 3) % 1) < 0.92) {
+        const bar = Math.floor(u * 260) % 2 === 0 ? 1 : 0;
+        c.lerp(bar ? new THREE.Color(0x101418) : white, 0.9);
+      }
+      const n = ringNoise(u, v, 16, 3);
+      c.offsetHSL(0, 0, (n - 0.5) * 0.04);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const labelNrm = this.regT(normalFromHeight(256, (u, v) =>
+      // Shrink-wrap wrinkles, strongest near the sleeve edges.
+      0.5 + ringNoise(u * 2.0, v, 20, 3) * 0.11 * (0.35 + Math.abs(v - 0.5) * 1.3), 1.6));
+    const labelMat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: labelTex,
+      normalMap: labelNrm,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+      roughness: 0.30,
+      metalness: 0.0,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.22,
+      sheen: 0.5,
+      sheenColor: new THREE.Color(0xbff4ea),
+      envMapIntensity: 1.15,
+      side: THREE.DoubleSide,
+    }));
+    const label = new THREE.Mesh(
+      this.reg(new THREE.CylinderGeometry(R * 1.012, R * 1.012, 0.255, 44, 1, true)),
+      labelMat,
+    );
+    label.position.y = -0.075;
+    label.castShadow = true;
+    stand.add(label);
+
+    // Lie it down: local +Y stays "up", the bottle's long axis runs along -X.
+    // The group origin is left on the bottle's AXIS, not on the ground, because
+    // `Projectiles` positions a settled obstacle by its centre and lifts it by
+    // `BOTTLE_REST` (= this radius) to seat it on the tarmac.
+    stand.rotation.z = Math.PI / 2;
+    g.add(stand);
+    return g;
+  }
+
+  /** Radius of the bottle lying on its side — its rest height above the road. */
+  static readonly BOTTLE_REST = 0.145;
 
   // -------------------------------------------------------------------------
   // BOB-OMB
@@ -904,121 +1237,395 @@ export class ItemModels {
   }
 
   // -------------------------------------------------------------------------
-  // MUSHROOM
+  // BATTERY  (replaces the mushroom — a speed boost)
   // -------------------------------------------------------------------------
 
-  private buildMushroom(): THREE.Group {
+  /**
+   * An AA-style cell: steel can, printed wrap, nickel collar, positive nub, and
+   * a live charge gauge that actually glows.
+   *
+   * A plain cylinder is the weakest silhouette of the four re-skins, so three
+   * things break it up: the nub on top, the bright collar ring that separates
+   * can from wrap, and a bold emissive bolt on the wrap. The bolt is the read at
+   * icon size; the nub is the read in silhouette.
+   *
+   * The bolt is evaluated analytically (a signed-distance test against the same
+   * jagged outline `boltShape()` extrudes) rather than drawn on a canvas, so it
+   * feeds the albedo, the emissive mask AND the normal map from one function.
+   * That also means it survives the headless canvas shim, which no-ops 2D draws.
+   */
+  private buildBattery(): THREE.Group {
     const g = new THREE.Group();
+    const R = 0.225;
+    const H = 0.62;
 
-    // Cap profile: dome with an under-lip so the silhouette has a real edge.
-    const capPts: THREE.Vector2[] = [];
-    const N = 22;
-    for (let i = 0; i <= N; i++) {
-      const a = (i / N) * Math.PI * 0.5;
-      capPts.push(new THREE.Vector2(
-        Math.max(0.0006, 0.50 * Math.pow(Math.sin(a), 0.70)),
-        0.20 + 0.34 * Math.pow(Math.cos(a), 1.15),
-      ));
-    }
-    capPts.push(new THREE.Vector2(0.505, 0.17));
-    capPts.push(new THREE.Vector2(0.478, 0.135));
-    capPts.push(new THREE.Vector2(0.40, 0.125));
-    capPts.push(new THREE.Vector2(0.30, 0.135));
-
-    // Spot layout in lathe UV space (u = around, v = apex -> rim)
-    const spots: Array<[number, number, number]> = [
-      [0.12, 0.30, 0.115], [0.44, 0.22, 0.088], [0.72, 0.34, 0.105],
-      [0.28, 0.60, 0.095], [0.60, 0.62, 0.085], [0.90, 0.58, 0.100],
-      [0.02, 0.78, 0.070], [0.50, 0.82, 0.062],
-    ];
-    const spotAt = (u: number, v: number): number => {
-      let m = 0;
-      for (const [su, sv, sr] of spots) {
-        const du = wrapDist(u, su);
-        const dv = (v - sv) * 0.72;
-        const d = Math.hypot(du, dv);
-        m = Math.max(m, 1 - smoothstep((d - sr * 0.72) / (sr * 0.42)));
+    // --- bolt / gauge field -------------------------------------------------
+    // u wraps around the cell, v runs top(0) -> bottom(1) of the wrap.
+    const BOLT = BOLT_OUTLINE;
+    /** Even-odd point-in-polygon against the bolt outline, in [-1,1] space. */
+    const inBolt = (x: number, y: number): boolean => {
+      let inside = false;
+      for (let i = 0, j = BOLT.length - 1; i < BOLT.length; j = i++) {
+        const [xi, yi] = BOLT[i];
+        const [xj, yj] = BOLT[j];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
       }
-      return m;
+      return inside;
+    };
+    /**
+     * 1 inside the bolt, feathered over ~1 texel of the 512 map.
+     *
+     * NOTE the sign of `y`. `DataTexture` defaults to `flipY = false`, so texel
+     * row 0 is UV v = 0, which on a `CylinderGeometry` is the BOTTOM of the cell.
+     * Bolt-space +y therefore has to increase with v, or the bolt prints upside
+     * down — invisible in a code review, obvious on screen.
+     */
+    const boltMask = (u: number, v: number): number => {
+      // One bolt centred on the front face (u = 0.5), 0.34 of the wrap wide.
+      const x = (u - 0.5) / 0.17;
+      const y = (v - 0.52) / 0.30;
+      if (Math.abs(x) > 1.6 || Math.abs(y) > 1.6) return 0;
+      let hits = 0;
+      // 2x2 supersample: the outline is all diagonals, so a hard test aliases.
+      for (const du of [-0.006, 0.006]) {
+        for (const dv of [-0.006, 0.006]) {
+          if (inBolt(x + du / 0.17, y + dv / 0.30)) hits++;
+        }
+      }
+      return hits / 4;
+    };
+    /** Four charge segments down the back face (u ≈ 0). */
+    const gaugeMask = (u: number, v: number): number => {
+      const uu = Math.abs(wrapDist(u, 0.0));
+      if (uu > 0.052) return 0;
+      const band = ((v - 0.24) / 0.13);
+      const i = Math.floor(band);
+      if (i < 0 || i > 3) return 0;
+      const f = band - i;
+      if (f < 0.16 || f > 0.84) return 0;
+      return 1 - smoothstep((uu - 0.030) / 0.020);
     };
 
-    const cRed = new THREE.Color(0xe8402f);
-    const cDark = new THREE.Color(0x8f1a14);
-    const capTex = this.regT(pixelTexture(512, (u, v, o) => {
-      const s = spotAt(u, v);
-      const shade = clamp01(0.32 + (1 - v) * 0.85);
-      const c = cDark.clone().lerp(cRed, shade);
-      c.lerp(new THREE.Color(0xff9a70), Math.pow(1 - v, 4) * 0.5);
-      const n = ringNoise(u, v, 8, 3);
-      c.offsetHSL(0, 0, (n - 0.5) * 0.05);
-      const spotC = new THREE.Color(0xfff6ea).lerp(new THREE.Color(0xe8d8c4), v * 0.5);
-      c.lerp(spotC, s);
-      c.multiplyScalar(1 - smoothstep((v - 0.88) / 0.12) * 0.30);
-      o.r = Math.round(clamp01(c.r) * 255);
-      o.g = Math.round(clamp01(c.g) * 255);
-      o.b = Math.round(clamp01(c.b) * 255);
-    }));
-    const capNrm = this.regT(normalFromHeight(256, (u, v) =>
-      0.5 + spotAt(u, v) * 0.10 + ringNoise(u, v, 14, 3) * 0.05, 1.5));
+    const wrapRelief = (u: number, v: number): number => {
+      let h = 0.5;
+      // Printed ink sits very slightly proud of the wrap.
+      h += boltMask(u, v) * 0.10;
+      h += gaugeMask(u, v) * 0.08;
+      // Two crimp grooves top and bottom where the wrap is rolled over.
+      for (const gv of [0.055, 0.945]) h -= (1 - smoothstep((Math.abs(v - gv) - 0.004) / 0.012)) * 0.22;
+      return h + ringNoise(u, v, 26, 3) * 0.045;
+    };
 
-    const capMat = this.regM(new THREE.MeshPhysicalMaterial({
-      map: capTex,
-      normalMap: capNrm,
-      normalScale: new THREE.Vector2(0.8, 0.8),
-      roughness: 0.40,
-      metalness: 0.0,
-      clearcoat: 0.85,
-      clearcoatRoughness: 0.22,
-      sheen: 0.75,
-      sheenColor: new THREE.Color(0xff9e86),
-      sheenRoughness: 0.55,
-      // Cheap stand-in for subsurface: a touch of forward scattering.
-      transmission: 0.10,
-      thickness: 0.35,
-      ior: 1.4,
-      attenuationColor: new THREE.Color(0xff5a3c),
-      attenuationDistance: 0.6,
-      envMapIntensity: 1.1,
-    }));
-    const cap = new THREE.Mesh(this.reg(lathe(capPts, 64)), capMat);
-    cap.castShadow = true;
-    cap.receiveShadow = true;
-    g.add(cap);
+    const cInk = new THREE.Color(0x14182a);
+    const cInkLit = new THREE.Color(0x39456e);
+    const cGold = new THREE.Color(0xffc63a);
+    const cGoldDeep = new THREE.Color(0xb8760c);
 
-    // Stem
-    const stemPts: THREE.Vector2[] = [
-      new THREE.Vector2(0.0006, -0.34),
-      new THREE.Vector2(0.20, -0.345),
-      new THREE.Vector2(0.29, -0.30),
-      new THREE.Vector2(0.245, -0.15),
-      new THREE.Vector2(0.245, 0.0),
-      new THREE.Vector2(0.285, 0.10),
-      new THREE.Vector2(0.30, 0.145),
-      new THREE.Vector2(0.0006, 0.15),
-    ];
-    const stemTex = this.regT(pixelTexture(256, (u, v, o) => {
-      const c = new THREE.Color(0xf6ead2).lerp(new THREE.Color(0xd3bd9c), smoothstep(v * 1.1) * 0.45);
-      const n = ringNoise(u, v, 9, 3);
+    const wrapTex = this.regT(pixelTexture(512, (u, v, o) => {
+      const lit = clamp01(0.24 + Math.pow(Math.sin(u * Math.PI), 0.65) * 0.9);
+      const c = cInk.clone().lerp(cInkLit, lit);
+      // Gold band top and bottom of the wrap.
+      const bandT = 1 - smoothstep((Math.abs(v - 0.13) - 0.030) / 0.016);
+      const bandB = 1 - smoothstep((Math.abs(v - 0.87) - 0.030) / 0.016);
+      c.lerp(cGoldDeep.clone().lerp(cGold, lit), clamp01(bandT + bandB) * 0.92);
+      // The bolt.
+      c.lerp(cGold.clone().lerp(new THREE.Color(0xfff4bc), lit * 0.5), boltMask(u, v));
+      // Charge segments read as pale mint before they are lit by the emissive.
+      c.lerp(new THREE.Color(0xbdffe6), gaugeMask(u, v) * 0.9);
+      const n = ringNoise(u, v, 13, 4);
       c.offsetHSL(0, 0, (n - 0.5) * 0.045);
       o.r = Math.round(clamp01(c.r) * 255);
       o.g = Math.round(clamp01(c.g) * 255);
       o.b = Math.round(clamp01(c.b) * 255);
     }));
-    const stemMat = this.regM(new THREE.MeshPhysicalMaterial({
-      map: stemTex,
-      roughness: 0.55,
+    const wrapEm = this.regT(pixelTexture(256, (u, v, o) => {
+      // Only the bolt and the gauge glow. Values > 1 after emissiveIntensity so
+      // they bloom under AgX.
+      const b = boltMask(u, v);
+      const gg = gaugeMask(u, v);
+      const c = new THREE.Color(0x000000)
+        .lerp(new THREE.Color(0xffd24a), b)
+        .lerp(new THREE.Color(0x6cffc4), gg);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const wrapNrm = this.regT(normalFromHeight(256, wrapRelief, 2.4));
+    const wrapRough = this.regT(pixelTexture(256, (u, v, o) => {
+      // Ink is glossier than the matte wrap; the crimps are dirty.
+      const r = 0.52 - boltMask(u, v) * 0.30 - gaugeMask(u, v) * 0.28
+        + ringNoise(u, v, 17, 3) * 0.12;
+      const q = Math.round(clamp01(r) * 255);
+      o.r = q; o.g = q; o.b = q;
+    }, false));
+
+    const wrapMat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: wrapTex,
+      normalMap: wrapNrm,
+      normalScale: new THREE.Vector2(1.2, 1.2),
+      roughnessMap: wrapRough,
+      roughness: 1.0,
+      metalness: 0.30,
+      emissiveMap: wrapEm,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: 1.9,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.16,
+      envMapIntensity: 1.2,
+    }));
+    this.trackMetal(wrapMat, 0.30, 0.12);
+    const wrap = new THREE.Mesh(
+      this.reg(new THREE.CylinderGeometry(R, R, H, 44, 1, true)),
+      wrapMat,
+    );
+    wrap.castShadow = true;
+    wrap.receiveShadow = true;
+    g.add(wrap);
+
+    // --- steel can ends + collar -------------------------------------------
+    const steelTex = this.regT(pixelTexture(128, (u, v, o) => {
+      // Brushed radial anisotropy, faked with fine noise streaks.
+      const c = new THREE.Color(0xcfd6e2)
+        .lerp(new THREE.Color(0x7d8697), Math.abs(v - 0.5) * 1.1);
+      const streak = ringNoise(u, v * 0.15, 40, 2);
+      c.offsetHSL(0, 0, (streak - 0.5) * 0.10);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const steelMat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: steelTex,
+      roughness: 0.24,
+      metalness: 0.95,
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.12,
+      envMapIntensity: 1.5,
+    }));
+    this.trackMetal(steelMat, 0.95, 0.35);
+
+    // Slightly proud collars, so the wrap looks inset between them.
+    const collarGeo = this.reg(new THREE.CylinderGeometry(R * 1.035, R * 1.035, 0.055, 44, 1));
+    for (const s of [1, -1]) {
+      const collar = new THREE.Mesh(collarGeo, steelMat);
+      collar.position.y = s * (H * 0.5 - 0.026);
+      collar.castShadow = true;
+      g.add(collar);
+    }
+    // Flat negative end.
+    const endGeo = this.reg(new THREE.CircleGeometry(R * 1.03, 44));
+    const neg = new THREE.Mesh(endGeo, steelMat);
+    neg.rotation.x = Math.PI / 2;
+    neg.position.y = -H * 0.5 - 0.001;
+    g.add(neg);
+    // Positive end: recessed shoulder + nub.
+    const pos = new THREE.Mesh(endGeo, steelMat);
+    pos.rotation.x = -Math.PI / 2;
+    pos.position.y = H * 0.5 + 0.001;
+    g.add(pos);
+    const nub = new THREE.Mesh(
+      this.reg(new THREE.CylinderGeometry(0.082, 0.092, 0.072, 24, 1)),
+      steelMat,
+    );
+    nub.position.y = H * 0.5 + 0.036;
+    nub.castShadow = true;
+    g.add(nub);
+    const nubTop = new THREE.Mesh(this.reg(new THREE.CircleGeometry(0.082, 24)), steelMat);
+    nubTop.rotation.x = -Math.PI / 2;
+    nubTop.position.y = H * 0.5 + 0.0725;
+    g.add(nubTop);
+
+    // Faint charge halo, so the battery reads as "full" at a glance.
+    const halo = new THREE.Sprite(this.regM(new THREE.SpriteMaterial({
+      map: this.glowTexture!,
+      color: 0x7fffd0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.34,
+    })));
+    halo.scale.setScalar(1.15);
+    g.add(halo);
+
+    return g;
+  }
+
+  // -------------------------------------------------------------------------
+  // NINJA  (replaces Boo — steals an item from another racer)
+  // -------------------------------------------------------------------------
+
+  /**
+   * A hooded bust dissolving into a smoke skirt, with a glowing eye slit and a
+   * shuriken held at the shoulder.
+   *
+   * It inherits Boo's job of floating and fading (`ItemSystem` drives
+   * `setKartAlpha` while the cloak is up), so the body is still a lathe with
+   * `wavySkirt()` displacing the hem — smoke, now, instead of a ghost's tail.
+   *
+   * Icon-scale legibility is carried by the eye slit and the shuriken. A hooded
+   * head alone reads as a generic blob at 32 px; a hooded head plus a four-point
+   * throwing star reads as "ninja" immediately.
+   */
+  private buildNinja(): THREE.Group {
+    const g = new THREE.Group();
+
+    // --- hood + shoulders ---------------------------------------------------
+    const pts: THREE.Vector2[] = [];
+    const N = 20;
+    for (let i = 0; i <= N; i++) {
+      // Slightly ovoid crown that flares as it descends into the shoulders.
+      const a = (i / N) * Math.PI * 0.60;
+      pts.push(new THREE.Vector2(
+        Math.max(0.0006, 0.40 * Math.sin(a) * (1 + a * 0.16)),
+        0.46 * Math.cos(a),
+      ));
+    }
+    pts.push(new THREE.Vector2(0.475, -0.16));
+    pts.push(new THREE.Vector2(0.455, -0.30));
+    pts.push(new THREE.Vector2(0.385, -0.39));
+    pts.push(new THREE.Vector2(0.195, -0.425));
+    pts.push(new THREE.Vector2(0.0006, -0.43));
+    const geo = this.reg(lathe(pts, 52));
+    wavySkirt(geo, pts.length, 0.075, 7);
+
+    const cloth = (u: number, v: number): number =>
+      // Twill weave: two crossing high-frequency waves, plus soft folds.
+      0.5
+      + Math.sin((u * 130 + v * 90)) * 0.020
+      + Math.sin((u * 130 - v * 90)) * 0.020
+      + ringNoise(u, v * 0.8, 7, 4) * 0.11;
+
+    const cIndigo = new THREE.Color(0x1b2036);
+    const cIndigoLit = new THREE.Color(0x414d7a);
+    // 256, not 512: the weave is deliberately high-frequency, so a bigger map
+    // buys aliasing rather than detail — and this is a boot-time cost.
+    const clothTex = this.regT(pixelTexture(256, (u, v, o) => {
+      const lit = clamp01(0.20 + Math.pow(Math.sin(u * Math.PI), 0.6) * 0.95);
+      const c = cIndigo.clone().lerp(cIndigoLit, lit);
+      // The hem fades to charcoal smoke.
+      c.lerp(new THREE.Color(0x0c0e16), smoothstep((v - 0.66) / 0.34) * 0.85);
+      const n = cloth(u, v);
+      c.offsetHSL(0, 0.02, (n - 0.5) * 0.30);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const clothNrm = this.regT(normalFromHeight(256, cloth, 2.2));
+    const mat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: clothTex,
+      normalMap: clothNrm,
+      normalScale: new THREE.Vector2(1.0, 1.0),
+      roughness: 0.62,
       metalness: 0.0,
-      sheen: 0.6,
-      sheenColor: new THREE.Color(0xfff4e2),
-      transmission: 0.06,
-      thickness: 0.3,
+      sheen: 1.0,
+      sheenColor: new THREE.Color(0x6f86d8),
+      sheenRoughness: 0.35,
+      clearcoat: 0.18,
+      transparent: true,
+      opacity: 0.97,
+      side: THREE.DoubleSide,
+      envMapIntensity: 1.05,
+    }));
+    const body = new THREE.Mesh(geo, mat);
+    body.castShadow = true;
+    g.add(body);
+
+    // --- eye band -----------------------------------------------------------
+    // A shallow spherical cap in front of the hood, dark, with two lit eyes.
+    const bandMat = this.regM(new THREE.MeshPhysicalMaterial({
+      color: 0x0a0c14, roughness: 0.42, metalness: 0.0, clearcoat: 0.5,
+    }));
+    const band = new THREE.Mesh(
+      this.reg(new THREE.SphereGeometry(0.385, 30, 12, 0, Math.PI * 2, Math.PI * 0.34, Math.PI * 0.20)),
+      bandMat,
+    );
+    band.position.y = 0.045;
+    g.add(band);
+
+    const eyeMat = this.regM(new THREE.MeshBasicMaterial({ color: 0xfff0c4 }));
+    const eyeGeo = this.reg(new THREE.SphereGeometry(0.052, 14, 10));
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Mesh(eyeGeo, eyeMat);
+      // Almond: wide, short, and canted inward for a scowl.
+      eye.scale.set(1.5, 0.62, 0.42);
+      eye.position.set(s * 0.115, 0.075, 0.335);
+      eye.rotation.z = s * 0.30;
+      g.add(eye);
+    }
+    const eyeGlow = new THREE.Sprite(this.regM(new THREE.SpriteMaterial({
+      map: this.glowTexture!,
+      color: 0xffcf6a,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.5,
+    })));
+    eyeGlow.scale.set(0.62, 0.30, 1);
+    eyeGlow.position.set(0, 0.075, 0.40);
+    g.add(eyeGlow);
+
+    // --- scarf tails --------------------------------------------------------
+    const scarfMat = this.regM(new THREE.MeshPhysicalMaterial({
+      color: 0xc0342a,
+      roughness: 0.66,
+      metalness: 0.0,
+      sheen: 0.9,
+      sheenColor: new THREE.Color(0xff8d7a),
+      side: THREE.DoubleSide,
       envMapIntensity: 1.0,
     }));
-    const stem = new THREE.Mesh(this.reg(lathe(stemPts, 48)), stemMat);
-    stem.castShadow = true;
-    g.add(stem);
+    for (const s of [-1, 1]) {
+      const c = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(s * 0.24, 0.02, 0.18),
+        new THREE.Vector3(s * 0.36, -0.02, -0.10),
+        new THREE.Vector3(s * 0.30, 0.06, -0.36),
+        new THREE.Vector3(s * 0.14, 0.16, -0.54),
+      ]);
+      const tail = new THREE.Mesh(
+        this.reg(sweep(c, 20, 8, (t) => 0.052 * (1 - t * 0.55), 0.42)),
+        scarfMat,
+      );
+      tail.castShadow = true;
+      g.add(tail);
+    }
+    // Knot across the throat.
+    const knot = new THREE.Mesh(
+      this.reg(new THREE.TorusGeometry(0.20, 0.045, 10, 26, Math.PI * 1.15)),
+      scarfMat,
+    );
+    knot.position.set(0, -0.055, 0.10);
+    knot.rotation.set(Math.PI * 0.42, 0, Math.PI * 0.92);
+    g.add(knot);
 
-    this.addEyes(g, 0.052, new THREE.Vector3(0, -0.10, 0.245), 0.10, false);
+    // --- shuriken -----------------------------------------------------------
+    const starGeo = this.reg(new THREE.ExtrudeGeometry(starShape(4, 0.155, 0.048, 0.10), {
+      depth: 0.022, bevelEnabled: true, bevelSize: 0.010,
+      bevelThickness: 0.008, bevelSegments: 2, curveSegments: 6,
+    }));
+    starGeo.center();
+    starGeo.computeVertexNormals();
+    const steelTex = this.regT(pixelTexture(128, (u, v, o) => {
+      const c = new THREE.Color(0xb9c2d2).lerp(new THREE.Color(0x5d6675), Math.abs(v - 0.5) * 1.3);
+      const streak = ringNoise(u, v * 0.2, 34, 2);
+      c.offsetHSL(0, 0, (streak - 0.5) * 0.12);
+      o.r = Math.round(clamp01(c.r) * 255);
+      o.g = Math.round(clamp01(c.g) * 255);
+      o.b = Math.round(clamp01(c.b) * 255);
+    }));
+    const steelMat = this.regM(new THREE.MeshPhysicalMaterial({
+      map: steelTex,
+      roughness: 0.16,
+      metalness: 0.98,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.08,
+      envMapIntensity: 1.6,
+    }));
+    this.trackMetal(steelMat, 0.98, 0.38);
+    const shuriken = new THREE.Mesh(starGeo, steelMat);
+    shuriken.position.set(0.40, -0.10, 0.20);
+    shuriken.rotation.set(0.35, -0.45, 0.25);
+    shuriken.castShadow = true;
+    g.add(shuriken);
+
     return g;
   }
 
@@ -1084,45 +1691,6 @@ export class ItemModels {
     g.add(halo);
 
     this.addEyes(g, 0.055, new THREE.Vector3(0, 0.02, 0.185), 0.115, false);
-    return g;
-  }
-
-  // -------------------------------------------------------------------------
-  // LIGHTNING
-  // -------------------------------------------------------------------------
-
-  private buildLightning(): THREE.Group {
-    const g = new THREE.Group();
-    const geo = this.reg(new THREE.ExtrudeGeometry(boltShape(0.62), {
-      depth: 0.14,
-      bevelEnabled: true,
-      bevelThickness: 0.055,
-      bevelSize: 0.045,
-      bevelSegments: 3,
-      curveSegments: 2,
-    }));
-    geo.center();
-    geo.computeVertexNormals();
-    const mat = this.regM(new THREE.MeshPhysicalMaterial({
-      color: 0xfff05a,
-      emissive: new THREE.Color(0xffd400),
-      emissiveIntensity: 2.6,
-      roughness: 0.22,
-      metalness: 0.15,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.08,
-      envMapIntensity: 1.3,
-    }));
-    const bolt = new THREE.Mesh(geo, mat);
-    bolt.castShadow = true;
-    g.add(bolt);
-
-    const halo = new THREE.Sprite(this.regM(new THREE.SpriteMaterial({
-      map: this.glowTexture!, color: 0xffe066,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5,
-    })));
-    halo.scale.setScalar(1.8);
-    g.add(halo);
     return g;
   }
 
@@ -1299,131 +1867,6 @@ export class ItemModels {
   }
 
   // -------------------------------------------------------------------------
-  // BOO
-  // -------------------------------------------------------------------------
-
-  private buildGhost(): THREE.Group {
-    const g = new THREE.Group();
-    const pts: THREE.Vector2[] = [];
-    const N = 20;
-    for (let i = 0; i <= N; i++) {
-      const a = (i / N) * Math.PI * 0.62;
-      pts.push(new THREE.Vector2(Math.max(0.0006, 0.46 * Math.sin(a) * (1 + a * 0.10)), 0.44 * Math.cos(a)));
-    }
-    pts.push(new THREE.Vector2(0.50, -0.20));
-    pts.push(new THREE.Vector2(0.47, -0.33));
-    pts.push(new THREE.Vector2(0.40, -0.40));
-    pts.push(new THREE.Vector2(0.20, -0.42));
-    pts.push(new THREE.Vector2(0.0006, -0.42));
-    const geo = this.reg(lathe(pts, 56));
-    wavySkirt(geo, pts.length, 0.085, 7);
-
-    const mat = this.regM(new THREE.MeshPhysicalMaterial({
-      color: 0xf4f8ff,
-      roughness: 0.32,
-      metalness: 0.0,
-      transmission: 0.55,
-      thickness: 0.7,
-      ior: 1.15,
-      transparent: true,
-      opacity: 0.92,
-      clearcoat: 0.6,
-      sheen: 0.9,
-      sheenColor: new THREE.Color(0xbfd8ff),
-      sheenRoughness: 0.4,
-      side: THREE.DoubleSide,
-      envMapIntensity: 1.1,
-      depthWrite: false,
-    }));
-    const body = new THREE.Mesh(geo, mat);
-    g.add(body);
-
-    this.addEyes(g, 0.075, new THREE.Vector3(0, 0.06, 0.40), 0.135, false);
-    const mouthMat = this.regM(new THREE.MeshStandardMaterial({ color: 0x1b1f2c, roughness: 0.7 }));
-    const mouthGeo = this.reg(new THREE.SphereGeometry(0.11, 16, 12));
-    mouthGeo.scale(1.0, 0.62, 0.4);
-    const mouth = new THREE.Mesh(mouthGeo, mouthMat);
-    mouth.position.set(0, -0.11, 0.40);
-    g.add(mouth);
-
-    // Tongue
-    const tongue = new THREE.Mesh(this.reg(new THREE.SphereGeometry(0.055, 12, 8)), this.regM(
-      new THREE.MeshStandardMaterial({ color: 0xff6a8a, roughness: 0.5 })));
-    tongue.scale.set(1, 0.6, 0.5);
-    tongue.position.set(0, -0.14, 0.44);
-    g.add(tongue);
-    return g;
-  }
-
-  // -------------------------------------------------------------------------
-  // SQUID (Blooper)
-  // -------------------------------------------------------------------------
-
-  private buildSquid(): THREE.Group {
-    const g = new THREE.Group();
-    const pts: THREE.Vector2[] = [];
-    const N = 18;
-    for (let i = 0; i <= N; i++) {
-      const a = (i / N) * Math.PI * 0.55;
-      pts.push(new THREE.Vector2(Math.max(0.0006, 0.34 * Math.sin(a)), 0.20 + 0.46 * Math.cos(a)));
-    }
-    pts.push(new THREE.Vector2(0.345, 0.10));
-    pts.push(new THREE.Vector2(0.32, -0.02));
-    pts.push(new THREE.Vector2(0.26, -0.08));
-    pts.push(new THREE.Vector2(0.0006, -0.10));
-
-    const mat = this.regM(new THREE.MeshPhysicalMaterial({
-      color: 0xf2f5fb,
-      roughness: 0.34,
-      metalness: 0.0,
-      clearcoat: 0.85,
-      clearcoatRoughness: 0.2,
-      sheen: 0.8,
-      sheenColor: new THREE.Color(0xa8c4ff),
-      transmission: 0.18,
-      thickness: 0.5,
-      envMapIntensity: 1.1,
-    }));
-    const mantle = new THREE.Mesh(this.reg(lathe(pts, 48)), mat);
-    mantle.castShadow = true;
-    g.add(mantle);
-
-    // Fins
-    const finGeo = this.reg(new THREE.SphereGeometry(0.14, 14, 10));
-    finGeo.scale(1.0, 0.42, 0.55);
-    for (const s of [-1, 1]) {
-      const f = new THREE.Mesh(finGeo, mat);
-      f.position.set(s * 0.30, 0.40, 0);
-      f.rotation.z = s * 0.5;
-      g.add(f);
-    }
-
-    // Tentacles
-    const inkMat = this.regM(new THREE.MeshStandardMaterial({
-      color: 0x1a1e2b, roughness: 0.55, metalness: 0.0,
-    }));
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const r = 0.20;
-      const c = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(Math.cos(a) * r, -0.06, Math.sin(a) * r),
-        new THREE.Vector3(Math.cos(a) * r * 1.45, -0.24, Math.sin(a) * r * 1.45),
-        new THREE.Vector3(Math.cos(a) * r * 1.15, -0.40, Math.sin(a) * r * 1.15),
-      ]);
-      const t = new THREE.Mesh(this.reg(sweep(c, 14, 8, (k) => 0.052 * (1 - k * 0.72))), mat);
-      g.add(t);
-    }
-
-    this.addEyes(g, 0.085, new THREE.Vector3(0, 0.30, 0.28), 0.135, false);
-    // Ink blob under it, for the icon read
-    const blob = new THREE.Mesh(this.reg(new THREE.SphereGeometry(0.13, 14, 10)), inkMat);
-    blob.scale.set(1.3, 0.7, 1.0);
-    blob.position.set(0.0, -0.38, 0.12);
-    g.add(blob);
-    return g;
-  }
-
-  // -------------------------------------------------------------------------
 
   /** Cartoon eyes: white sclera + dark pupil + a specular catchlight. */
   private addEyes(
@@ -1576,10 +2019,12 @@ export class ItemModels {
     } catch (err) {
       console.warn('[ItemModels] icon atlas bake failed, using flat fallback', err);
       // Fall back to readable coloured chips so the HUD still has something.
+      // Keyed by ItemType. The five live items get their re-skinned key colour:
+      // battery indigo/gold, rocket red, bottle teal, ninja indigo, star yellow.
       const fallback: Record<number, string> = {
-        0: '#ff5a3c', 1: '#ff5a3c', 2: '#2fbf3f', 3: '#2fbf3f', 4: '#e8302a', 5: '#e8302a',
-        6: '#f7d23a', 7: '#f7d23a', 8: '#1b1f28', 9: '#ffe14a', 10: '#fff05a', 11: '#e8eeff',
-        12: '#8b93a5', 13: '#2b6fe8', 14: '#ffc422', 15: '#5b6ee8',
+        0: '#2a3358', 1: '#2a3358', 2: '#2fbf3f', 3: '#2fbf3f', 4: '#e33a26', 5: '#e33a26',
+        6: '#0f9d8c', 7: '#0f9d8c', 8: '#1b1f28', 9: '#ffe14a', 10: '#2a3358', 11: '#2b3358',
+        12: '#8b93a5', 13: '#2b6fe8', 14: '#ffc422', 15: '#0f9d8c',
       };
       for (let i = 0; i < 16; i++) {
         const col = i % ATLAS_COLS, row = Math.floor(i / ATLAS_COLS);
@@ -1631,7 +2076,23 @@ export class ItemModels {
     return s;
   }
 
-  /** Icon subject: triples show three copies fanned out, like MK8's HUD. */
+  /**
+   * Icon subject, posed for the 3/4 studio camera at `(0.52, 0.42, 0.86)`.
+   *
+   * The atlas cell is 256 px and the HUD draws it far smaller, so each of the
+   * P0d-D5 re-skins is turned to the angle where its silhouette is widest:
+   *
+   *  - ROCKET: stood on end and leaned back, so nose, body band and all three
+   *    fins are visible. Left lying along -Z it presents as a circle.
+   *  - BOTTLE: stood upright for the icon (it lies down only on the road), with
+   *    a quarter turn so the label's droplet mark faces the key light.
+   *  - BATTERY: leaned toward the camera so the +nub breaks the top edge and the
+   *    bolt sits square on.
+   *  - NINJA: turned a few degrees off axis so the shuriken clears the hood.
+   *
+   * `TRIPLE_ITEMS` is empty now, so the fan-out branch is dead in a race; it
+   * stays for a triple forced through `grantItem()`.
+   */
   private buildIconSubject(item: ItemType): THREE.Object3D {
     const g = new THREE.Group();
     const id = MODEL_FOR_ITEM[item];
@@ -1648,6 +2109,17 @@ export class ItemModels {
       const m = this.create(id);
       if (item === ItemType.Coin) m.rotation.set(Math.PI / 2, 0, 0.35);
       if (item === ItemType.Bullet) m.rotation.y = Math.PI * 0.86;
+      if (id === 'rocket') {
+        // Nose is down -Z: rotate +X by -80 deg to stand it up, then yaw so a fin
+        // faces the camera rather than hiding edge-on.
+        m.rotation.set(-Math.PI * 0.44, Math.PI * 0.18, 0.10);
+      }
+      if (id === 'bottle') {
+        // Undo the lie-down so the icon shows a standing bottle.
+        m.rotation.set(0, Math.PI * 0.12, -Math.PI / 2);
+      }
+      if (id === 'battery') m.rotation.set(-0.16, Math.PI * 0.02, 0.10);
+      if (id === 'ninja') m.rotation.set(0.05, -Math.PI * 0.10, 0);
       if (item === ItemType.Lightning) m.rotation.set(0, 0.25, 0.12);
       if (item === ItemType.Star) m.rotation.set(0, 0.15, 0);
       g.add(m);

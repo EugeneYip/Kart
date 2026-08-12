@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  APEX KART — ITEM ROULETTE
+ *  FOXY KART — ITEM ROULETTE
  * ============================================================================
  *  Two things live here:
  *
@@ -14,6 +14,29 @@
  *      `getDisplay()` every frame; gameplay reads `getResult()` once locked.
  *
  *  Zero allocation after construction.
+ *
+ *  ---------------------------------------------------------------------------
+ *  P0d-D5 — THE ITEM SET IS FIVE ITEMS, DELIBERATELY.
+ *
+ *  The set was sixteen `ItemType` values across seven families with a ×1 and a
+ *  ×3 tier for three of them. It is now five, one tier each:
+ *
+ *      ROCKET          homes on the kart ahead      (ItemType.RedShell)
+ *      PLASTIC BOTTLE  small obstacle               (ItemType.Banana)
+ *      BATTERY         speed boost                  (ItemType.Boost)
+ *      NINJA           steals an item               (ItemType.Ghost)
+ *      STAR            immune to everything         (ItemType.Star)
+ *
+ *  The `ItemType` enum lives in `src/core/Types.ts`, which this agent may not
+ *  edit, so the five survivors are addressed by their existing enum members
+ *  (given in brackets above). Every other member — the triples, green shell,
+ *  bob-omb, blue shell, coin, bullet, ink and lightning — has a weight of zero
+ *  in every row and is therefore unreachable through a box. `grantItem()` can
+ *  still hand one over for the dev harness and cheats, and `ItemSystem.use()`
+ *  still knows what to do with it; nothing in a race will ever produce one.
+ *
+ *  Ink and Lightning are gone as *design*, not merely down-weighted: see the
+ *  note on orphaned VFX/audio in ItemSystem.
  * ============================================================================
  */
 
@@ -24,6 +47,18 @@ export const ITEM_COUNT = 16;
 /** Table is authored for a full 12-kart grid. */
 export const TABLE_SLOTS = 12;
 
+/**
+ * The live set, in HUD/roulette reading order. Anything not in here has weight
+ * zero everywhere. Exported so tooling can assert the set rather than guess it.
+ */
+export const LIVE_ITEMS: readonly ItemType[] = [
+  ItemType.Banana,   // Plastic Bottle
+  ItemType.Boost,    // Battery
+  ItemType.RedShell, // Rocket
+  ItemType.Ghost,    // Ninja
+  ItemType.Star,     // Star
+];
+
 // ---------------------------------------------------------------------------
 // Authored weights
 // ---------------------------------------------------------------------------
@@ -32,74 +67,54 @@ type Row = ReadonlyArray<readonly [ItemType, number]>;
 
 /**
  * Weights per grid position (index 0 = 1st place ... index 11 = 12th).
- * Values are relative; they get normalised at build time.
+ * Values are relative; they get normalised at build time. Every row here is
+ * authored to sum to 100 so it can be read as a percentage at a glance.
  *
- * Reading this table top to bottom you should see:
- *   coins/bananas/green shells fade out, mushrooms peak mid-pack,
- *   red shells peak around 4th-7th, and star/bullet/lightning only appear
- *   deep in the field.
+ * Reading the table top to bottom you should see the classic shape, now with a
+ * much shorter cast: the bottle (junk you drop behind you) collapses from 62 %
+ * to 2 %, the battery is a steady mid-tier everywhere, the rocket peaks around
+ * 5th–7th where there is someone in range to shoot, and the ninja and star only
+ * turn up once you are genuinely behind.
+ *
+ * With five items the leader must NOT be able to draw a rocket often: at 8 % it
+ * is a rare treat, not a tool. That single number is what stops the front of the
+ * field snowballing.
  */
 const ROWS: readonly Row[] = [
-  // 1st — pure defence.
-  [[ItemType.Coin, 40], [ItemType.Banana, 26], [ItemType.GreenShell, 20],
-   [ItemType.TripleBanana, 7], [ItemType.TripleGreenShell, 5], [ItemType.Boost, 2]],
+  // 1st — defence only. Bottle to guard your back, battery to hold the gap.
+  [[ItemType.Banana, 62], [ItemType.Boost, 30], [ItemType.RedShell, 8]],
   // 2nd
-  [[ItemType.Coin, 30], [ItemType.Banana, 22], [ItemType.GreenShell, 21],
-   [ItemType.TripleBanana, 8], [ItemType.TripleGreenShell, 7], [ItemType.Boost, 7],
-   [ItemType.RedShell, 5]],
-  // 3rd
-  [[ItemType.Coin, 20], [ItemType.Banana, 17], [ItemType.GreenShell, 17],
-   [ItemType.RedShell, 14], [ItemType.Boost, 12], [ItemType.TripleBanana, 8],
-   [ItemType.TripleGreenShell, 7], [ItemType.Bomb, 5]],
-  // 4th — blue shell unlocks here.
-  [[ItemType.Coin, 12], [ItemType.Banana, 13], [ItemType.GreenShell, 13],
-   [ItemType.RedShell, 18], [ItemType.Boost, 14], [ItemType.TripleGreenShell, 8],
-   [ItemType.TripleBanana, 6], [ItemType.Bomb, 7], [ItemType.Squid, 4],
-   [ItemType.Ghost, 3], [ItemType.BlueShell, 2]],
+  [[ItemType.Banana, 54], [ItemType.Boost, 33], [ItemType.RedShell, 13]],
+  // 3rd — ninja unlocks here.
+  [[ItemType.Banana, 44], [ItemType.Boost, 34], [ItemType.RedShell, 20],
+   [ItemType.Ghost, 2]],
+  // 4th
+  [[ItemType.Banana, 34], [ItemType.Boost, 34], [ItemType.RedShell, 26],
+   [ItemType.Ghost, 6]],
   // 5th
-  [[ItemType.Coin, 8], [ItemType.Banana, 10], [ItemType.GreenShell, 10],
-   [ItemType.RedShell, 18], [ItemType.Boost, 15], [ItemType.TripleBoost, 5],
-   [ItemType.TripleRedShell, 4], [ItemType.TripleGreenShell, 6], [ItemType.Bomb, 8],
-   [ItemType.Squid, 6], [ItemType.Ghost, 4], [ItemType.BlueShell, 4]],
-  // 6th — star + bullet unlock here.
-  [[ItemType.Coin, 5], [ItemType.Banana, 7], [ItemType.GreenShell, 7],
-   [ItemType.RedShell, 16], [ItemType.Boost, 15], [ItemType.TripleBoost, 7],
-   [ItemType.TripleRedShell, 6], [ItemType.TripleGreenShell, 5], [ItemType.Bomb, 8],
-   [ItemType.Squid, 7], [ItemType.Ghost, 5], [ItemType.BlueShell, 5],
-   [ItemType.Star, 5], [ItemType.Bullet, 2]],
+  [[ItemType.Banana, 26], [ItemType.Boost, 33], [ItemType.RedShell, 30],
+   [ItemType.Ghost, 11]],
+  // 6th — star unlocks here.
+  [[ItemType.Banana, 19], [ItemType.Boost, 31], [ItemType.RedShell, 31],
+   [ItemType.Ghost, 13], [ItemType.Star, 6]],
   // 7th
-  [[ItemType.Coin, 3], [ItemType.Banana, 5], [ItemType.GreenShell, 5],
-   [ItemType.RedShell, 13], [ItemType.Boost, 14], [ItemType.TripleBoost, 10],
-   [ItemType.TripleRedShell, 7], [ItemType.TripleGreenShell, 4], [ItemType.Bomb, 7],
-   [ItemType.Squid, 7], [ItemType.Ghost, 6], [ItemType.BlueShell, 6],
-   [ItemType.Star, 8], [ItemType.Bullet, 3], [ItemType.Lightning, 2]],
+  [[ItemType.Banana, 14], [ItemType.Boost, 29], [ItemType.RedShell, 30],
+   [ItemType.Ghost, 15], [ItemType.Star, 12]],
   // 8th
-  [[ItemType.Banana, 3], [ItemType.GreenShell, 3], [ItemType.RedShell, 10],
-   [ItemType.Boost, 13], [ItemType.TripleBoost, 12], [ItemType.TripleRedShell, 8],
-   [ItemType.Bomb, 6], [ItemType.Squid, 6], [ItemType.Ghost, 7],
-   [ItemType.BlueShell, 6], [ItemType.Star, 11], [ItemType.Bullet, 6],
-   [ItemType.Lightning, 5]],
+  [[ItemType.Banana, 10], [ItemType.Boost, 27], [ItemType.RedShell, 28],
+   [ItemType.Ghost, 17], [ItemType.Star, 18]],
   // 9th
-  [[ItemType.Banana, 2], [ItemType.GreenShell, 2], [ItemType.RedShell, 8],
-   [ItemType.Boost, 12], [ItemType.TripleBoost, 14], [ItemType.TripleRedShell, 9],
-   [ItemType.Bomb, 5], [ItemType.Squid, 5], [ItemType.Ghost, 7],
-   [ItemType.BlueShell, 5], [ItemType.Star, 13], [ItemType.Bullet, 10],
-   [ItemType.Lightning, 8]],
+  [[ItemType.Banana, 7], [ItemType.Boost, 25], [ItemType.RedShell, 25],
+   [ItemType.Ghost, 19], [ItemType.Star, 24]],
   // 10th
-  [[ItemType.RedShell, 6], [ItemType.Boost, 11], [ItemType.TripleBoost, 16],
-   [ItemType.TripleRedShell, 9], [ItemType.Bomb, 4], [ItemType.Squid, 4],
-   [ItemType.Ghost, 6], [ItemType.BlueShell, 4], [ItemType.Star, 15],
-   [ItemType.Bullet, 14], [ItemType.Lightning, 11]],
+  [[ItemType.Banana, 5], [ItemType.Boost, 23], [ItemType.RedShell, 22],
+   [ItemType.Ghost, 20], [ItemType.Star, 30]],
   // 11th
-  [[ItemType.RedShell, 4], [ItemType.Boost, 10], [ItemType.TripleBoost, 17],
-   [ItemType.TripleRedShell, 8], [ItemType.Bomb, 3], [ItemType.Squid, 3],
-   [ItemType.Ghost, 6], [ItemType.BlueShell, 3], [ItemType.Star, 17],
-   [ItemType.Bullet, 17], [ItemType.Lightning, 12]],
+  [[ItemType.Banana, 3], [ItemType.Boost, 21], [ItemType.RedShell, 19],
+   [ItemType.Ghost, 21], [ItemType.Star, 36]],
   // 12th — desperation.
-  [[ItemType.RedShell, 3], [ItemType.Boost, 9], [ItemType.TripleBoost, 18],
-   [ItemType.TripleRedShell, 7], [ItemType.Bomb, 2], [ItemType.Squid, 2],
-   [ItemType.Ghost, 5], [ItemType.BlueShell, 2], [ItemType.Star, 18],
-   [ItemType.Bullet, 21], [ItemType.Lightning, 13]],
+  [[ItemType.Banana, 2], [ItemType.Boost, 19], [ItemType.RedShell, 16],
+   [ItemType.Ghost, 21], [ItemType.Star, 42]],
 ];
 
 /** Row-major [slot * ITEM_COUNT + item], each row normalised to sum 1. */
@@ -120,34 +135,29 @@ export function tableRow(slot: number): Float64Array {
 // Availability rules layered on top of the table
 // ---------------------------------------------------------------------------
 
-/** Earliest position (1-based, projected onto a 12-kart field) per item. */
+/**
+ * Earliest position (1-based, projected onto a 12-kart field) per item.
+ *
+ * A hard floor on top of the weights, so interpolating between rows for a
+ * short field can never leak a star to 5th on an 8-kart grid.
+ */
 const MIN_SLOT: Partial<Record<ItemType, number>> = {
-  [ItemType.BlueShell]: 4,
+  [ItemType.Ghost]: 3,
   [ItemType.Star]: 6,
-  [ItemType.Bullet]: 6,
-  [ItemType.Lightning]: 7,
 };
 
-/** Latest position an item may appear at — keeps the leader honest. */
-const MAX_SLOT: Partial<Record<ItemType, number>> = {
-  [ItemType.Coin]: 8,
-};
-
-export const LIGHTNING_COOLDOWN = 22.0;
+/**
+ * Global cooldown on the blue shell, seconds.
+ *
+ * Kept because `ItemSystem.use()` still services a blue shell handed over by
+ * `grantItem()` (dev harness / cheats). The roulette can no longer produce one.
+ */
 export const BLUE_SHELL_COOLDOWN = 9.0;
 
 export interface RollContext {
   /** 1-based race position. */
   position: number;
   totalKarts: number;
-  /** 0 = final lap. Used to suppress bullets on the run to the line. */
-  lapsRemaining: number;
-  /** False while the global lightning cooldown is ticking. */
-  lightningReady: boolean;
-  blueShellReady: boolean;
-  /** Only one bullet / blue shell may exist at a time. */
-  bulletInPlay: boolean;
-  blueShellInPlay: boolean;
   /** Uniform [0,1). */
   rand: () => number;
 }
@@ -178,23 +188,15 @@ export function virtualSlot(position: number, totalKarts: number): number {
   return 1 + ((p - 1) * (TABLE_SLOTS - 1)) / (total - 1);
 }
 
-/** Draw one item. Never returns null — falls back to a banana. */
+/** Draw one item. Never returns null — falls back to the Plastic Bottle. */
 export function rollItem(ctx: RollContext): ItemType {
   weightsFor(ctx.position, ctx.totalKarts, scratchW);
   const vs = virtualSlot(ctx.position, ctx.totalKarts);
 
   for (let i = 0; i < ITEM_COUNT; i++) {
     if (scratchW[i] <= 0) continue;
-    const item = i as ItemType;
-    const min = MIN_SLOT[item];
-    if (min !== undefined && vs < min - 0.001) { scratchW[i] = 0; continue; }
-    const max = MAX_SLOT[item];
-    if (max !== undefined && vs > max + 0.001) { scratchW[i] = 0; continue; }
-    if (item === ItemType.Lightning && !ctx.lightningReady) { scratchW[i] = 0; continue; }
-    if (item === ItemType.BlueShell && (!ctx.blueShellReady || ctx.blueShellInPlay)) { scratchW[i] = 0; continue; }
-    if (item === ItemType.Bullet && ctx.bulletInPlay) { scratchW[i] = 0; continue; }
-    // A bullet on the final straight is a guaranteed win — tone it down.
-    if (item === ItemType.Bullet && ctx.lapsRemaining <= 0) scratchW[i] *= 0.35;
+    const min = MIN_SLOT[i as ItemType];
+    if (min !== undefined && vs < min - 0.001) scratchW[i] = 0;
   }
 
   let sum = 0;
@@ -209,7 +211,13 @@ export function rollItem(ctx: RollContext): ItemType {
   return ItemType.Banana;
 }
 
-/** How many uses a granted item is worth. */
+/**
+ * How many uses a granted item is worth.
+ *
+ * Always 1 now: there are no tiered items. The function stays because the triple
+ * `ItemType` members still exist in the enum and `grantItem()` can be handed one
+ * — a triple granted by hand still behaves like a triple.
+ */
 export function itemUses(item: ItemType): number {
   switch (item) {
     case ItemType.TripleBoost:
@@ -230,12 +238,16 @@ export const ROULETTE_DURATION = 1.1;
 /** Hurrying still leaves enough spin to read the deceleration. */
 export const ROULETTE_MIN_REMAINING = 0.24;
 
-/** Order the slot cycles through — deliberately mixed so it reads as random. */
+/**
+ * Order the slot cycles through — deliberately mixed so it reads as random.
+ *
+ * Only the five live items appear: a slot that flashes a lightning bolt you can
+ * never win is a lie to the player. Eight entries over five items so the cycle
+ * is not obviously short at the slow end of the ratchet.
+ */
 const SPIN_ORDER: readonly ItemType[] = [
-  ItemType.Banana, ItemType.GreenShell, ItemType.Boost, ItemType.RedShell,
-  ItemType.Bomb, ItemType.TripleBanana, ItemType.Star, ItemType.Coin,
-  ItemType.TripleGreenShell, ItemType.Squid, ItemType.Lightning, ItemType.TripleBoost,
-  ItemType.Ghost, ItemType.TripleRedShell, ItemType.Bullet, ItemType.BlueShell,
+  ItemType.Banana, ItemType.Boost, ItemType.RedShell, ItemType.Star,
+  ItemType.Ghost, ItemType.Boost, ItemType.Banana, ItemType.RedShell,
 ];
 
 interface Slot {

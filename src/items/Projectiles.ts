@@ -101,8 +101,21 @@ const LIFE: Record<ProjKind, number> = {
 };
 
 const RADIUS: Record<ProjKind, number> = {
-  green: 0.52, red: 0.52, blue: 0.62, banana: 0.46, bomb: 0.40,
+  // P0d-D5: the Plastic Bottle is explicitly a *small* obstacle, so its contact
+  // radius drops from the banana's 0.46 to 0.34 — a 24 cm narrower hit box on
+  // each side, which is the difference between clipping it and threading past.
+  green: 0.52, red: 0.52, blue: 0.62, banana: 0.34, bomb: 0.40,
 };
+
+/**
+ * Height of a settled Plastic Bottle's centre above the road, metres.
+ *
+ * The model lies on its side with its origin on its own axis, so this is just
+ * the bottle's radius. It used to be derived as `radius * 0.42` from the contact
+ * radius, which coupled the hit box to the visual seating for no reason — and
+ * would have floated the bottle 5 cm off the tarmac after the radius change.
+ */
+const BOTTLE_REST = 0.145;
 
 const KART_RADIUS = 1.05;
 const MAX_WALL_BOUNCES = 5;
@@ -167,6 +180,8 @@ const _n = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
+/** Project-wide forward axis (AGENTS §2) — the rocket's nose points down this. */
+const _negZ = new THREE.Vector3(0, 0, -1);
 const _samplePos = new THREE.Vector3();
 const _sampleBi = new THREE.Vector3();
 const _sampleUp = new THREE.Vector3();
@@ -238,7 +253,15 @@ export class Projectiles {
         node.visible = false;
         node.traverse((o) => {
           const m = o as THREE.Mesh;
-          if (m.isMesh) { m.castShadow = true; m.receiveShadow = false; }
+          if (!m.isMesh) return;
+          // Additive parts are LIGHT, not matter. Blanket `castShadow = true`
+          // would have the Rocket's exhaust plume cast a solid black cone across
+          // the road behind it — the depth pass does not care that the material
+          // is additive and unlit.
+          const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+          const additive = !!mat && mat.blending === THREE.AdditiveBlending;
+          m.castShadow = !additive;
+          m.receiveShadow = false;
         });
         this.group.add(node);
         const spark = node.getObjectByName(PART.fuseSpark);
@@ -780,7 +803,7 @@ export class Projectiles {
     const g = this.ground(p.pos, p.up);
     if (g) {
       _n.set(g.nx, g.ny, g.nz).normalize();
-      const floor = g.y + p.radius * 0.42;
+      const floor = g.y + BOTTLE_REST;
       if (p.pos.y <= floor) {
         p.pos.y = floor;
         const vn = p.vel.dot(_n);
@@ -1098,8 +1121,7 @@ export class Projectiles {
       p.node.position.copy(p.pos);
 
       switch (p.kind) {
-        case 'green':
-        case 'red': {
+        case 'green': {
           // Spin about the surface normal, tilted into the direction of travel.
           _a.copy(p.vel);
           _a.y = 0;
@@ -1110,6 +1132,31 @@ export class Projectiles {
           p.node.rotateY(p.spin);
           // Lean into the turn a touch — the shells look driven, not sliding.
           p.node.rotateOnAxis(_a, Math.sin(p.spin * 0.5) * 0.06);
+          break;
+        }
+        case 'red': {
+          /**
+           * P0d-D5: the Rocket flies NOSE-FIRST.
+           *
+           * This used to share the green shell's branch, which spins the node
+           * about its own +Y — correct for a shell, absurd for a rocket (it read
+           * as a helicopter blade). The rocket model is built with its nose down
+           * -Z, so we build a basis from the velocity and roll slowly about the
+           * body axis instead.
+           */
+          _a.copy(p.vel);
+          if (_a.lengthSq() < 1e-6) _a.set(0, 0, -1);
+          _a.normalize();
+          // -Z must land on the direction of travel.
+          _q.setFromUnitVectors(_negZ, _a);
+          p.node.quaternion.copy(_q);
+          p.node.rotateZ(p.spin * 0.28);
+          // Flame flicker, and a little swell as the rocket accelerates.
+          const fl = p.node.getObjectByName(PART.rocketFlame);
+          if (fl) {
+            const f = 0.82 + Math.abs(Math.sin(elapsed * 31 + p.id)) * 0.34;
+            fl.scale.set(0.9 + f * 0.16, f, 0.9 + f * 0.16);
+          }
           break;
         }
         case 'blue': {

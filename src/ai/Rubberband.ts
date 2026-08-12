@@ -35,15 +35,20 @@ export const RUBBERBAND = {
 
   /** Hard clamps on the speed multiplier. Never widen these. */
   speedMulMin: 0.94,
-  speedMulMax: 1.07,
+  speedMulMax: 1.05,
 
   // ---- behind the player -------------------------------------------------
   /** Metres of gap inside which nothing at all happens. */
   behindDeadZone: 25,
   /** Metres behind at which the behind-effect saturates. */
   behindFullDistance: 300,
-  /** Speed multiplier at full saturation. */
-  behindSpeedMul: 1.07,
+  /**
+   * Speed multiplier at full saturation. Trimmed 1.07 → 1.05 in D2: the pace
+   * ladder now supplies the field's spread, so the band does not need to supply
+   * pace as well, and every point of speed the band adds is a point that could
+   * be noticed. The risk term below is the part that should be doing the work.
+   */
+  behindSpeedMul: 1.05,
   /** Extra risk appetite at full saturation, 0..1. This is the real lever. */
   behindRiskMax: 1.0,
   /** Extra aggression at full saturation, 0..1. */
@@ -54,11 +59,20 @@ export const RUBBERBAND = {
   aheadDeadZone: 85,
   /** Metres of lead at which the ahead-effect saturates. */
   aheadFullDistance: 380,
-  /** Speed multiplier at full saturation. */
+  /** Speed multiplier at full saturation, for the actual front runners. */
   aheadSpeedMul: 0.955,
+  /**
+   * Speed multiplier at full saturation for everybody ELSE who is a long way up
+   * the road. D2: the band used to touch only the top three, so a player knocked
+   * from 3rd to 11th had eight karts ahead that never eased off *and* the karts
+   * behind receiving up to +7 % — the band was actively closing the lane it is
+   * supposed to open. A racer 85 m up the road is off the player's screen, so a
+   * 2.5 % easement there cannot be seen; what it buys is a way back.
+   */
+  aheadFieldSpeedMul: 0.975,
   /** Risk reduction at full saturation (negative = plays it safe). */
   aheadRiskMin: -0.4,
-  /** Only karts in the top N positions are ever slowed. */
+  /** Karts in the top N positions get the full `aheadSpeedMul`. */
   leaderPositions: 3,
 
   /** Half-life of the smoothing applied to both outputs, seconds.
@@ -72,7 +86,7 @@ export const RUBBERBAND = {
    *  player so it stays in the mirror all race. */
   rivalDeadZone: 12,
   rivalFullDistance: 150,
-  rivalSpeedMulMax: 1.06,
+  rivalSpeedMulMax: 1.045,
   rivalSpeedMulMin: 0.95,
 } as const;
 
@@ -234,17 +248,18 @@ export class Rubberband {
         targetSpeed = 1 + (RUBBERBAND.behindSpeedMul - 1) * x;
         targetRisk = RUBBERBAND.behindRiskMax * x;
         aggression = RUBBERBAND.behindAggressionMax * x;
-      } else if (
-        gapMetres > RUBBERBAND.aheadDeadZone &&
-        racePosition <= RUBBERBAND.leaderPositions
-      ) {
-        // Ahead and leading: a whisper of a slowdown so the pack stays on TV.
+      } else if (gapMetres > RUBBERBAND.aheadDeadZone) {
+        // Ahead and out of sight: a whisper of a slowdown so the pack stays on
+        // TV and a knocked-back player has something to aim at. Front runners
+        // ease off slightly more than the rest of the field.
         const x = smoothstep(
           (gapMetres - RUBBERBAND.aheadDeadZone) /
             Math.max(1, RUBBERBAND.aheadFullDistance - RUBBERBAND.aheadDeadZone),
         );
-        targetSpeed = 1 + (RUBBERBAND.aheadSpeedMul - 1) * x;
-        targetRisk = RUBBERBAND.aheadRiskMin * x;
+        const leading = racePosition <= RUBBERBAND.leaderPositions;
+        const mul = leading ? RUBBERBAND.aheadSpeedMul : RUBBERBAND.aheadFieldSpeedMul;
+        targetSpeed = 1 + (mul - 1) * x;
+        targetRisk = RUBBERBAND.aheadRiskMin * x * (leading ? 1 : 0.6);
       }
     }
 

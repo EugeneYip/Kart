@@ -44,7 +44,9 @@ import {
 } from './RacingLine';
 import {
   ErrorModel,
+  NEUTRAL_FORM,
   blendSkill,
+  type DriverForm,
   type Personality,
   type PersonalityId,
   type SkillProfile,
@@ -94,10 +96,102 @@ export const SPEED = {
   targetLead: 0.42,
   /** Extra seconds of lead applied by `brakeMargin`. */
   targetLeadMax: 1.4,
-  /** Cap on brake while drifting — you hold the throttle through a slide. */
-  driftBrakeCap: 0.0,
+  /**
+   * Brake authority while drifting. Was 0 — "you hold the throttle through a
+   * slide" — and that single line was where the pace ladder went to die: the AI
+   * begins its drift ~0.8 s before the corner, i.e. across the whole braking
+   * zone, so with the throttle floored at 0.85 and the brake forbidden, every
+   * kart arrived at every apex at the same grip-limited speed no matter what
+   * speed it had asked for. `paceFactor` could only act on the straights, and
+   * seven of twelve karts lapped within 0.9 s of each other.
+   *
+   * Braking does not cancel a drift (`cancelDrift` only fires on stun, respawn
+   * or an explicit break) and drift charge is a function of steer angle and
+   * speed ratio, not throttle — so a brake-drift still earns its mini-turbo.
+   */
+  driftBrakeCap: 0.3,
+  /** Only brake-drift when this far over the corner target, m/s. */
+  driftBrakeDeadband: 1.2,
+  /** Throttle floor while drifting at or under the target. */
+  driftThrottleFloor: 0.85,
+  /** …and while carrying too much speed for the corner we want. */
+  driftThrottleEase: 0.45,
   /** Off-road: pull the target down so they don't fight the surface. */
   offRoadTargetMul: 0.82,
+  /**
+   * The target speed is capped at the kart's OWN `tuning.maxSpeed` × this before
+   * the pace multiplier is applied, so `paceFactor` scales something the kart can
+   * actually reach. A little headroom keeps the PI controller from sagging under
+   * the cap on a long straight; it cannot make a kart exceed its tuning, because
+   * the physics enforces that separately.
+   *
+   * WHY: without this the AI asked the racing line for 33–37 m/s while its
+   * chassis topped out at 26–32, so the throttle was pinned at 1.0 for 85–95 %
+   * of the lap and every pace/handling/traction difference in the roster was
+   * quantised away. Measured: 10 of 12 karts within 1 s a lap.
+   *
+   * Keep this within a whisker of 1.0. At 1.02 every pace above 0.98 saturated
+   * again and the top four rungs of the ladder collapsed back into one clump.
+   */
+  capHeadroom: 1.005,
+  /**
+   * Corner-speed confidence from the chassis: `base + handling·h + traction·t`,
+   * clamped to `[cornerMin, 1]`. Capped at 1 because the racing line's profile
+   * is already optimistic (30 m/s² of lateral budget) — nobody should be asking
+   * for MORE than it, which is how Pip ended up 19 s per race in the dirt.
+   * A 0.28-handling kart (Blitz) asks ~2.4 % less through a corner than a
+   * 1.0-handling one (Vex), which is the whole "corners like a fridge" archetype.
+   */
+  cornerBase: 0.94,
+  cornerHandling: 0.07,
+  cornerTraction: 0.04,
+  cornerMin: 0.93,
+  /**
+   * How much of the roster's authored top-speed spread the AI drives to.
+   *
+   * `CHARACTER_STATS.speed` spans 0.24–0.95, i.e. 26.4–31.8 m/s — a 20 % band,
+   * which is far wider than any behavioural difference and swamps everything
+   * else: measured, the three high-speed chassis (Blitz, Strata, Torque) lapped
+   * 2.5–3 s clear of the other nine on BOTH circuits, in a group of their own,
+   * every single race, whoever was driving them. That is not a field, it is a
+   * two-tier field, and the lower tier can never rejoin the upper one after a
+   * hit — which is the D2 complaint.
+   *
+   * So a CPU on a quick chassis is asked to cruise part-way between the field
+   * reference and its own ceiling. 0.55 keeps just over half of the authored
+   * spread — Blitz still has the highest top speed on the grid and still pulls
+   * away down a straight — while leaving room for `paceFactor` and `DriverForm`
+   * to decide the order. Slower-than-reference chassis are untouched: the blend
+   * is applied with a `min()` against the kart's own ceiling, so nobody is ever
+   * asked for a speed their tuning cannot produce.
+   */
+  chassisWeight: 0.55,
+  /** Fallback field reference speed, m/s, until AIManager measures the grid. */
+  fieldReference: 28.5,
+} as const;
+
+/**
+ * Who counts as "pressure". Being chased makes a driver crack; chasing does not.
+ */
+export const PRESSURE = {
+  radius: 18,
+  behind: 0.62,
+  alongside: 0.5,
+  ahead: 0.14,
+  /** The human is worth this much more than another CPU. */
+  playerFactor: 1.6,
+} as const;
+
+/** How long a defensive driver may hold a chaser off before it runs out of ideas. */
+export const BLOCK = {
+  /** Lateral metres of cover at full commitment (was an uncapped 2.3). */
+  strength: 1.55,
+  /** Seconds of continuous blocking before the AI gives up the line. */
+  maxSeconds: 2.4,
+  /** …and then leaves the door open for this long. */
+  restSeconds: 2.8,
+  /** Weave amplitude for the `blocker` archetype, metres. */
+  weave: 1.1,
 } as const;
 
 export const DRIFT = {
@@ -127,8 +221,23 @@ export const DRIFT = {
   releaseSeconds: 0.09,
   /** Window in which an opposite-direction corner counts as a chain. */
   chainSeconds: 0.09,
-  /** Bail out of a drift if we are this far outside the road edge. */
-  bailMargin: 0.6,
+  /**
+   * Bail out of a drift with this much road left, metres — plus `bailLead`
+   * seconds of travel, because a sliding kart cannot stop being where it is
+   * going. 0.6 m flat was far too late at 27 m/s: measured, drifting was the
+   * dominant cause of AI incompetence, accounting for 10.1 of the 10.3 seconds
+   * per race each CPU spent off the road (a no-drift control run: 0.2 s), and
+   * the excursions cost 1.6 s a lap — more than the mini-turbos paid back.
+   *
+   * That noise was also the single biggest term in AI lap time, which is why
+   * the field looked "randomly different" rather than "authored different":
+   * with drifting disabled the lap-time range collapsed from 8.0 s to 4.2 s and
+   * what remained tracked the roster's top speeds cleanly.
+   */
+  bailMargin: 1.5,
+  bailLead: 0.055,
+  /** Road needed before starting a drift at all, metres + `bailLead` seconds. */
+  entryMargin: 2.4,
 } as const;
 
 export const AVOID = {
@@ -209,6 +318,28 @@ export function createControl(): AIControl {
   return { steer: 0, accel: 0, brake: 0, drift: false, driftPressed: false };
 }
 
+/**
+ * What the driver knows about the chassis it is sitting in. Supplied by
+ * `AIManager` from `PhysicsWorld.tuningOf()`; defaults describe `nova`, so a
+ * driver whose physics has no tuning query still behaves sanely.
+ *
+ * This exists because the AI used to drive every kart identically: the racing
+ * line's speed profile is a property of the TRACK, and nothing told a 26.4 m/s
+ * Pip that it was not a 31.7 m/s Blitz.
+ */
+export interface ChassisFacts {
+  /** `tuning.maxSpeed`, m/s. */
+  maxSpeed: number;
+  /** 0..1 handling stat. */
+  handling: number;
+  /** 0..1 traction stat. */
+  traction: number;
+}
+
+export function defaultChassis(): ChassisFacts {
+  return { maxSpeed: 28.4, handling: 0.55, traction: 0.55 };
+}
+
 /** A thing on the road the AI should not hit. */
 export interface AIHazard {
   position: THREE.Vector3;
@@ -283,6 +414,14 @@ export interface AIDebugState {
   progress: number;
   lap: number;
   mistake: string;
+  /** `DriverForm.pace` — which rung of this race's pace ladder this racer got. */
+  form: number;
+  /** Lifetime mistake count. */
+  mistakes: number;
+  /** Metres of lateral cover currently being used to defend the line. */
+  blocking: number;
+  /** The cruise ceiling this driver works to, m/s. */
+  speedCap: number;
 }
 
 /** The subset of the item system the AI touches. Resolved at runtime. */
@@ -326,6 +465,23 @@ export class AIDriver {
   private skill: SkillProfile;
   private readonly error: ErrorModel;
   private readonly band: BandOutput = createBandOutput();
+  private form: DriverForm = NEUTRAL_FORM;
+  private ccProfile: SkillProfile;
+  private chassis: ChassisFacts = defaultChassis();
+  /** Cached from `chassis`: what this kart may ask for through a corner. */
+  private cornerAbility = 1;
+  /**
+   * Cached from `chassis` + the field reference: the cruise ceiling, m/s.
+   *
+   * Both of these are annotated `number` on purpose. `SPEED` is a `as const`
+   * table, so `SPEED.fieldReference` carries the LITERAL type `28.5` — and an
+   * un-annotated field initialised from it infers that literal, making every
+   * later assignment a type error ("Type 'number' is not assignable to type
+   * '28.5'"). The initialiser is a default, not a constraint.
+   */
+  private speedCap: number = SPEED.fieldReference;
+  /** Median top speed of the grid, m/s. Set by AIManager. */
+  private fieldRef: number = SPEED.fieldReference;
 
   // ---- reusable query objects -------------------------------------------
   private readonly near: NearestResult = createNearestResult();
@@ -343,6 +499,8 @@ export class AIDriver {
 
   // ---- speed state -------------------------------------------------------
   private speedIntegral = 0;
+  /** True when the racing line, not the chassis ceiling, set the target speed. */
+  private lineLimited = true;
 
   // ---- line choice -------------------------------------------------------
   private variant: LineVariant = 'optimal';
@@ -354,6 +512,10 @@ export class AIDriver {
   private avoidBias = 0;
   private blockBias = 0;
   private weavePhase = 0;
+  /** Seconds spent actively covering the kart behind. */
+  private blockTime = 0;
+  /** Seconds left of "out of ideas, door open". */
+  private blockRest = 0;
 
   // ---- drift -------------------------------------------------------------
   private driftPhase: DriftPhaseAI = 'none';
@@ -395,7 +557,8 @@ export class AIDriver {
   constructor(kartId: number, personality: Personality, ccProfile: SkillProfile) {
     this.kartId = kartId;
     this.personality = personality;
-    this.skill = blendSkill(personality, ccProfile);
+    this.ccProfile = ccProfile;
+    this.skill = blendSkill(personality, ccProfile, this.form);
     this.error = new ErrorModel(kartId + 1);
     // Rocket-start timing: good drivers nail it, chaotic ones bog down.
     this.rocketOffset =
@@ -432,7 +595,13 @@ export class AIDriver {
       progress: 0,
       lap: 0,
       mistake: 'none',
+      form: 1,
+      mistakes: 0,
+      blocking: 0,
+      speedCap: SPEED.fieldReference,
     };
+    // After `debug` exists — it writes into it.
+    this.applyChassis();
   }
 
   // -------------------------------------------------------------------------
@@ -449,13 +618,72 @@ export class AIDriver {
 
   setPersonality(p: Personality, ccProfile: SkillProfile): void {
     this.personality = p;
-    this.skill = blendSkill(p, ccProfile);
+    this.ccProfile = ccProfile;
+    this.skill = blendSkill(p, ccProfile, this.form);
     this.debug.personality = p.id;
     this.debug.label = p.label;
   }
 
   setCCProfile(ccProfile: SkillProfile): void {
-    this.skill = blendSkill(this.personality, ccProfile);
+    this.ccProfile = ccProfile;
+    this.skill = blendSkill(this.personality, ccProfile, this.form);
+  }
+
+  /** Per-racer, per-race variation. See `DriverForm`. */
+  setForm(form: DriverForm): void {
+    this.form = form;
+    this.skill = blendSkill(this.personality, this.ccProfile, form);
+    this.error.rateScale = form.mistake;
+    this.debug.form = form.pace;
+  }
+
+  get driverForm(): DriverForm {
+    return this.form;
+  }
+
+  /** What chassis am I driving? Lets pace and corner confidence match the kart. */
+  setChassis(facts: ChassisFacts): void {
+    this.chassis.maxSpeed = facts.maxSpeed > 1 ? facts.maxSpeed : 28.4;
+    this.chassis.handling = clamp01(facts.handling);
+    this.chassis.traction = clamp01(facts.traction);
+    this.applyChassis();
+  }
+
+  get chassisFacts(): ChassisFacts {
+    return this.chassis;
+  }
+
+  /** Median top speed on the grid — the reference the chassis blend works from. */
+  setFieldReference(refSpeed: number): void {
+    this.fieldRef = refSpeed > 1 ? refSpeed : SPEED.fieldReference;
+    this.applyChassis();
+  }
+
+  private applyChassis(): void {
+    this.cornerAbility = clamp(
+      SPEED.cornerBase +
+        SPEED.cornerHandling * this.chassis.handling +
+        SPEED.cornerTraction * this.chassis.traction,
+      SPEED.cornerMin,
+      1,
+    );
+    const own = this.chassis.maxSpeed;
+    this.speedCap = Math.min(own, lerp(this.fieldRef, own, SPEED.chassisWeight));
+    this.debug.speedCap = this.speedCap;
+  }
+
+  /** The cruise ceiling this driver is working to, m/s. */
+  get cruiseCap(): number {
+    return this.speedCap;
+  }
+
+  /** New race: fresh mistake stream, same authored character. */
+  reseed(seed: number): void {
+    this.error.reseed(seed * 131 + this.kartId * 7 + 1);
+  }
+
+  get mistakeCount(): number {
+    return this.error.mistakeCount;
   }
 
   /** Ground truth from the physics `kart:driftRelease` event. */
@@ -506,6 +734,8 @@ export class AIDriver {
     this.speedIntegral = 0;
     this.avoidBias = 0;
     this.blockBias = 0;
+    this.blockTime = 0;
+    this.blockRest = 0;
     this.driftPhase = 'none';
     this.driftDir = 0;
     this.driftTimer = 0;
@@ -598,7 +828,6 @@ export class AIDriver {
     this.pressure = this.computePressure(world, st);
     this.error.update(
       dt,
-      world.elapsed,
       this.pressure,
       clamp01(this.skill.lineAccuracy * 0.7 + this.skill.item * 0.3),
       this.personality,
@@ -690,18 +919,36 @@ export class AIDriver {
   //  Perception helpers
   // -------------------------------------------------------------------------
 
-  /** 0..1 — how contested the situation is. Feeds the mistake model. */
+  /**
+   * 0..1 — how contested the situation is. Feeds the mistake model, and this is
+   * the mechanism that opens an overtaking lane: a chaser sitting on an AI's
+   * bumper raises that AI's mistake rate until it runs one wide. It is invisible
+   * (nobody slows down for you) and it is the authored design — it simply never
+   * ran, because the mistake sampler could not fire. See `ErrorModel`.
+   *
+   * Directional on purpose. Somebody *behind* you is pressure; somebody ahead of
+   * you is an opportunity, and the old radial version counted both the same.
+   */
   private computePressure(world: DriverWorld, st: KartState): number {
     let p = 0;
     const karts = world.karts;
+    const tangent = this.hereSample.tangent;
     for (let i = 0; i < karts.length; i++) {
       const o = karts[i];
       if (o === st || o.id === this.kartId) continue;
-      const d = o.position.distanceTo(st.position);
-      if (d < 16) {
-        p += (1 - d / 16) * 0.55;
-        if (o.isPlayer) p += (1 - d / 16) * 0.35;
-      }
+      _rel.subVectors(o.position, st.position);
+      const d = _rel.length();
+      if (d > PRESSURE.radius) continue;
+      const along = _rel.dot(tangent);
+      const close = 1 - d / PRESSURE.radius;
+      // behind ⇒ full weight, alongside ⇒ most of it, ahead ⇒ barely any.
+      const dir =
+        along < -1.5
+          ? PRESSURE.behind
+          : along > 3.0
+            ? PRESSURE.ahead
+            : PRESSURE.alongside;
+      p += close * dir * (o.isPlayer ? PRESSURE.playerFactor : 1);
     }
     if (st.racePosition <= 3) p += 0.1;
     return clamp01(p);
@@ -789,16 +1036,32 @@ export class AIDriver {
       this.variantCooldown = 0.6;
     }
 
-    // Blocking bias — cover the side the chaser is on.
+    // Blocking bias — cover the side the chaser is on, but only for a while.
+    // A defender that covers both sides forever is unpassable, which is half of
+    // the D2 complaint. One committed move, then the door opens: that reads as a
+    // driver who tried and lost the position, not as an invulnerable wall.
     let blockTarget = 0;
-    if (behindGap < AVOID.rearRange && p.blocking > 0.25) {
-      const w = 1 - behindGap / AVOID.rearRange;
-      blockTarget = sign(behindLat) * w * p.blocking * 2.3;
-      if (p.id === 'blocker') {
-        blockTarget += Math.sin(this.weavePhase * 1.4) * w * 1.6;
+    const chased = behindGap < AVOID.rearRange && p.blocking > 0.25;
+    if (this.blockRest > 0) {
+      this.blockRest -= dt;
+      this.blockTime = 0;
+    } else if (chased) {
+      this.blockTime += dt;
+      if (this.blockTime > BLOCK.maxSeconds * lerp(0.7, 1.3, p.blocking)) {
+        this.blockRest = BLOCK.restSeconds;
+        this.blockTime = 0;
+      } else {
+        const w = 1 - behindGap / AVOID.rearRange;
+        blockTarget = sign(behindLat) * w * p.blocking * BLOCK.strength;
+        if (p.id === 'blocker') {
+          blockTarget += Math.sin(this.weavePhase * 1.4) * w * BLOCK.weave;
+        }
       }
+    } else {
+      this.blockTime = Math.max(0, this.blockTime - dt * 1.5);
     }
     this.blockBias = damp(this.blockBias, blockTarget, 0.35, dt);
+    this.debug.blocking = this.blockBias;
   }
 
   // -------------------------------------------------------------------------
@@ -869,9 +1132,21 @@ export class AIDriver {
       absSpeed * SPEED.targetLeadMax + 6,
     );
     line.sampleAhead(this.near.t, lead, this.targetSample, this.variant);
-    let v = Math.min(this.hereSample.targetSpeed, this.targetSample.targetSpeed);
+    // How much of the line's corner speed does THIS chassis dare to carry?
+    const lineV =
+      Math.min(this.hereSample.targetSpeed, this.targetSample.targetSpeed) * this.cornerAbility;
+    // Clamp to something this kart can actually do BEFORE the pace multiplier,
+    // otherwise pace multiplies an unreachable number and does nothing at all.
+    // (This is the D2 fix: see SPEED.capHeadroom and SPEED.chassisWeight.)
+    const capV = this.speedCap * SPEED.capHeadroom;
+    // Which constraint is binding? Braking is only ever for a CORNER: if the
+    // cruise ceiling is what is holding us back — mid-boost, downhill, or just
+    // running a shade quick — the answer is to lift off, not to stand on the
+    // brakes. Without this the AI brakes hard the instant a mushroom expires.
+    this.lineLimited = lineV <= capV;
+    let v = Math.min(lineV, capV);
 
-    // Pace: personality × CC × rubber band × slow wobble.
+    // Pace: personality × CC × form × rubber band × slow wobble.
     v *= this.skill.pace;
     v *= this.band.speedMul;
     v *= this.error.paceError(world.elapsed, this.skill.error);
@@ -928,12 +1203,24 @@ export class AIDriver {
       c.brake = clamp01(-u * SPEED.brakeGain);
     }
 
+    // Not braking for a corner — just running above our own cruise ceiling.
+    // Lift off and let drag do it; braking here would throw away every boost.
+    if (!this.lineLimited) c.brake = 0;
     // Never brake in the air (nothing to brake against) and never brake mid
     // drift (you hold the throttle through a slide).
     if (!st.grounded) c.brake = 0;
     if (st.drifting || this.driftPhase === 'hop' || this.driftPhase === 'hold') {
-      c.brake = Math.min(c.brake, SPEED.driftBrakeCap);
-      c.accel = Math.max(c.accel, 0.85);
+      // A slide is not an excuse to ignore the target speed: a driver on a
+      // slower pace brake-drifts. See SPEED.driftBrakeCap.
+      const over = speed - target;
+      c.brake = Math.min(
+        c.brake,
+        over > SPEED.driftBrakeDeadband ? SPEED.driftBrakeCap : 0,
+      );
+      c.accel = Math.max(
+        c.accel,
+        over > 0 ? SPEED.driftThrottleEase : SPEED.driftThrottleFloor,
+      );
     }
     // Boosting? Foot down.
     if (st.boostTime > 0) {
@@ -963,12 +1250,16 @@ export class AIDriver {
     const far = this.farWindow.signed;
     const nearInt = this.nearWindow.signed;
     const roomLeft = this.near.halfWidth - Math.abs(this.near.lateralFromCentre);
+    // A slide needs road to slide into, and how much depends on how fast we are
+    // going. See DRIFT.bailMargin.
+    const bailRoom = DRIFT.bailMargin + absSpeed * DRIFT.bailLead;
+    const entryRoom = DRIFT.entryMargin + absSpeed * DRIFT.bailLead;
     const canDrift =
       st.grounded &&
       absSpeed > DRIFT.minSpeed &&
       !st.stunned &&
       this.mode === 'race' &&
-      roomLeft > DRIFT.bailMargin;
+      roomLeft > entryRoom;
 
     switch (this.driftPhase) {
       case 'none': {
@@ -1019,7 +1310,7 @@ export class AIDriver {
           this.endDrift(st, false);
           break;
         }
-        if (roomLeft < DRIFT.bailMargin || st.stunned || this.mode !== 'race') {
+        if (roomLeft < bailRoom || st.stunned || this.mode !== 'race') {
           this.endDrift(st, haveMin);
           break;
         }
@@ -1456,6 +1747,7 @@ export class AIDriver {
     d.progress = st ? st.progress : 0;
     d.lap = st ? st.lap : 0;
     d.mistake = this.error.mistakeKind;
+    d.mistakes = this.error.mistakeCount;
     this.lapWatch = world.elapsed;
   }
 }

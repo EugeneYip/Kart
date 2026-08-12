@@ -225,8 +225,8 @@ class OvalTrack implements ITrackService {
       { kind: 'slider', distance: 400, span: 14, speed: 1.0 },
       { kind: 'snapper', distance: 108, lateral: 7.5, speed: 1.2 },
       { kind: 'snapper', distance: 470, lateral: -7.5, speed: 0.9 },
-      { kind: 'traffic', distance: 20, lateral: -6.0, speed: 0.9 },
-      { kind: 'traffic', distance: 330, lateral: 6.0, speed: 1.4 },
+      // P0d-D1: the `traffic` kind is gone. Two hints that used to sit here
+      // (distance 20 and 330) are deleted rather than re-kinded.
     ];
   }
 }
@@ -662,10 +662,12 @@ class Harness {
     const hemi = new THREE.HemisphereLight(0xdfeaff, 0x33384a, 1.1);
     this.gallery.add(key, fill, rim, hemi);
 
+    // P0d-D5: the live set first, then the prototypes that survive only because
+    // Projectiles still pools them or `grantItem()` can force them.
     const ids: ItemModelId[] = [
-      'greenShell', 'redShell', 'blueShell', 'banana',
-      'bomb', 'mushroom', 'star', 'lightning',
-      'bullet', 'coin', 'ghost', 'squid',
+      'rocket', 'bottle', 'battery', 'ninja',
+      'star', 'greenShell', 'blueShell', 'bomb',
+      'bullet', 'coin',
     ];
     const cols = 4;
     const sx = 2.35, sy = 2.5;
@@ -712,9 +714,8 @@ class Harness {
 
   private renderKeyHelp(): void {
     const rows = [
-      '1 mushroom   2 x3 mushroom  3 green    4 x3 green',
-      '5 red        6 x3 red       7 banana   8 x3 banana',
-      'Q bomb  W star  E lightning  R boo  T bullet  Y blue  U coin  I ink',
+      'LIVE SET:  1 battery   5 rocket   7 bottle   R ninja   W star',
+      'forced only: 3 green  Q bomb  T bullet  Y blue  U coin  E/I inert',
       'SPACE use held    B roll from box    X clear projectiles',
       'G gallery  C camera  P pause  H hazards  Z run tests',
       'arrows: player lane / speed',
@@ -1247,17 +1248,30 @@ class Harness {
     }
     const first = this.items.probabilityRow(1);
     const last = this.items.probabilityRow(12);
+    // P0d-D5: five live items. The old assertions checked for a blue shell and a
+    // bullet, neither of which exists in the set any more.
+    const live = new Set<number>([
+      ItemType.Banana, ItemType.Boost, ItemType.RedShell, ItemType.Ghost, ItemType.Star,
+    ]);
+    let deadWeight = 0;
+    for (let slot = 1; slot <= 12; slot++) {
+      const row = this.items.probabilityRow(slot);
+      for (let i = 0; i < row.length; i++) if (!live.has(i)) deadWeight += row[i];
+    }
     return {
       rowSums: sums,
       normalised: sums.every((s) => Math.abs(s - 1) < 1e-6),
-      firstHasBlue: first[ItemType.BlueShell] > 0,
+      deadWeight: +deadWeight.toFixed(9),
       firstHasStar: first[ItemType.Star] > 0,
-      firstCoin: +first[ItemType.Coin].toFixed(3),
-      lastBullet: +last[ItemType.Bullet].toFixed(3),
+      firstBottle: +first[ItemType.Banana].toFixed(3),
+      firstRocket: +first[ItemType.RedShell].toFixed(3),
       lastStar: +last[ItemType.Star].toFixed(3),
+      lastNinja: +last[ItemType.Ghost].toFixed(3),
       pass: sums.every((s) => Math.abs(s - 1) < 1e-6)
-        && first[ItemType.BlueShell] === 0 && first[ItemType.Star] === 0
-        && last[ItemType.Bullet] > 0.1,
+        && deadWeight === 0
+        && first[ItemType.Star] === 0 && first[ItemType.Ghost] === 0
+        && last[ItemType.Star] > 0.2
+        && first[ItemType.Banana] > last[ItemType.Banana],
     };
   }
 

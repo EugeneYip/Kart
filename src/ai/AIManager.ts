@@ -28,23 +28,32 @@ import * as THREE from 'three';
 import type { FrameContext, ISubsystem, ITrackService, KartState } from '@/core/Types';
 import { ItemType } from '@/core/Types';
 import { bus } from '@/core/EventBus';
-import { clamp01 } from '@/core/MathUtils';
+import { clamp, clamp01 } from '@/core/MathUtils';
 
 import { RacingLine, type LineVariant, type ShortcutSpec } from './RacingLine';
 import {
   AIDriver,
   NULL_ITEMS,
   createHazard,
+  defaultChassis,
   type AIControl,
   type AIDebugState,
   type AIHazard,
+  type ChassisFacts,
   type DriverWorld,
   type ItemAccess,
 } from './AIDriver';
 import {
+  FORM,
+  NEUTRAL_FORM,
   PERSONALITIES,
+  Rand,
+  assignForms,
+  assignPersonalities,
   personalityForKart,
   personalityById,
+  type DriverForm,
+  type Personality,
   type PersonalityId,
 } from './AIPersonality';
 import { Rubberband, createBandOutput, type CCClass } from './Rubberband';
@@ -80,6 +89,18 @@ export interface AIControlSink {
   setControl?: (kartId: number, control: AIControl) => void;
   requestRespawn?: (kartId: number) => void;
   getTurnRate?: (kartId: number) => number;
+  /** `PhysicsWorld.tuningOf` — lets a driver know which chassis it is sitting in. */
+  tuningOf?: (kartId: number) => unknown;
+}
+
+/**
+ * `grip` in `KartTuning` is `9.6 + traction·9.2` (see `physics/Tuning.ts`), so
+ * this inverts it back to the 0..1 stat the driver wants. Kept here rather than
+ * importing the physics tuning table: the AI must not depend on another
+ * subsystem's internals, and a wrong-but-bounded guess is harmless.
+ */
+function tractionFromGrip(grip: number): number {
+  return clamp01((grip - 9.6) / 9.2);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +180,21 @@ export class AIManager implements ISubsystem {
   // Cached collaborator entry points.
   private setControlFn: AnyFn | null = null;
   private respawnFn: AnyFn | null = null;
+  private tuningFn: AnyFn | null = null;
   private itemAccess: ItemAccess = NULL_ITEMS;
+
+  /**
+   * Per-RACE seed. Everything randomised about the field — which racer gets
+   * which rung of the pace ladder, which personality, each driver's mistake
+   * stream — derives from this, so a race is reproducible but two races are not
+   * identical. The owner's report: *"opponents … are not randomized"*.
+   */
+  private fieldSeed = 1;
+  private forms = new Map<number, DriverForm>();
+  private assigned = new Map<number, Personality>();
+  private readonly scratchChassis: ChassisFacts = defaultChassis();
+  /** Median top speed of the grid, m/s. Re-measured when the roster changes. */
+  private fieldRef = 28.5;
 
   // Reusable world context + hazard pool (zero allocation per tick).
   private readonly world: DriverWorld;
@@ -256,6 +291,157 @@ export class AIManager implements ISubsystem {
         this.rubberband.reset();
       }),
     );
+    // A fresh field for every race. `RaceDirector.beginRace()` calls
+    // `resetRace()` — but only if `Game.ts` wired `race.setAi(ai)`, which it
+    // currently does not, so `race:countdown` is the reliable hook.
+    this.unsubscribes.push(
+      bus.on('race:countdown', (p) => {
+        if (p.count >= 3) this.newFieldSeed();
+      }),
+    );
+    this.reshuffleField();
+  }
+
+  /**
+   * Draw a new race seed and re-roll the field: pace ladder, personalities and
+   * every driver's mistake stream. Deterministic given the seed.
+   */
+  newFieldSeed(seed?: number): void {
+    this.fieldSeed =
+      seed !== undefined && Number.isFinite(seed)
+        ? Math.floor(seed) || 1
+        : (Math.floor(Math.random() * 0x7ffffffe) + 1) | 0;
+    this.reshuffleField();
+  }
+
+  get seed(): number {
+    return this.fieldSeed;
+  }
+
+  /** Re-derive forms + personalities for the current roster from `fieldSeed`. */
+  private reshuffleField(): void {
+    const ids: number[] = [];
+    let playerId = -1;
+    for (const s of this.states) {
+      ids.push(s.id);
+      if (s.isPlayer) playerId = s.id;
+    }
+    if (ids.length === 0) return;
+    this.fieldRef = this.measureFieldReference();
+    this.forms = assignForms(ids, this.fieldSeed, playerId);
+    this.assigned = assignPersonalities(ids, this.fieldSeed, playerId);
+    const profile = this.rubberband.profile();
+    for (const [id, d] of this.drivers) {
+      const override = this.overrides.get(id);
+      const p = override
+        ? personalityById(override) ?? this.assigned.get(id) ?? personalityForKart(id)
+        : this.assigned.get(id) ?? personalityForKart(id);
+      d.setPersonality(p, profile);
+      d.setForm(this.forms.get(id) ?? NEUTRAL_FORM);
+      d.reseed(this.fieldSeed);
+      // Chassis first: the pace ladder is solved against each kart's own cruise
+      // ceiling, so it has to know what that ceiling is.
+      this.pushChassis(id, d);
+    }
+    this.layOutPaceLadder(playerId);
+  }
+
+  /**
+   * Turn `FORM.ladderStep` into an even ladder of *effective* cruise speeds.
+   *
+   * A per-kart pace multiplier alone does not produce a field: the roster's own
+   * top speeds span 20 %, so a randomly-assigned pace ladder lands on top of a
+   * bigger random variable and the two cancel. Measured with a deliberately
+   * absurd 16 % ladder: the lap-time spread got *narrower* (9.3 s → 5.6 s) and
+   * the slowest-form kart lapped faster than the quickest-form one.
+   *
+   * So: rank the racers on what they could do if they tried (chassis × authored
+   * pace), jitter the ranking a little so it is not the same order every race,
+   * then solve each racer's pace backwards from the rung it landed on. Character
+   * decides WHERE you are in the field; the ladder guarantees the gaps are even.
+   */
+  private layOutPaceLadder(playerId: number): void {
+    type Rung = { id: number; d: AIDriver; potential: number; key: number };
+    const rungs: Rung[] = [];
+    const rand = new Rand((this.fieldSeed || 1) * 2654 + 7);
+    for (const [id, d] of this.drivers) {
+      if (id === playerId) continue;
+      const potential = d.cruiseCap * d.personality.paceFactor;
+      if (!(potential > 1)) continue;
+      rungs.push({
+        id,
+        d,
+        potential,
+        key: potential * (1 + (rand.next() * 2 - 1) * FORM.orderJitter),
+      });
+    }
+    if (rungs.length < 2) return;
+    rungs.sort((a, b) => b.key - a.key);
+
+    // The quickest racer keeps its own pace; everybody else steps down from it.
+    const top = rungs[0].potential;
+    for (let i = 0; i < rungs.length; i++) {
+      const r = rungs[i];
+      const wanted = top * (1 - i * FORM.ladderStep);
+      // `min(1, …)`: a kart whose chassis cannot reach its rung simply drives
+      // flat out. Nobody is ever asked for more than their own tuning allows.
+      const pace = clamp(wanted / r.potential, FORM.paceFloor, 1);
+      const base = this.forms.get(r.id) ?? NEUTRAL_FORM;
+      const form: DriverForm = {
+        pace,
+        mistake: base.mistake,
+        error: base.error,
+        drift: base.drift,
+      };
+      this.forms.set(r.id, form);
+      r.d.setForm(form);
+    }
+  }
+
+  /** Tell one driver which chassis it is sitting in, if physics will say. */
+  private pushChassis(kartId: number, d: AIDriver): void {
+    const fn = this.tuningFn;
+    if (!fn) return;
+    let t: unknown;
+    try {
+      t = fn.call(this.physicsSource, kartId);
+    } catch {
+      return;
+    }
+    if (!t || typeof t !== 'object') return;
+    const r = t as Record<string, unknown>;
+    const c = this.scratchChassis;
+    c.maxSpeed = typeof r.maxSpeed === 'number' && r.maxSpeed > 1 ? r.maxSpeed : 28.4;
+    c.handling = typeof r.handling === 'number' ? clamp01(r.handling) : 0.55;
+    c.traction = typeof r.grip === 'number' ? tractionFromGrip(r.grip) : 0.55;
+    d.setChassis(c);
+    d.setFieldReference(this.fieldRef);
+  }
+
+  /**
+   * Median top speed of the whole grid, m/s — the reference the per-chassis
+   * cruise blend works from (see `SPEED.chassisWeight`). Measured rather than
+   * assumed so it tracks the CC class and whatever roster is on the grid.
+   */
+  private measureFieldReference(): number {
+    const fn = this.tuningFn;
+    if (!fn || this.states.length === 0) return 28.5;
+    const caps: number[] = [];
+    for (const s of this.states) {
+      try {
+        const t = fn.call(this.physicsSource, s.id);
+        if (t && typeof t === 'object') {
+          const v = (t as Record<string, unknown>).maxSpeed;
+          if (typeof v === 'number' && v > 1) caps.push(v);
+        }
+      } catch {
+        /* physics may not know this kart yet */
+      }
+    }
+    if (caps.length === 0) return 28.5;
+    caps.sort((a, b) => a - b);
+    const h = caps.length >> 1;
+    return caps.length % 2 ? caps[h] : (caps[h - 1] + caps[h]) * 0.5;
   }
 
   dispose(): void {
@@ -275,9 +461,17 @@ export class AIManager implements ISubsystem {
     this.physicsSource = physics ?? null;
     this.setControlFn = fnOf(this.physicsSource, ['setControl', 'setControls', 'setInput', 'applyControl']);
     this.respawnFn = fnOf(this.physicsSource, ['requestRespawn', 'respawn', 'respawnKart']);
+    this.tuningFn = fnOf(this.physicsSource, ['tuningOf', 'getTuning', 'tuningFor']);
     if (!this.setControlFn) {
       console.warn('[AI] physics has no setControl() — AI cannot drive.');
     }
+    if (!this.tuningFn) {
+      // Not fatal: every driver falls back to the `nova` chassis, which only
+      // means the pace ladder stops varying by character.
+      console.warn('[AI] physics has no tuningOf() — drivers cannot read their own chassis.');
+    }
+    this.fieldRef = this.measureFieldReference();
+    for (const [id, d] of this.drivers) this.pushChassis(id, d);
   }
 
   /** Game.ts calls this once `ItemSystem` exists. */
@@ -294,6 +488,11 @@ export class AIManager implements ISubsystem {
     const profile = this.rubberband.profile();
     this.world.cc = profile;
     for (const d of this.drivers.values()) d.setCCProfile(profile);
+  }
+
+  /** Per-driver form, for probes and the debug overlay. */
+  formOf(kartId: number): DriverForm | undefined {
+    return this.forms.get(kartId);
   }
 
   get difficulty(): CCClass {
@@ -341,6 +540,7 @@ export class AIManager implements ISubsystem {
     this.rubberband.reset();
     this.elapsed = 0;
     for (const d of this.drivers.values()) d.reset();
+    this.newFieldSeed();
   }
 
   // -------------------------------------------------------------------------
@@ -494,6 +694,7 @@ export class AIManager implements ISubsystem {
     // Create drivers for anyone new.
     const profile = this.rubberband.profile();
     const seen = new Set<number>();
+    let created = 0;
     for (const st of this.states) {
       seen.add(st.id);
       let d = this.drivers.get(st.id);
@@ -501,14 +702,18 @@ export class AIManager implements ISubsystem {
         const overrideId = this.overrides.get(st.id);
         const p = overrideId
           ? personalityById(overrideId) ?? personalityForKart(st.id)
-          : personalityForKart(st.id);
+          : this.assigned.get(st.id) ?? personalityForKart(st.id);
         d = new AIDriver(st.id, p, profile);
         d.setItems(this.itemAccess);
         this.drivers.set(st.id, d);
+        created++;
       }
       d.setState(st);
       d.enabled = !st.isPlayer && !this.explicitlyDisabled.has(st.id);
     }
+    // The roster changed, so the pace ladder has to be laid out over the new
+    // grid (and every new driver needs its chassis + form).
+    if (created > 0) this.reshuffleField();
     // Retire drivers whose karts vanished.
     for (const id of Array.from(this.drivers.keys())) {
       if (!seen.has(id)) {

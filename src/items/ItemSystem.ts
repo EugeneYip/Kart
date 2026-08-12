@@ -31,7 +31,7 @@ import { ItemModels, TRIPLE_ITEMS, ITEM_NAMES, type IconRect } from './ItemModel
 import { ItemBoxField, ITEM_BOX_LIFT, type BoxSpawn } from './ItemBox';
 import {
   ItemRoulette, itemUses, rollItem, tableRow, weightsFor,
-  BLUE_SHELL_COOLDOWN, LIGHTNING_COOLDOWN, type RollContext,
+  BLUE_SHELL_COOLDOWN, LIVE_ITEMS, type RollContext,
 } from './ItemRoulette';
 import {
   Projectiles, type KartsLike, type PhysicsLike, type ProjKind, type Projectile,
@@ -42,9 +42,13 @@ import { Hazards } from './Hazards';
 const MAX_KARTS = 16;
 const STAR_TIME = 7.5;
 const BULLET_TIME = 7.0;
+/**
+ * Ninja cloak, seconds. The Ninja's *ability* is the steal, which is instant;
+ * the cloak is the vanishing-in-smoke read that makes the steal legible.
+ */
 const GHOST_TIME = 6.0;
+/** Retained only so the deprecated `getInkAmount()` still normalises. */
 const INK_TIME = 4.5;
-const SHRINK_TIME = 6.0;
 const MAX_COINS = 10;
 /** Button must be down this long before a shell drops into shield mode. */
 const HOLD_THRESHOLD = 0.16;
@@ -85,6 +89,8 @@ interface KartsMaybeAlpha extends KartsLike {
 
 interface TrackMaybeBoxes extends TrackLike {
   getItemBoxSpawns?(): unknown;
+  /** Present on the real `Track`; used to notice a circuit swap. */
+  readonly trackId?: string;
 }
 
 export class ItemSystem implements ISubsystem {
@@ -104,10 +110,12 @@ export class ItemSystem implements ISubsystem {
   private inv: Inventory[] = [];
   private rng = new Rng(0x5EED17);
 
-  private lightningCd = 0;
   private blueCd = 0;
   private ready = false;
   private elapsed = 0;
+  /** Circuit identity at the last (re)build, so a swap can be detected. */
+  private trackTag = '';
+  private trackLap = 0;
 
   /** Reused output objects — getters must not allocate. */
   private autopilotOut: AutopilotInfo = { active: false, target: new THREE.Vector3(), speed: 0 };
@@ -159,6 +167,7 @@ export class ItemSystem implements ISubsystem {
     this.boxes.setSpawns(this.resolveBoxSpawns());
     this.projectiles.init();
     this.hazards.init();
+    this.noteTrack();
     this.ready = true;
   }
 
@@ -193,10 +202,15 @@ export class ItemSystem implements ISubsystem {
     // Fallback rows, used only when the track has no authored spawns yet.
     //
     // Two bugs lived here. The lift was 1.35 m, but the box is BOX_SIZE = 1.72
-    // and it tumbles and bobs, so its lowest corner sits ~1.47 m below centre —
-    // at 1.35 m every fallback box cut ~12 cm through the tarmac, which is the
-    // "item box half buried in the ground" a playtester reported. The authored
-    // path in TrackBuilder already uses 1.70 m; these must agree.
+    // and it tumbles and bobs, so its lowest point reaches 1.3164 m below centre
+    // (measured — see ITEM_BOX_LIFT) — at 1.35 m a fallback box had 3 cm of
+    // clearance on flat road and cut the tarmac on any crown. The authored path
+    // in TrackBuilder already uses 1.70 m; these must agree.
+    //
+    // P0d-D3: BOTH paths are now measured on all three circuits by
+    // `.probe-tmp/boxclear.ts`. Worst clearance anywhere, at the animation
+    // extreme, against the road MESH as well as the analytic surface: 0.279 m
+    // authored / 0.301 m fallback. No box is buried on any circuit.
     //
     // It also emitted lap/200 rows (8 on a 1610 m lap) of 5, i.e. 40 boxes —
     // more than the authored layout. Density is now deliberately sparse: a
@@ -221,9 +235,42 @@ export class ItemSystem implements ISubsystem {
     return out;
   }
 
-  /** Re-read the track's box spawns (call after a track swap). */
+  /**
+   * Re-read everything that is authored per circuit. Call after a track swap.
+   *
+   * P0d-D1: this used to refresh the box field ONLY. `Hazards.init()` runs once,
+   * against whichever circuit happened to be loaded at boot, and nothing ever
+   * rebuilt it — so a race on Neon Metropolis or Volcano Rush ran *Sunset
+   * Coastline's* hazard list re-projected onto the new spline by arc length.
+   * Wrong kinds, wrong places, and on a shorter lap two of them could land in
+   * the same span, which is one plausible source of the "two boulders at once"
+   * report.
+   */
   refreshBoxSpawns(): void {
     this.boxes.setSpawns(this.resolveBoxSpawns());
+    // Rebuild hazards ONLY on a real circuit change. A rebuild re-generates a
+    // 512² boulder albedo and a 256² normal map, so doing it on every `restart()`
+    // would put a visible hitch on the grid for no gain.
+    if (this.trackChanged()) this.hazards.rebuild();
+    this.noteTrack();
+  }
+
+  /** Latch the current circuit's identity so `fixedUpdate` can spot a swap. */
+  private noteTrack(): void {
+    this.trackTag = this.track.trackId ?? '';
+    this.trackLap = typeof this.track.lapLength === 'number' ? this.track.lapLength : 0;
+  }
+
+  /**
+   * Has the track been swapped without anybody telling us? Two comparisons, no
+   * allocation, so this is safe to run every fixed step. A caller that forgets
+   * `refreshBoxSpawns()` then costs one frame of stale layout instead of a whole
+   * race of it.
+   */
+  private trackChanged(): boolean {
+    const tag = this.track.trackId ?? '';
+    const lap = typeof this.track.lapLength === 'number' ? this.track.lapLength : 0;
+    return tag !== this.trackTag || Math.abs(lap - this.trackLap) > 0.5;
   }
 
   // -------------------------------------------------------------------------
@@ -258,14 +305,25 @@ export class ItemSystem implements ISubsystem {
   getBulletTime(kartId: number): number { return this.inv[kartId]?.bulletTime ?? 0; }
   getGhostTime(kartId: number): number { return this.inv[kartId]?.ghostTime ?? 0; }
   getCoins(kartId: number): number { return this.inv[kartId]?.coins ?? 0; }
-  /** 0..1 squid-ink screen coverage. */
+  /**
+   * 0..1 squid-ink screen coverage.
+   *
+   * @deprecated P0d-D5 removed Ink from the item set, so this is now always 0.
+   * Kept because it is part of the published ItemSystem surface and callers
+   * feature-detect it; 0 is the correct "no effect" answer for them. The
+   * `ink` VFX impact and the `squid` SFX entry are now unreachable — see the
+   * note above `use()`.
+   */
   getInkAmount(kartId: number): number {
     const v = this.inv[kartId]?.inkTime ?? 0;
     if (v <= 0) return 0;
-    // Splat instantly, wipe away over the last second.
     return clamp01(Math.min(1, (INK_TIME - v) * 6)) * clamp01(v / 1.0);
   }
-  /** 0..1 lightning shrink amount (1 = fully shrunk, ramps back up at the end). */
+  /**
+   * 0..1 lightning shrink amount.
+   *
+   * @deprecated P0d-D5 removed Lightning, so this is now always 0. See above.
+   */
   getShrinkAmount(kartId: number): number {
     const v = this.inv[kartId]?.shrinkTime ?? 0;
     return v <= 0 ? 0 : clamp01(v / 0.4);
@@ -276,12 +334,33 @@ export class ItemSystem implements ISubsystem {
     this.autopilotOut.active = !!inv && inv.bulletTime > 0;
     return this.autopilotOut;
   }
+  /**
+   * Can this kart be hurt right now?
+   *
+   * The single question every damage path in the items subsystem asks. Four
+   * independent sources of immunity, deliberately OR-ed rather than collapsed:
+   *
+   *  - `starTime`  — P0d-D5: Star now ignores ALL item attacks AND obstacles.
+   *  - `bulletTime`— Bullet Bill is on rails and cannot be interrupted.
+   *  - `ghostTime` — the Ninja is cloaked.
+   *  - `invulnerable` — published by physics. Covers the respawn drop-in AND
+   *    P0d-D1's post-hit forgiveness window (`POST_HIT_GRACE`), which is what
+   *    breaks the hazard stun-lock.
+   *
+   * `Hazards.contact()` asks `KartState` directly for the same four (it has no
+   * inventory), and `KartPhysics.applyStunTo` refuses on `invulnTime` /
+   * `starTime` as a final backstop. Three layers, so a new damage path added by
+   * a future agent cannot silently bypass Star.
+   */
   isImmune(kartId: number): boolean {
     const inv = this.inv[kartId];
     if (inv && (inv.starTime > 0 || inv.bulletTime > 0 || inv.ghostTime > 0)) return true;
     const k = this.kart(kartId);
     return !!k && (k.invulnerable || k.starTime > 0);
   }
+
+  /** The five items a box can actually produce. Read-only; for tooling/HUD. */
+  liveItems(): readonly ItemType[] { return LIVE_ITEMS; }
 
   /**
    * Hand an item over immediately, skipping the box + roulette. Used by the
@@ -354,7 +433,8 @@ export class ItemSystem implements ISubsystem {
   fixedUpdate(ctx: FrameContext): void {
     if (!this.ready) return;
     const dt = ctx.fixedDt;
-    this.lightningCd = Math.max(0, this.lightningCd - dt);
+    // Self-heal a circuit swap nobody announced. Two scalar compares.
+    if (this.trackChanged()) this.refreshBoxSpawns();
     this.blueCd = Math.max(0, this.blueCd - dt);
 
     this.collectBoxes(dt);
@@ -396,11 +476,6 @@ export class ItemSystem implements ISubsystem {
       const roll: RollContext = {
         position: k?.racePosition && k.racePosition > 0 ? k.racePosition : total,
         totalKarts: total,
-        lapsRemaining: k ? Math.max(0, 2 - (k.lap - 1)) : 1,
-        lightningReady: this.lightningCd <= 0,
-        blueShellReady: this.blueCd <= 0,
-        bulletInPlay: this.anyBulletActive(),
-        blueShellInPlay: this.projectiles.hasActive('blue'),
         rand: () => this.rng.next(),
       };
       const item = rollItem(roll);
@@ -428,7 +503,6 @@ export class ItemSystem implements ISubsystem {
     inv.count = itemUses(item);
     const k = this.kart(kartId);
     if (k) { k.heldItem = item; k.itemCount = inv.count; }
-    if (item === ItemType.Lightning) this.lightningCd = LIGHTNING_COOLDOWN;
     if (item === ItemType.BlueShell) this.blueCd = BLUE_SHELL_COOLDOWN;
     bus.emit('item:granted', { kartId, item, count: inv.count });
     this.sfx('item_get', k?.position, 1, 1);
@@ -583,19 +657,8 @@ export class ItemSystem implements ISubsystem {
         }
       }
 
-      if (inv.inkTime > 0) { inv.inkTime -= dt; if (inv.inkTime < 0) inv.inkTime = 0; }
-
-      if (inv.shrinkTime > 0) {
-        inv.shrinkTime -= dt;
-        const s = inv.shrinkTime > 0 ? 0.58 : 1;
-        this.physics.setScale?.(k.id, s);
-        this.karts.setKartScale?.(k.id, s);
-        if (inv.shrinkTime <= 0) {
-          inv.shrinkTime = 0;
-          this.physics.setScale?.(k.id, 1);
-          this.karts.setKartScale?.(k.id, 1);
-        }
-      }
+      // `inkTime` / `shrinkTime` no longer have a writer (Ink and Lightning are
+      // gone). Nothing ticks them, so both stay 0 for the whole race.
     }
   }
 
@@ -680,6 +743,29 @@ export class ItemSystem implements ISubsystem {
     }
   }
 
+  /**
+   * Fire the held item.
+   *
+   * P0d-D5 note on the switch below. Only five arms are reachable in a race —
+   * Boost (Battery), RedShell (Rocket), Banana (Plastic Bottle), Ghost (Ninja)
+   * and Star. The rest survive because `grantItem()` is public: the dev harness
+   * and cheats hand over any `ItemType`, and an item the roulette cannot produce
+   * must still behave if it is forced.
+   *
+   * Two arms are now *inert*, and deliberately so:
+   *
+   *   - `Lightning` was the only caller of `physics.applyStun(..., 'shock')`, so
+   *     the `shock` stun kind now has no source anywhere in the game. The kind
+   *     itself stays in `StunKind` (it costs nothing, `src/core/*` is off limits
+   *     to this agent, and the visual-shrink branch in KartPhysics is harmless).
+   *   - `Squid` was the only caller of `vfx.burst('ink')` and `sfx('squid')`.
+   *
+   * The ORPHANED EFFECT CODE IS LEFT IN PLACE, unreferenced, in the two files
+   * that own it (`VfxManager`'s `ink` impact, `SfxBank`'s `squid`/`lightning`
+   * entries). Both belong to other agents, and an unreferenced branch in a
+   * switch costs nothing at runtime, whereas a half-removed effect that a future
+   * item wants back is a merge conflict. Flagged in the handoff instead.
+   */
   private use(kartId: number, inv: Inventory, mode: AimMode): void {
     const item = inv.item;
     if (item === null) return;
@@ -688,11 +774,12 @@ export class ItemSystem implements ISubsystem {
     inv.fireLatch = true;
     this.forwardOf(k, _fwd);
 
-    // Bananas trail behind by default; shells and bombs go forward.
+    // Bottles trail behind by default; rockets and bombs go forward.
     const defaultBack = item === ItemType.Banana || item === ItemType.TripleBanana;
     const backwards = mode === 'back' ? true : mode === 'forward' ? false : defaultBack;
 
     switch (item) {
+      // BATTERY — instant speed boost.
       case ItemType.Boost:
       case ItemType.TripleBoost: {
         this.physics.applyBoost?.(kartId, 1.6, 1.35, 'item');
@@ -701,6 +788,7 @@ export class ItemSystem implements ISubsystem {
         break;
       }
 
+      // ROCKET (red) — homes on the kart ahead. Green shell is unreachable.
       case ItemType.GreenShell:
       case ItemType.TripleGreenShell:
       case ItemType.RedShell:
@@ -725,6 +813,7 @@ export class ItemSystem implements ISubsystem {
         break;
       }
 
+      // PLASTIC BOTTLE — a small obstacle, dropped behind by default.
       case ItemType.Banana:
       case ItemType.TripleBanana: {
         const held = inv.orbit.pop();
@@ -758,6 +847,29 @@ export class ItemSystem implements ISubsystem {
         break;
       }
 
+      /**
+       * STAR — P0d-D5 upgraded this from "ignores items" to "ignores EVERYTHING".
+       *
+       * No code is needed here to make that true, which is worth spelling out so
+       * nobody adds a second mechanism later. `k.starTime` is what every damage
+       * path already consults:
+       *
+       *   items    → `isImmune()`      → `Projectiles.strike()` / `starContacts()`
+       *   hazards  → `Hazards.contact()` reads `KartState.starTime` directly
+       *   physics  → `applyStunTo()` refuses while `state.starTime > 0`
+       *
+       * Before this pass the only gap was hazards, and there wasn't one: the
+       * `starTime` check was already in `contact()`. What was NOT true is the
+       * claim in reverse — a hazard could re-hit a NON-starred kart forever
+       * (see D1). Verified by probe, not by reading: `.probe-tmp/d1d5.ts` fires
+       * every remaining item and every hazard kind at a starred kart and asserts
+       * zero stuns.
+       *
+       * Note we deliberately do NOT also call `physics.setInvulnerable()` here.
+       * It would work, but `KartState.invulnerable` drives KartManager's
+       * damage-blink, and strobing the kart's opacity for 7.5 s fights the star's
+       * own rainbow tint.
+       */
       case ItemType.Star: {
         inv.starTime = STAR_TIME;
         k.starTime = STAR_TIME;
@@ -768,11 +880,13 @@ export class ItemSystem implements ISubsystem {
         break;
       }
 
-      case ItemType.Lightning: {
-        this.castLightning(kartId);
+      // INK — removed from the item set. Unreachable; see the note above.
+      case ItemType.Squid:
+      // LIGHTNING — removed from the item set. Unreachable; see the note above.
+      case ItemType.Lightning:
         break;
-      }
 
+      // NINJA — steals an item from a racer ahead, and vanishes while doing it.
       case ItemType.Ghost: {
         inv.ghostTime = GHOST_TIME;
         this.karts.setKartAlpha?.(kartId, 0.28);
@@ -799,65 +913,18 @@ export class ItemSystem implements ISubsystem {
         this.sfx('coin', k.position);
         break;
       }
-
-      case ItemType.Squid: {
-        this.castSquidInk(kartId);
-        break;
-      }
     }
 
     bus.emit('item:used', { kartId, item });
     this.consume(kartId, inv);
   }
 
-  private castLightning(sourceId: number): void {
-    const list = this.karts.karts;
-    const src = this.kart(sourceId);
-    for (let i = 0; i < list.length; i++) {
-      const k = list[i];
-      if (k.id === sourceId) continue;
-      const inv = this.inv[k.id];
-      if (!inv) continue;
-      if (this.isImmune(k.id)) continue;
-      // Further back = shorter punishment, exactly like MK8.
-      const pos = k.racePosition > 0 ? k.racePosition : list.length;
-      const dur = lerp(SHRINK_TIME, SHRINK_TIME * 0.55, clamp01((pos - 1) / Math.max(1, list.length - 1)));
-      inv.shrinkTime = dur;
-      this.physics.applyStun?.(k.id, 1.05, 'shock');
-      this.physics.setScale?.(k.id, 0.58);
-      this.karts.setKartScale?.(k.id, 0.58);
-      this.dropItemOnHit(k.id);
-      bus.emit('item:hit', { targetId: k.id, sourceId, item: ItemType.Lightning, point: k.position });
-      this.vfx.burst?.('lightning', k.position, undefined, 1.2);
-    }
-    this.lightningCd = LIGHTNING_COOLDOWN;
-    this.vfx.flash?.(0xffffff, 1.0, 0.36);
-    this.vfx.screenShake?.(0.7, 0.4);
-    bus.emit('ui:message', { text: 'LIGHTNING!', seconds: 1.4, style: 'warn' });
-    this.sfx('lightning', src?.position, 1.0);
-  }
-
-  private castSquidInk(sourceId: number): void {
-    const list = this.karts.karts;
-    const me = this.kart(sourceId);
-    if (!me) return;
-    let n = 0;
-    for (let i = 0; i < list.length; i++) {
-      const k = list[i];
-      if (k.id === sourceId) continue;
-      if (k.progress <= me.progress) continue;
-      if (this.isImmune(k.id)) continue;
-      const inv = this.inv[k.id];
-      if (!inv) continue;
-      inv.inkTime = INK_TIME;
-      bus.emit('item:hit', { targetId: k.id, sourceId, item: ItemType.Squid, point: k.position });
-      this.vfx.burst?.('ink', k.position, undefined, 1.1);
-      n++;
-    }
-    if (n > 0) this.sfx('squid', me.position);
-  }
-
-  /** Boo steals from a random kart ahead that actually has something. */
+  /**
+   * The Ninja steals from a random kart ahead that actually has something.
+   *
+   * Reservoir-sampled so every candidate is equally likely, and the theft lands
+   * as the thief's *next* item rather than replacing the cloak they are using.
+   */
   private stealItem(thiefId: number): void {
     const list = this.karts.karts;
     const me = this.kart(thiefId);
@@ -880,7 +947,7 @@ export class ItemSystem implements ISubsystem {
     const stolen = victim.item;
     this.clearOrbit(victim);
     this.setItem(bestId, victim, null);
-    // Boo is still active, so queue the stolen item as the thief's next item.
+    // The cloak is still running, so queue the stolen item as the next one.
     thief.item = stolen;
     thief.count = itemUses(stolen);
     const k = this.kart(thiefId);
@@ -954,7 +1021,14 @@ export class ItemSystem implements ISubsystem {
     return !!k && k.isPlayer;
   }
 
-  private anyBulletActive(): boolean {
+  /**
+   * Is any kart currently riding a Bullet Bill?
+   *
+   * Was a roulette gate ("only one bullet at a time"). The Bullet is no longer in
+   * the item set, so nothing gates on it — kept public-ish for the dev harness
+   * and because `grantItem()` can still force one.
+   */
+  anyBulletActive(): boolean {
     for (const inv of this.inv) if (inv.bulletTime > 0) return true;
     return false;
   }
@@ -980,7 +1054,7 @@ export class ItemSystem implements ISubsystem {
     this.roulette.reset();
     this.projectiles.clear();
     this.boxes.reset();
-    this.lightningCd = 0;
+    this.hazards.resetTimers();
     this.blueCd = 0;
     for (const k of this.karts.karts) { k.heldItem = null; k.itemCount = 0; }
   }
