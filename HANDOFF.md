@@ -2,6 +2,77 @@
 
 ---
 
+## 🔴 P0e — FOURTH PLAYTEST: what is still open after `cd390f5`
+
+### Fixed and verified in `cd390f5`
+Kart deformation (the squash spring was unstable above 78.67 ms/frame while
+`Engine.MAX_FRAME_DT` is 100 ms — one slow frame detonated it to 1.47e6, which is
+why "lag" and "deforming" were the same bug); item icons un-crossed; battery boost
+1.30× → 1.61× a mini-turbo; volcano fog density 0.00240 → 0.00145 (the darkness was
+fog, not the key — `volcanic` keyI 2.90 is *stronger* than `night`'s 1.75); tunnel
+bore interiors ~5× brighter with a portal reveal lamp; coins removed; kart LOD-0
+total 305,830 → 283,368 tris, under the §5b ceiling for the first time.
+
+### 🔴 Still open, highest value first
+
+**E1 — The volcano tunnel portal is buried 4.48 m.** At `t=0.805`: road y 5.88,
+ground y 10.36, portal seated at road level, so the bore mouth is cut into rising
+ground and the portal structure sits inside the hillside. The `t=0.865` portal is
+fine (−0.18 m). Measured but not fixed. **Most visible remaining item.**
+
+**E2 — Portraits are unverified AND the probe for them crashes.**
+`.probe-tmp/bust-eye.ts` dies on `sheet.width = S * COLS` — "Cannot set properties
+of null", because the headless shim returns no canvas. This is structural, not
+accidental: a fake renderer cannot rasterise, so **the only way to know a portrait
+has pixels is to look at it.** Everything the portrait agent changed is committed
+and unproven. Owner's report was that all ten cards render blank.
+
+**E3 — Half-buried spectators near the start line.** Found while hunting the
+owner's "half-buried item boxes": `Crowd` figures at −2.02, −2.00, −1.88, −1.12,
+−1.10 m and `authored:basaltcolumn` at −1.05, −0.90 m. Rocks at −4.09/−3.04/−2.30 m
+bed by design. Nobody has fixed the crowd.
+
+**E4 — The "half-buried item box" is NOT an item box.** Third independent
+confirmation: no item box appears in the buried-object sweep at the start line;
+clearance measures 1.70 m at rest and 0.28 m at the bob animation's lowest point on
+both spawn paths, all three circuits; and the nearest authored row is 154 m from the
+finish line. Previous two reports of this turned out to be a marshal's booth and
+then nothing. **Ask the owner where exactly it sits relative to the start banner
+before spending more measurement on it** — likely candidates are now the buried
+crowd (E3) or the boost-pad decals, which sit flat on the tarmac.
+
+**E5 — Perf beyond the spring.** Two leads measured and still unactioned: single
+frame is ~**3.15× the scene-graph triangle count** (505 calls / 2.92 M tris on neon)
+which `AGENTS.md` §5b says means too many full-scene passes; and the
+`GL_INVALID_OPERATION: Mismatch between texture format and sampler type` flood
+(`HANDOFF.md` item 2) still reproduces every boot — per-draw validation failures
+make Chrome's command decoder crawl. Prime suspect remains the `DepthTexture` bound
+to a plain `sampler2D` around `VfxManager.ts:516`. Also unexplained: a
+**picture-in-picture inset rendering a copy of the scene** bottom-right in one
+owner screenshot.
+
+**E6 — Boot screen.** Owner judged the hand-authored SVG busts "almost
+unbearable" and reported hairline artifacts across the logotype. Removal is
+explicitly acceptable to them ("if you can't remove the character directly, that's
+also a decent option"); a static image is not available under rule 3. State in
+`cd390f5` is unverified.
+
+### Owner's wishlist — after the above
+
+**E7 — Trackside billboards for the owner's brands.** "CAPY LAB" and "TINY TRIP
+CLUB", replacing some APEX/SLIP cells, **sparse not dense**. The sponsor atlas is a
+4×2 procedural canvas in `Props.ts` with 2:1 cells; "TINY TRIP CLUB" is far longer
+than the existing one-word brands and needs a layout that fits. **Read the §0b `u`-axis
+conclusion in this file first and do not "fix" the plate UVs.**
+
+**E8 — A city series: Boston, Taipei, Tokyo.** Creative freedom on layout, but each
+must carry recognisable landmark buildings. This is a content feature, not a fix:
+three splines in `TrackDefs.ts`, three theme builders in `Props.ts`, and landmark
+geometry authored procedurally (rule 3 — no models). Scope it as its own milestone;
+the owner explicitly placed it after the defects above.
+
+---
+
 ## 🔴 P0d — THIRD HUMAN PLAYTEST + DESIGN DIRECTION (current priority)
 
 Owner's own words, translated into defects and scoped work. **Nothing in this
