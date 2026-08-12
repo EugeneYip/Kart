@@ -2,6 +2,155 @@
 
 ---
 
+## 🔴 P0g — FIFTH PLAYTEST. Nothing here is started.
+
+Three agents were killed by a session limit immediately after this arrived; only a
+test harness survived (`55b9597`). Items **G1–G3** below are still live too.
+
+### G1 (repeated 4× now) — a box-shaped prop half-buried at the start of ALL tracks
+
+**Treat every previous identification as unreliable.** Ruled out properly: item
+boxes (1.70 m clearance at rest, 0.28 m at the bob extreme, nearest row 154 m from
+the line), and Crowd (within 2 cm of the ground once the probe was fixed).
+
+**`marshalPost` is back to being the prime suspect and its "fix" is unverified.**
+It is a 2.6 × 2.2 m cream box that `roadside()` drops every 210 m *starting at arc
+0*, so every circuit has one metres from the line — matching the owner's
+description exactly. It was 50 % underground, fixed, and verified at `gap = 0.00`
+— **but that verification used `raycastGround`, i.e. the road corridor's
+extrapolated plane, and the booth stands 8–12 m beyond the road edge on terrain.**
+That is precisely the reference error that made the spectators a false positive.
+Re-measure against terrain-outside-corridor with the corrected `startline.ts`, rank
+by **percentage of height hidden** (the owner is describing what they see), and
+filter by shape ratio to find boxes.
+
+Second candidate: `Prop:rock` at volcano arc +1 m, lat 26.7 m — 10.6 m across,
+**3.8 m under (75 %)**. Rocks bed by design, but 75 % is not bedding, and a blocky
+rock reads as a box at a glance.
+
+### G2 (owner confirms a probe finding I let get overruled) — neon's 90° wall-ride
+
+> *"on the 'night city' track, when cars go through a section where the car tilts 90
+> degrees, some ground-level decorations on the right side interfere."*
+
+`.probe-tmp/sightline.ts` **already flags 24 occlusion samples there from
+`authored:agpylon`**, and an agent dismissed them as *"likely a false positive of a
+flat-road test on tube geometry."* The owner has confirmed they are real. Make the
+test work in the road's own frame (normal + binormal) so it cannot be waved away,
+then move or slim the pylons. `agPylon` is authored `lat: 12, mirror: true` over t
+0.545–0.645 — check its built width against `lat: 12`, since **`lat` is a CENTRE
+offset and recipes that pick their own width overrun it** (`alleyBlock` at 10.5
+stood 5.3 m inside the road for exactly this reason).
+
+### G3 — edge-proximity views spoiled on all tracks
+
+> *"when players drive close to the left or right edges, the visuals are similarly
+> affected by off-track decorations or terrain."*
+
+The existing test casts from the road's CENTRE at the road ahead and structurally
+cannot see this. Sample the eye at ±0.85 of the half-width and measure **frame fill**
+from props/terrain near the edge, not occlusion of the racing line.
+
+### G4 — the text-overflow regression from `ccabb50` (mine)
+
+`MASCO`, `WEIGH`, `HANDLI`, `TRACTI`, `HEAVYWE`, `SPEEDSTEI`. The `--u-min: 11px`
+floor was right; the layouts were sized for unreadable text. **Assertions that catch
+it now exist and are proven to fail on the pre-fix code** (`55b9597`) — use them.
+Do NOT lower the floor, do not touch `.ak-hud`'s exemption, add no media queries.
+Also F2: the main-menu heading renders `MAIN MENUMAIN MENU` (appended, not replaced).
+
+### G5 — 77 % of all triangles are uncullable
+
+65 drawables set `frustumCulled = false`, holding 0.748 M of 0.962 M tris on neon.
+Proof it binds: range-limiting a pass saved **exactly zero**. With 5.83 passes/frame
+every triangle made cullable is saved ~6×. **Do not just clear the flag** — an
+instanced mesh's bounding sphere describes the *geometry*, not the instances, so
+grass would vanish. Use `computeBoundingSphere()` or per-chunk splitting; `Props.ts`
+already has an `InstanceChunks` class doing the latter.
+
+### G6 — road surfaces, decals and text turn BLACK from some angles
+
+> *"When the road has terrain, decorations, or text, it's noticeable that from
+> certain angles, these layers turn black as the player drives past."*
+
+**New, and it sounds like a real shading bug rather than art.** Angle-dependent
+black is the signature of: a normal pointing the wrong way (so the surface faces
+away from every light), a `vertexColors: true` material whose geometry lacks a
+`color` attribute (this exact bug blacked out all 27,360 grass blades — see
+`f350e37`), a specular/clearcoat lobe going to zero, or shadow acne on a coplanar
+decal. Note this project has now had **three** separate inside-out winding bugs
+(props' closed primitives, `superShape`, and the grass attribute). Check decal
+winding, decal polygon offset, and every road/decal material's `vertexColors`
+against its geometry's attributes.
+
+### G7 — REMOVE DRIFTING. **Read the note below before doing this.**
+
+> *"Simplified gameplay: remove drifting as a driving style, and also remove the
+> single black mist-like roadblock that appears on the road."*
+
+The roadblock is almost certainly the `oil` hazard (`{ kind: 'oil' }` in
+`TrackDefs.ts`) — remove it.
+
+**Drifting is a much larger change than it sounds and the owner should see the
+consequence stated before it ships.** `DriftSystem.ts`'s own header calls it *"the
+single most important system in the game… everything about how FOXY KART feels
+comes down to the loop the player runs a thousand times a race."* Removing it
+removes: the hop, the mini-turbo, the drift-charge tiers, the purple-spark payoff,
+and **the primary source of boost** — which is also the thing the AI field's
+overtaking rhythm was just tuned around (`184ac0e`). Ramp tricks also arm off the
+drift button (`8191fd9`).
+
+So it is doable, but it must be done as a *design* change, not a deletion: keep
+grip-only cornering feeling good at speed, and make sure boost still exists via pads
+and the Battery so there is still a fast line. Recommend confirming with the owner
+that losing the mini-turbo is intended, since they may mean "stop requiring drift to
+be competitive" rather than "remove the mechanic".
+
+### G8 — driver models still read as rough
+
+> *"The character development of the racers is still not very refined and currently
+> feels a bit rough."*
+
+Consistent with the last visual critique, which found the animals reading as smooth
+plastic with a **visible rectangular face card** ("a sticker on a box") and Foxy's
+tail as "a flat orange paddle". The fur normal, knit normal and sheen exist but do
+not read. The face quad's border is the single most damaging defect.
+
+### G9 — NPC lap times repeat in the leaderboard
+
+> *"when players achieve higher ranks, many of the NPC racers' time records are
+> repeated, which also makes it feel a bit fake."*
+
+Likely identical times because the finishing-time formatter or the results payload
+derives from position rather than from each kart's own `finishTime` — or because
+several AI karts genuinely finish on the same tick. Check `Results.ts` / the
+`standings` payload against `RaceDirector`'s per-kart `finishTime`.
+
+---
+
+## 🟡 Owner's wishlist — after the above
+
+- **Billboards: ALREADY DONE** (`32a1408`). CAPY LAB and TINY TRIP CLUB are in,
+  sparse at 4 of 22 slots with no adjacent pairs. Tell the owner rather than
+  re-doing it.
+- **City series: Boston, Taipei, Tokyo** — landmark buildings, plus **one national
+  flag per track, placed where a flag would naturally be**. Creative freedom on
+  layout. Procedural only (rule 3). Its own milestone: three splines in
+  `TrackDefs.ts`, three theme builders, landmark geometry.
+- **Two-player split screen** — left/right halves, WASD vs arrow keys. Explicit
+  constraint: *"when adjusting the width at the same height, the in-game cars driven
+  by the players should match those in the single-player mode"* — i.e. keep the
+  vertical FOV and kart scale identical, letterbox the width rather than squeezing.
+  Needs two cameras and two HUD instances; note `RenderPipeline` currently assumes
+  one camera and one post chain, and the frame budget is already tight, so this
+  interacts directly with G5.
+- **Narrow-screen support**, with 2P disabled below a width threshold. Target is
+  eventual **GitHub Pages** publication as a browser game; tablet/mobile later. Rule
+  3 (everything procedural, zero network requests) already makes static hosting
+  viable — worth verifying `vite build` output runs from `file://`/a static host.
+
+---
+
 ## 🔴 P0f — VERIFIED ON SCREEN, plus a regression the sweep missed
 
 First pane session since `cd390f5`. Captured at 800×450 (the only 1:1 size).
