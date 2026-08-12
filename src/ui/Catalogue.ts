@@ -279,10 +279,19 @@ export function characterColumns(count: number): number {
  * breaking this file's build. The probe asserts every real id is covered, so an
  * omission is loud without being fatal.
  */
+/* These are pill badges on a card corner, so they are length-constrained, not
+ * free prose: at the 11px legibility floor a chassis tag paints ~9.6px per
+ * character and the widest card a 450px-tall frame can carry is 99px, i.e. about
+ * nine characters including the pill's own padding. `HEAVYWEIGHT` needed 116px
+ * and was severed to `HEAVYWE`; `HEAVY` is the weight class the badge is
+ * actually naming and it fits at every viewport. `LEAN & AGILE` wrapped its pill
+ * to two lines and collided with the chassis name underneath. The probe measures
+ * every one of these against its card, so a longer tag added here fails loudly
+ * instead of being quietly clipped. */
 const BODY_TAGS: Partial<Record<KartBodyId, string>> = {
   standard: 'BALANCED',
-  bike: 'LEAN & AGILE',
-  cruiser: 'HEAVYWEIGHT',
+  bike: 'AGILE',
+  cruiser: 'HEAVY',
   speedster: 'TOP SPEED',
   buggy: 'OFF-ROAD',
   hover: 'ANTI-GRAV',

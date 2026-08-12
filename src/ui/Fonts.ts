@@ -61,10 +61,18 @@ export function numeral(text: string, opts: NumeralOptions = {}): HTMLSpanElemen
   if (tone) root.classList.add(tone);
   if (opts.className) root.className += ` ${opts.className}`;
 
+  // ONLY THE FILL LAYER OWNS A TEXT NODE. The stroke layer paints the same
+  // string from `data-text` via `.ak-num__stroke::before { content: attr(...) }`,
+  // because generated content is not part of the document's text. Two real
+  // copies is what made every heading read twice — `textContent` on the main
+  // menu's title returned "MAIN MENUMAIN MENU" (and `innerText` "MAIN MENU\nMAIN
+  // MENU") even though the two layers paint at the same rect, so a page-text
+  // dump, a screen reader or any text assertion saw the doubling on all nine
+  // screens. `aria-hidden` alone did not fix that; not being text does.
   const stroke = document.createElement('i');
   stroke.className = 'ak-num__stroke';
   stroke.setAttribute('aria-hidden', 'true');
-  stroke.textContent = text;
+  stroke.dataset.text = text;
 
   const fill = document.createElement('i');
   fill.className = 'ak-num__fill';
@@ -76,11 +84,11 @@ export function numeral(text: string, opts: NumeralOptions = {}): HTMLSpanElemen
 
 /** Update both layers of a numeral. Cheap; skips the write when unchanged. */
 export function setNumeralText(root: HTMLElement, text: string): void {
-  const stroke = root.firstElementChild;
+  const stroke = root.firstElementChild as HTMLElement | null;
   const fill = root.lastElementChild;
   if (!stroke || !fill) return;
-  if (stroke.textContent === text) return;
-  stroke.textContent = text;
+  if (stroke.dataset.text === text) return;
+  stroke.dataset.text = text;
   fill.textContent = text;
 }
 

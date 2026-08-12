@@ -13,7 +13,7 @@
 
 import { confetti, el, punch, setClass, tryCall } from './Widgets';
 import type { AudioLike } from './Widgets';
-import { formatTime, numeral, setNumeralTone } from './Fonts';
+import { formatTime, numeral, setNumeralText, setNumeralTone } from './Fonts';
 
 export interface ResultRow {
   kartId: number;
@@ -104,8 +104,12 @@ export class Results {
     const sorted = [...rows].sort((a, b) => a.position - b.position);
     const player = sorted.find((r) => r.isPlayer);
 
-    this.title.firstElementChild!.textContent = opts.title ?? 'RESULTS';
-    this.title.lastElementChild!.textContent = opts.title ?? 'RESULTS';
+    // Through `setNumeralText`, never by writing the two layers here: the stroke
+    // layer is a `data-text` attribute now (it carries no text node, so a heading
+    // is not in the document twice) and hand-writing `textContent` into it would
+    // give it BOTH a text node and the generated copy — i.e. the title painted
+    // twice, side by side, out of its own box.
+    setNumeralText(this.title, opts.title ?? 'RESULTS');
     setNumeralTone(this.title, player && player.position === 1 ? 'gold' : 'blue');
 
     // --- podium ---------------------------------------------------------

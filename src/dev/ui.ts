@@ -1418,6 +1418,105 @@ function stringTable(only?: string): string {
   return lines.join('\n');
 }
 
+// ===========================================================================
+// Menu-row focus registration  (the main-menu hover treatment)
+// ===========================================================================
+//
+// The selected row is drawn by TWO boxes: the row itself (`.ak-item-row--focus`,
+// which lifts and pops) and the travelling gold slab behind it
+// (`.ak-list__focus`, positioned by `MenuSystem.setFocus`). They are supposed to
+// be the same rectangle. When the row's `translateX()/scale()` lived only in the
+// row's rule and JS wrote the slab's transform by hand, they were not: the row
+// hung 10.7px (800x450) to 25.2px (1920x1080) past the slab's right edge, which
+// on screen is a gold outline with a dark plate sliding out of it — and the
+// slab's height was cached from whichever row was focused first, so it was 16px
+// short of every slider row on OPTIONS.
+//
+// Nothing about that is visible to a containment or an overflow check: both boxes
+// are comfortably inside the frame. So measure the two rects against each other,
+// row by row, driven through the real `pointerenter` path.
+
+const RING_SCREENS = ['main', 'options', 'controls', 'pause'] as const;
+
+/** 1px: `setFocus` positions the slab from integer `offsetTop`/`offsetHeight`. */
+const RING_EPS = 1;
+
+export interface RingRow {
+  where: string;
+  size: string;
+  /** Index of the row that was focused. */
+  row: number;
+  label: string;
+  /** Focused row rect minus slab rect, per edge. 0 means perfectly registered. */
+  dl: number;
+  dr: number;
+  dt: number;
+  db: number;
+  worst: number;
+  pass: boolean;
+}
+
+function ringRows(where: string, root: Element | null): RingRow[] {
+  const out: RingRow[] = [];
+  if (!root) return out;
+  const ring = root.querySelector('.ak-list__focus');
+  const rows = Array.from(root.querySelectorAll('.ak-item-row'));
+  if (!ring || rows.length === 0) return out;
+  const size = `${Math.round(rectOf(stage).w)}x${Math.round(rectOf(stage).h)}`;
+  for (let i = 0; i < rows.length; i++) {
+    // The production path: hovering a row focuses it.
+    rows[i].dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
+    for (let k = 0; k < 2; k++) { void (root as HTMLElement).offsetHeight; freezeAnims(); }
+    const focused = root.querySelector('.ak-item-row--focus');
+    if (!focused) continue;
+    const a = rectOf(ring);
+    const b = rectOf(focused);
+    const dl = b.l - a.l, dr = b.r - a.r, dt = b.t - a.t, db = b.b - a.b;
+    const worst = Math.max(Math.abs(dl), Math.abs(dr), Math.abs(dt), Math.abs(db));
+    out.push({
+      where, size, row: i,
+      label: (focused.querySelector('.ak-item-row__label')?.textContent ?? '').trim().slice(0, 18),
+      dl: +dl.toFixed(2), dr: +dr.toFixed(2), dt: +dt.toFixed(2), db: +db.toFixed(2),
+      worst: +worst.toFixed(2),
+      pass: worst <= RING_EPS,
+    });
+  }
+  return out;
+}
+
+function ringFit(): RingRow[] {
+  const out: RingRow[] = [];
+  if (!menu) return out;
+  for (const [w, h] of SIZES) {
+    setSize(w, h);
+    settle(2);
+    for (const id of RING_SCREENS) {
+      menu.show(id);
+      settle(3);
+      out.push(...ringRows(`screen:${id}`, stage.querySelector(`.ak-screen--on[data-screen="${id}"]`)));
+    }
+  }
+  closeMenus();
+  return out;
+}
+
+function ringTable(): string {
+  const rows = ringFit();
+  const bad = rows.filter((r) => !r.pass);
+  const lines = [`${'size'.padEnd(12)}${'screen'.padEnd(17)}${'row'.padEnd(20)}`
+    + `${'dLeft'.padStart(8)}${'dRight'.padStart(8)}${'dTop'.padStart(8)}${'dBottom'.padStart(8)}`
+    + `${'worst'.padStart(8)}  verdict`];
+  for (const r of rows) {
+    lines.push(`${r.size.padEnd(12)}${r.where.replace('screen:', '').padEnd(17)}`
+      + `${`${r.row} ${r.label}`.padEnd(20)}${r.dl.toFixed(2).padStart(8)}${r.dr.toFixed(2).padStart(8)}`
+      + `${r.dt.toFixed(2).padStart(8)}${r.db.toFixed(2).padStart(8)}${r.worst.toFixed(2).padStart(8)}`
+      + `  ${r.pass ? 'registered' : 'MISFIT'}`);
+  }
+  lines.push(`=== ${bad.length}/${rows.length} focused rows are out of register with their `
+    + `highlight (tolerance ${RING_EPS}px); worst ${rows.reduce((m, r) => Math.max(m, r.worst), 0).toFixed(2)}px ===`);
+  return lines.join('\n');
+}
+
 /**
  * F2 — "MAIN MENUMAIN MENU".
  *
@@ -1716,6 +1815,9 @@ interface UiQa {
   textFit(): TextAudit;
   textTable(only?: string): string;
   stringTable(only?: string): string;
+  /** Focused menu row vs its travelling highlight, every row, every viewport. */
+  ringFit(): RingRow[];
+  ringTable(): string;
   /** The production entry point Game.ts calls — F2's repro. */
   showMainMenu(): void;
   /** Every `.ak-num` heading's text, once per LAYER, to catch doubling. */
@@ -1818,6 +1920,7 @@ async function boot(): Promise<void> {
   button('items', () => { out.textContent = JSON.stringify(items(), null, 2); });
   button('TEXT FIT', () => { out.textContent = textTable(); });
   button('STRINGS', () => { out.textContent = stringTable(); });
+  button('FOCUS RING', () => { out.textContent = ringTable(); });
   button('headings', () => { out.textContent = headings().map((h) => JSON.stringify(h)).join('\n'); });
 
   const api: UiQa = {
@@ -1838,6 +1941,7 @@ async function boot(): Promise<void> {
     state: (id: StateId) => setState2(id),
     u: measureU,
     textFit, textTable, stringTable,
+    ringFit, ringTable,
     showMainMenu: () => { menu?.showMainMenu(); settle(3); },
     headings,
   };

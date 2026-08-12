@@ -402,7 +402,9 @@ export class MenuSystem implements ISubsystem {
 
     const grid = el('div', 'ak-grid ak-grid--chars ak-stagger', s.root);
     grid.style.setProperty('--d', '120ms');
-    grid.style.gridTemplateColumns = `repeat(${cols}, calc(150 * var(--u)))`;
+    // The COUNT is ours (it drives the focus model); the WIDTH belongs to
+    // `ui.css`, which floors it so an 11px `MASCOT` badge still fits the card.
+    grid.style.gridTemplateColumns = `repeat(${cols}, var(--ak-card-w))`;
     for (let i = 0; i < CHARACTERS.length; i++) {
       const c = CHARACTERS[i];
       const card = el('div', 'ak-card ak-card--char', grid);
@@ -521,7 +523,7 @@ export class MenuSystem implements ISubsystem {
 
     const grid = el('div', 'ak-grid ak-grid--tracks ak-stagger', s.root);
     grid.style.setProperty('--d', '120ms');
-    grid.style.gridTemplateColumns = `repeat(${cols}, calc(252 * var(--u)))`;
+    grid.style.gridTemplateColumns = `repeat(${cols}, var(--ak-card-w))`;
     for (let i = 0; i < TRACKS.length; i++) {
       const t = TRACKS[i];
       const card = el('div', 'ak-card ak-card--track', grid);
@@ -1000,12 +1002,22 @@ export class MenuSystem implements ISubsystem {
     }
     if (s.ring) {
       const target = s.items[n].el;
-      if (!s.ringHeight) {
-        s.ringHeight = target.offsetHeight;
-        s.ring.style.height = `${s.ringHeight}px`;
+      // MEASURE THE ROW WE ARE MOVING TO, EVERY TIME. The height used to be
+      // cached from whichever row was focused first, and the rows are not all
+      // the same height — a slider row on OPTIONS is 43.7px against a plain
+      // row's 27.7px at 800x450, so the travelling highlight was 16px short of
+      // every slider it landed on. `offsetHeight`/`offsetTop` on purpose: they
+      // are the row's LAYOUT box, so they are not disturbed by the focus
+      // transform that is still mid-transition while this runs.
+      const h = target.offsetHeight;
+      if (h !== s.ringHeight) {
+        s.ringHeight = h;
+        s.ring.style.height = `${h}px`;
       }
-      const top = target.offsetTop;
-      s.ring.style.transform = `translateY(${top}px)`;
+      // Only the Y offset comes from here: `.ak-list__focus` composes it with the
+      // row's own lift and pop in CSS (`--ak-row-lift` / `--ak-row-pop`), so the
+      // slab cannot drift out of register with the row again.
+      s.ring.style.setProperty('--ak-ring-y', `${target.offsetTop}px`);
       s.ring.style.transition = immediate ? 'none' : 'transform 320ms cubic-bezier(.16,1,.3,1)';
       setClass(s.ring, 'ak-list__focus--on', true);
     }

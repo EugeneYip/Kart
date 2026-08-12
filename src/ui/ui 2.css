@@ -1149,11 +1149,6 @@
   z-index: 60;
   pointer-events: none;
   overflow: hidden;
-  /* ONE definition of the selected row's offset and scale, for the row AND for
-     the slab that has to sit exactly under it. Two copies of these numbers is
-     precisely how the highlight came apart from the row it was highlighting. */
-  --ak-row-lift: calc(10 * var(--u));
-  --ak-row-pop: 1.03;
 }
 .ak-menus--active { pointer-events: auto; }
 
@@ -1323,10 +1318,14 @@
   flex-direction: column;
   gap: calc(10 * var(--u));
   width: min(max(calc(520 * var(--u)), calc(40 * var(--u-min))), 86vw);
+  /* ONE definition of the selected row's offset and scale, read by both the row
+     and the slab behind it. Two copies of these numbers is exactly how they came
+     apart. */
+  --ak-row-lift: calc(10 * var(--u));
+  --ak-row-pop: 1.03;
 }
 /* The travelling selection slab. It has to REGISTER with the focused row, so it
-   takes the row's own offset and scale from `--ak-row-lift` / `--ak-row-pop` on
-   `.ak-menus`, the same two declarations the row itself reads;
+   takes the row's own offset and scale from the same two declarations below;
    `MenuSystem.setFocus` supplies only `--ak-ring-y` (and the row's measured
    height), never the whole transform. Composing it in CSS is the point: when JS
    wrote `transform: translateY(...)` itself, the row's `translateX(10u)
