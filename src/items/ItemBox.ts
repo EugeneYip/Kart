@@ -224,6 +224,17 @@ export class ItemBoxField {
     this.buildCore();
     this.buildShards();
     this.scene.add(this.group);
+    // The doc comment on `setSpawns` promises it is safe to call before OR after
+    // init(); it was not. Called first, it recorded `this.count` while `this.body`
+    // was still null, and init() then created the shells with `count = 0`, so the
+    // whole field was silently undrawn. Adopt whatever is already there — and pose
+    // it, for the reason spelled out over `poseInstances`.
+    if (this.count > 0) {
+      this.body.count = this.count;
+      this.rim.count = this.count;
+      this.core.count = this.count;
+      this.poseInstances();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -462,6 +473,33 @@ export class ItemBoxField {
       this.body.count = this.count;
       this.rim.count = this.count;
       this.core.count = this.count;
+      // ==================================================================
+      //  THE "HALF-BURIED ITEM BOX AT THE START LINE", reported five times
+      // ==================================================================
+      // The three lines above raise the draw count. Nothing wrote the instance
+      // MATRICES — `update()` did that, on some later frame — and a three.js
+      // `InstancedMesh` initialises every matrix to the IDENTITY. So between
+      // `setSpawns()` and the next `update()` all `count` boxes were submitted at
+      // the identity transform: unrotated, unit scale, centred at world (0, 0, 0).
+      //
+      // On ALL THREE circuits the start/finish line IS world (0, 0, 0) and the
+      // road surface there is y = 0.000 / -0.013 / 0.000. A 1.72 m box centred on
+      // that plane is 50 % below the tarmac. Measured in the real grid-slot chase
+      // frame at 800 × 450 (`.probe-tmp/p0g-line.ts`): 39 px of body plus a 42 px
+      // rim shell, 49–50 % of its height hidden, and — because the pole slot sits
+      // to the LEFT of the centreline — to the RIGHT of the FINISH lettering.
+      // That is the owner's screenshot, exactly, on every circuit.
+      //
+      // This is why three previous sweeps "cleared" the item boxes: they measured
+      // `getItemBoxSpawns()`, found the nearest authored row 186 / 348 / 154 m from
+      // the line, and concluded no box is anywhere near it. True, and irrelevant —
+      // the box on screen was not at a spawn, it was at the default matrix.
+      //
+      // The fix is one call, and it is visual only. `pos`, `up`, `phase`, `alive`,
+      // `pop` and `count` are untouched, `checkPickups` still tests against `pos`,
+      // and `poseInstances` is the identical loop `update()` runs — so a box is now
+      // simply drawn where it already was collectable.
+      this.poseInstances();
     }
   }
 
@@ -573,6 +611,42 @@ export class ItemBoxField {
   /** Variable-step: tumble, pop, glow pulse, shard simulation. */
   update(dt: number): void {
     this.elapsed += dt;
+    this.poseInstances();
+
+    // Shards
+    let anyShard = false;
+    for (let i = 0; i < MAX_SHARDS; i++) {
+      if (this.sLife[i] <= 0) continue;
+      anyShard = true;
+      const i3 = i * 3;
+      this.sLife[i] -= dt;
+      if (this.sLife[i] <= 0) { this.shards.setMatrixAt(i, HIDDEN); continue; }
+      this.sVel[i3 + 1] -= 26 * dt;
+      this.sPos[i3] += this.sVel[i3] * dt;
+      this.sPos[i3 + 1] += this.sVel[i3 + 1] * dt;
+      this.sPos[i3 + 2] += this.sVel[i3 + 2] * dt;
+      this.sRot[i3] += this.sSpin[i3] * dt;
+      this.sRot[i3 + 1] += this.sSpin[i3 + 1] * dt;
+      this.sRot[i3 + 2] += this.sSpin[i3 + 2] * dt;
+      const life01 = clamp01(this.sLife[i] / this.sMax[i]);
+      _v.set(this.sPos[i3], this.sPos[i3 + 1], this.sPos[i3 + 2]);
+      _euler.set(this.sRot[i3], this.sRot[i3 + 1], this.sRot[i3 + 2], 'XYZ');
+      _q.setFromEuler(_euler);
+      _scale.setScalar(this.sScale[i] * (0.35 + life01 * 0.85));
+      _m.compose(_v, _q, _scale);
+      this.shards.setMatrixAt(i, _m);
+    }
+    if (anyShard) this.shards.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * Write the body / rim / core transform for every live box at the CURRENT
+   * `elapsed`. Extracted from `update()` verbatim so that `setSpawns()` and
+   * `init()` can pose the field the moment it exists instead of leaving it at the
+   * identity matrix until the next frame — see the long note in `setSpawns`.
+   * Advances no state, allocates nothing, and is idempotent.
+   */
+  private poseInstances(): void {
     const t = this.elapsed;
 
     for (let i = 0; i < this.count; i++) {
@@ -623,31 +697,6 @@ export class ItemBoxField {
       this.rim.instanceMatrix.needsUpdate = true;
       this.core.instanceMatrix.needsUpdate = true;
     }
-
-    // Shards
-    let anyShard = false;
-    for (let i = 0; i < MAX_SHARDS; i++) {
-      if (this.sLife[i] <= 0) continue;
-      anyShard = true;
-      const i3 = i * 3;
-      this.sLife[i] -= dt;
-      if (this.sLife[i] <= 0) { this.shards.setMatrixAt(i, HIDDEN); continue; }
-      this.sVel[i3 + 1] -= 26 * dt;
-      this.sPos[i3] += this.sVel[i3] * dt;
-      this.sPos[i3 + 1] += this.sVel[i3 + 1] * dt;
-      this.sPos[i3 + 2] += this.sVel[i3 + 2] * dt;
-      this.sRot[i3] += this.sSpin[i3] * dt;
-      this.sRot[i3 + 1] += this.sSpin[i3 + 1] * dt;
-      this.sRot[i3 + 2] += this.sSpin[i3 + 2] * dt;
-      const life01 = clamp01(this.sLife[i] / this.sMax[i]);
-      _v.set(this.sPos[i3], this.sPos[i3 + 1], this.sPos[i3 + 2]);
-      _euler.set(this.sRot[i3], this.sRot[i3 + 1], this.sRot[i3 + 2], 'XYZ');
-      _q.setFromEuler(_euler);
-      _scale.setScalar(this.sScale[i] * (0.35 + life01 * 0.85));
-      _m.compose(_v, _q, _scale);
-      this.shards.setMatrixAt(i, _m);
-    }
-    if (anyShard) this.shards.instanceMatrix.needsUpdate = true;
   }
 
   /** Everything back to alive, shards cleared. */
@@ -658,6 +707,10 @@ export class ItemBoxField {
       if (this.shards) this.shards.setMatrixAt(i, HIDDEN);
     }
     if (this.shards) this.shards.instanceMatrix.needsUpdate = true;
+    // A box that was dead at reset time is holding the HIDDEN matrix; bring it
+    // back on this call rather than on the next frame, so no restart can show a
+    // collectable box that is not drawn (or a drawn box at the wrong transform).
+    if (this.body) this.poseInstances();
   }
 
   dispose(): void {

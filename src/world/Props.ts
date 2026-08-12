@@ -155,6 +155,13 @@ const _euler = new THREE.Euler();
 const _axisY = new THREE.Vector3(0, 1, 0);
 const _volDir = new THREE.Vector3();
 
+/**
+ * A zero-length frame, used once at the end of `init()` to pose the CPU-animated
+ * props (see `poseMotionProps`). `dt = 0` advances no animation state, so the
+ * transform written is exactly the one `update()` would write on its first call.
+ */
+const POSE_FRAME: FrameContext = { dt: 0, fixedDt: 0, elapsed: 0, frame: 0, alpha: 0 };
+
 type Shade = { top?: number; side?: number; bottom?: number };
 
 /**
@@ -1629,6 +1636,54 @@ export class Props implements ISubsystem {
         + `; ${this.roadSurfaceRefused} could NOT be pushed clear and are still on the road`
         + ' — the authored `lat` for these types is smaller than the recipe is wide.',
       );
+    }
+    this.poseMotionProps();
+  }
+
+  /**
+   * ======================= THE FIFTH "BOX AT THE START LINE" ==================
+   *
+   * Pose every CPU-animated prop AS BUILT, before anything can draw it.
+   *
+   * `seagull` and `tram` are the only two recipes whose anchors are literally
+   * `{ x: 0, y: 0, z: 0, yaw: 0, scale: 1 }`: their real transform is not a
+   * placement at all, it is `updateGulls()` / `updateTrams()` recomputing a flight
+   * path or a tramline every frame. An anchor of all zeros composes to the
+   * IDENTITY matrix, and **on all three circuits the start/finish line is world
+   * (0, 0, 0) with the road surface at y ≈ 0** — so until the first
+   * `Props.update()` lands, three 3.20 × 4.76 × 7.06 m tram boxes (Neon) or 22
+   * seagulls (Coastal) are stacked exactly on the line with their centres ON the
+   * tarmac. Measured in the real grid-slot chase frame at 800 × 450: the tram is
+   * **110 px tall, 24 % of its height under the road, and to the RIGHT of the
+   * FINISH lettering** — which is where the owner has been pointing for five
+   * playtests.
+   *
+   * And that state IS rendered, repeatedly:
+   *   · `RaceDirector.beginRace()` calls `Environment.syncToTrack()` and
+   *     deliberately does not await it, so a circuit change rebuilds the world
+   *     *during* the countdown, with the camera parked on the grid looking
+   *     straight down the road at the line;
+   *   · `Environment.init()` reparents each layer into the LIVE scene as that
+   *     layer finishes, but only sets `ready = true` after the last one;
+   *   · `Environment.update()` opens with `if (!this.ready) return;` — so
+   *     `Props.update()` is never called while the rebuild is in flight, even
+   *     though the props are already in the scene and being drawn. Every frame
+   *     between the Props stage landing and the Weather stage finishing shows
+   *     them at the origin. (`.probe-tmp/p0g-line.ts --rebuild` counts those
+   *     frames; the Crowd and Weather stages each bake procedural textures, so
+   *     in the browser this is hundreds of milliseconds, not one frame.)
+   *
+   * Fixing it here rather than in `Environment` keeps the change inside this
+   * file's own contract: a prop that has been built is a prop that is posed.
+   * `dt = 0` means nothing is advanced — this writes precisely the transform
+   * `update()` would have written on its first call, so the flight paths, the
+   * tramline, the phases and the seeds are all bit-identical to before. It is a
+   * visual correction only; neither recipe has any gameplay function.
+   */
+  private poseMotionProps(): void {
+    for (const entry of this.meshes) {
+      if (entry.motion === 'gull') this.updateGulls(entry, POSE_FRAME);
+      else if (entry.motion === 'tram') this.updateTrams(entry, POSE_FRAME);
     }
   }
 

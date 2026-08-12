@@ -165,8 +165,28 @@ export class ItemSystem implements ISubsystem {
     this.boxes.setSpawns(this.resolveBoxSpawns());
     this.projectiles.init();
     this.hazards.init();
+    this.poseHazards();
     this.noteTrack();
     this.ready = true;
+  }
+
+  /**
+   * Pose the hazard nodes the moment they are built.
+   *
+   * Same defect as the item boxes had (see the long note in `ItemBox.setSpawns`):
+   * `Hazards.init()` / `.rebuild()` create their nodes at the default transform and
+   * leave `update()` to place them. A node at the default transform sits at world
+   * (0, 0, 0), which on all three circuits IS the start/finish line with the road
+   * at y ≈ 0 — so an unposed boulder or fireball is a half-sunk lump on the line.
+   * Measured as built (`.probe-tmp/p0g-line.ts`): 25 nodes on Coastal up to 100 %
+   * under the tarmac at 15–25 px, 4 on Volcano at 33 px.
+   *
+   * `update(0, 0)` advances no animation state — `Hazards.fixedUpdate` owns the
+   * phase — so this only writes the transform the first frame would have written.
+   * Done from here rather than inside `Hazards.ts`, which this agent does not own.
+   */
+  private poseHazards(): void {
+    this.hazards.update(0, 0);
   }
 
   /**
@@ -249,7 +269,10 @@ export class ItemSystem implements ISubsystem {
     // Rebuild hazards ONLY on a real circuit change. A rebuild re-generates a
     // 512² boulder albedo and a 256² normal map, so doing it on every `restart()`
     // would put a visible hitch on the grid for no gain.
-    if (this.trackChanged()) this.hazards.rebuild();
+    if (this.trackChanged()) {
+      this.hazards.rebuild();
+      this.poseHazards();
+    }
     this.noteTrack();
   }
 
