@@ -1079,6 +1079,380 @@ function fontTable(): string {
 }
 
 // ===========================================================================
+// Rendered-text fit and sibling overlap  (F1)
+// ===========================================================================
+//
+// WHY THESE EXIST, AND WHY `matrix()` MISSED A SCREENFUL OF CLIPPED WORDS.
+//
+// The `ccabb50` sweep asserted `scrollWidth <= clientWidth` plus rect
+// containment against the viewport, ran 396 configurations, and reported zero
+// failures — while CHOOSE YOUR RACER was on screen reading "MASCO", "WEIGH",
+// "HANDLI", "TRACTI". Both assertions are structurally blind to it:
+//
+//  - `scrollWidth <= clientWidth` cannot fire on a FLEX ITEM whose text
+//    overflows. `.ak-stat__k` is `width: 96u` in a row whose bar takes
+//    `flex: 1`; an over-long label does not scroll its own box, it paints
+//    straight out of it and the positioned bar next door paints on top. The
+//    label's `scrollWidth` equals its `clientWidth` the whole time.
+//  - Viewport containment cannot fire either: nothing leaves the screen. The
+//    ink lands on the SIBLING, ~30 px deep into a bar that is still perfectly
+//    inside the frame.
+//
+// So both of the checks below deliberately measure something neither of those
+// can see:
+//
+//  1. `textFit()` — RENDERED TEXT WIDTH against the element's own content box.
+//     Measured two independent ways: a `Range` around the element's own text
+//     nodes (per line, so wrapping is visible as a line count), and canvas
+//     `measureText` with the element's computed font and letter-spacing. The
+//     trailing letter-space is subtracted — CSS puts `letter-spacing` after the
+//     last glyph too, and a shrink-to-fit box that includes it would otherwise
+//     report ~1.8 px of phantom overflow on every tag in the game.
+//     It also measures ink against the nearest CLIPPING ancestor's padding box,
+//     which is what actually severs the T from "MASCOT": the pill is
+//     shrink-to-fit and therefore never wider than its own box — it is the
+//     card's `overflow: hidden` that cuts the word.
+//  2. `rowOverlap()` — each flex/grid child's INK rect against every sibling's
+//     BORDER box. In-flow flex and grid items never overlap by design, so any
+//     intersection is text escaping its own column, whatever the boxes say.
+//
+// Both are asserted at all four viewports over all nine menu screens and both
+// results boards, and both are counted in `matrix()`.
+
+/** Text-bearing leaves in the menus and on the results board. */
+const FIT_SEL = [
+  '.ak-num__fill', '.ak-head__sub', '.ak-logo__sub', '.ak-press',
+  '.ak-item-row__label', '.ak-item-row__hint', '.ak-item-row__value',
+  '.ak-card__name', '.ak-card__tag', '.ak-cc__sub',
+  '.ak-stats__name', '.ak-stats__sub', '.ak-stat__k', '.ak-stat__v',
+  '.ak-hint > span', '.ak-key', '.ak-controls-table > span',
+  '.ak-rrow__name', '.ak-rrow__time', '.ak-rrow__best', '.ak-rrow__pts',
+  '.ak-podium__name', '.ak-btn', '.ak-stand__pos', '.ak-stand__name', '.ak-stand__pts',
+] as const;
+
+/** Containers whose in-flow children must not have each other's ink in them. */
+const ROW_SEL = [
+  '.ak-stat', '.ak-hint', '.ak-hints', '.ak-item-row', '.ak-controls-table',
+  '.ak-rrow', '.ak-stand__chip', '.ak-buttons', '.ak-head', '.ak-stats',
+] as const;
+
+/** One measuring canvas for the whole run — `measureText` needs no DOM. */
+const fitCanvas = document.createElement('canvas');
+const fitCtx = fitCanvas.getContext('2d');
+
+interface Ink { w: number; lines: number; l: number; r: number; t: number; b: number }
+
+const NO_INK: Ink = { w: 0, lines: 0, l: 0, r: 0, t: 0, b: 0 };
+
+/**
+ * The painted extent of an element's own text, per line, from `Range` rects.
+ * Line-aware on purpose: a wrapped label's box is as wide as its widest LINE,
+ * not as wide as the string, and it is the line that clips.
+ */
+function inkOf(e: Element): Ink {
+  const ls = parseFloat(getComputedStyle(e).letterSpacing) || 0;
+  const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+  const lines: Array<{ t: number; l: number; r: number }> = [];
+  let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity, found = false;
+  let node = walker.nextNode();
+  for (; node; node = walker.nextNode()) {
+    if (!node.nodeValue || !node.nodeValue.trim()) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const cr of Array.from(range.getClientRects())) {
+      if (cr.width <= 0.01) continue;
+      found = true;
+      l = Math.min(l, cr.left); r = Math.max(r, cr.right);
+      t = Math.min(t, cr.top); b = Math.max(b, cr.bottom);
+      const g = lines.find((x) => Math.abs(x.t - cr.top) < 1.5);
+      if (g) { g.l = Math.min(g.l, cr.left); g.r = Math.max(g.r, cr.right); }
+      else lines.push({ t: cr.top, l: cr.left, r: cr.right });
+    }
+  }
+  if (!found) return NO_INK;
+  // CSS `letter-spacing` is applied AFTER the last glyph of a line as well, so
+  // the range rect (and `measureText`) carry a trailing gap that is not ink.
+  // Leaving it in reports every shrink-to-fit pill as ~1.8 px overflowing.
+  let widest = 0;
+  for (const g of lines) widest = Math.max(widest, g.r - g.l - ls);
+  return { w: widest, lines: lines.length, l, r: r - ls, t, b };
+}
+
+/** The same string re-measured off-DOM, as an independent check on `inkOf`. */
+function measuredWidth(e: Element): number {
+  if (!fitCtx) return 0;
+  const s = getComputedStyle(e);
+  const text = (e.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return 0;
+  fitCtx.font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+  const ls = s.letterSpacing === 'normal' ? 0 : (parseFloat(s.letterSpacing) || 0);
+  const ctx = fitCtx as CanvasRenderingContext2D & { letterSpacing?: string };
+  if (typeof ctx.letterSpacing === 'string') {
+    ctx.letterSpacing = `${ls}px`;
+    const w = fitCtx.measureText(text).width;
+    ctx.letterSpacing = '0px';
+    return Math.max(0, w - ls);
+  }
+  return fitCtx.measureText(text).width + ls * (text.length - 1);
+}
+
+function shortSel(e: Element): string {
+  const cls = (e.className || '').toString().split(' ').filter((c) => c.startsWith('ak-'));
+  return cls[cls.length - 1] ?? e.tagName.toLowerCase();
+}
+
+export interface TextFitRow {
+  where: string;
+  size: string;
+  sel: string;
+  text: string;
+  fontPx: number;
+  /** The element's own content box width. */
+  boxW: number;
+  /** Widest rendered LINE of its text, trailing letter-space removed. */
+  inkW: number;
+  /** Canvas `measureText` of the whole string with the same font. */
+  measuredW: number;
+  lines: number;
+  /** inkW - boxW. Positive means the text is wider than the box holding it. */
+  overW: number;
+  /** How far the ink is severed by the nearest clipping ancestor, per side. */
+  cutL: number;
+  cutR: number;
+  clipper: string;
+  pass: boolean;
+}
+
+const FIT_EPS = 0.5;
+
+function textFitRows(where: string, root: Element | null): TextFitRow[] {
+  const rows: TextFitRow[] = [];
+  if (!root) return rows;
+  for (let i = 0; i < 2; i++) { void (root as HTMLElement).offsetHeight; freezeAnims(); }
+  void (root as HTMLElement).offsetHeight;
+  const size = `${Math.round(rectOf(stage).w)}x${Math.round(rectOf(stage).h)}`;
+  for (const sel of FIT_SEL) {
+    for (const e of Array.from(root.querySelectorAll(sel))) {
+      if (!visible(e)) continue;
+      const ink = inkOf(e);
+      if (ink.lines === 0) continue;
+      const cb = contentBox(e);
+      const cl = clipper(e);
+      const cbox = cl ? paddingBox(cl) : null;
+      const cutL = cbox ? Math.max(0, cbox.l - ink.l) : 0;
+      const cutR = cbox ? Math.max(0, ink.r - cbox.r) : 0;
+      const overW = ink.w - cb.w;
+      rows.push({
+        where, size, sel: shortSel(e),
+        text: (e.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 24),
+        fontPx: +(parseFloat(getComputedStyle(e).fontSize) || 0).toFixed(2),
+        boxW: +cb.w.toFixed(2),
+        inkW: +ink.w.toFixed(2),
+        measuredW: +measuredWidth(e).toFixed(2),
+        lines: ink.lines,
+        overW: +overW.toFixed(2),
+        cutL: +cutL.toFixed(2),
+        cutR: +cutR.toFixed(2),
+        clipper: cl ? shortSel(cl) : '',
+        pass: overW <= FIT_EPS && cutL <= FIT_EPS && cutR <= FIT_EPS,
+      });
+    }
+  }
+  return rows;
+}
+
+export interface OverlapRow {
+  where: string;
+  size: string;
+  /** The element whose ink is in the wrong place. */
+  a: string;
+  aText: string;
+  /** The sibling it lands on. */
+  b: string;
+  row: string;
+  overlapW: number;
+  overlapH: number;
+}
+
+function overlapRows(where: string, root: Element | null): OverlapRow[] {
+  const out: OverlapRow[] = [];
+  if (!root) return out;
+  for (let i = 0; i < 2; i++) { void (root as HTMLElement).offsetHeight; freezeAnims(); }
+  const size = `${Math.round(rectOf(stage).w)}x${Math.round(rectOf(stage).h)}`;
+  const containers = new Set<Element>();
+  for (const sel of ROW_SEL) for (const c of Array.from(root.querySelectorAll(sel))) containers.add(c);
+  for (const c of containers) {
+    const disp = getComputedStyle(c).display;
+    if (disp !== 'flex' && disp !== 'grid' && disp !== 'inline-flex' && disp !== 'inline-grid') continue;
+    const kids = flowChildren(c);
+    if (kids.length < 2) continue;
+    for (const a of kids) {
+      const ink = inkOf(a);
+      if (ink.lines === 0) continue;
+      for (const b of kids) {
+        if (a === b) continue;
+        const br = rectOf(b);
+        const ow = Math.min(ink.r, br.r) - Math.max(ink.l, br.l);
+        const oh = Math.min(ink.b, br.b) - Math.max(ink.t, br.t);
+        if (ow <= FIT_EPS || oh <= FIT_EPS) continue;
+        out.push({
+          where, size,
+          a: shortSel(a),
+          aText: (a.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 20),
+          b: shortSel(b),
+          row: shortSel(c),
+          overlapW: +ow.toFixed(2),
+          overlapH: +oh.toFixed(2),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export interface TextAudit {
+  fit: TextFitRow[];
+  overlaps: OverlapRow[];
+}
+
+/**
+ * Every menu screen plus both results boards at the CURRENT stage size, checked
+ * for rendered-text fit and for sibling ink collisions.
+ */
+function textFit(): TextAudit {
+  const fit: TextFitRow[] = [];
+  const overlaps: OverlapRow[] = [];
+  const wasResults = results.visible;
+  if (menu) {
+    for (const id of SCREEN_IDS) {
+      menu.show(id);
+      settle(3);
+      const root = stage.querySelector(`.ak-screen--on[data-screen="${id}"]`);
+      fit.push(...textFitRows(`screen:${id}`, root));
+      overlaps.push(...overlapRows(`screen:${id}`, root));
+    }
+    closeMenus();
+  }
+  for (const gp of [false, true]) {
+    showResults(12, gp);
+    settle(4);
+    const root = stage.querySelector('.ak-results--on');
+    fit.push(...textFitRows(`results:${gp ? 'gp' : 'vs'}`, root));
+    overlaps.push(...overlapRows(`results:${gp ? 'gp' : 'vs'}`, root));
+    results.hide();
+    settle(2);
+  }
+  if (wasResults) showResults(12, true);
+  return { fit, overlaps };
+}
+
+/**
+ * The failures only, across all four viewports. Empty output is the pass.
+ * `only` narrows to one viewport (`"800x450"`): a full pass over 11 roots x 4
+ * viewports takes ~2 minutes of real WebKit layout, which is longer than the
+ * off-screen driver's process budget, so the proof runs are sharded per size.
+ */
+function textTable(only?: string): string {
+  const lines: string[] = [];
+  let checked = 0, bad = 0, collisions = 0;
+  for (const [w, h] of SIZES) {
+    if (only && only !== `${w}x${h}`) continue;
+    setSize(w, h);
+    settle(2);
+    const a = textFit();
+    checked += a.fit.length;
+    const fails = a.fit.filter((r) => !r.pass);
+    bad += fails.length;
+    collisions += a.overlaps.length;
+    lines.push(`--- ${w}x${h}: ${fails.length}/${a.fit.length} strings do not fit, `
+      + `${a.overlaps.length} sibling ink collisions ---`);
+    for (const r of fails) {
+      lines.push(`  ${r.where.padEnd(14)} ${r.sel.padEnd(18)} "${r.text}"`);
+      lines.push(`      font ${r.fontPx}px  box ${r.boxW}  ink ${r.inkW} (${r.lines} line`
+        + `${r.lines === 1 ? '' : 's'}, measureText ${r.measuredW})  over ${r.overW}`
+        + (r.cutR > FIT_EPS ? `  CUT ${r.cutR} by .${r.clipper}` : '')
+        + (r.cutL > FIT_EPS ? `  cutL ${r.cutL} by .${r.clipper}` : ''));
+    }
+    for (const o of a.overlaps) {
+      lines.push(`  ${o.where.padEnd(14)} .${o.a} "${o.aText}" ink sits ${o.overlapW}x${o.overlapH}px `
+        + `inside sibling .${o.b} (in .${o.row})`);
+    }
+  }
+  lines.push(`=== ${bad}/${checked} strings overflow or are clipped; ${collisions} sibling ink collisions ===`);
+  return lines.join('\n');
+}
+
+/**
+ * The named strings from the P0f report, measured at the three viewports the
+ * report quotes. Rendered width versus the width of the box holding it.
+ */
+const WATCHED = [
+  'MASCOT', 'WEIGHT', 'HANDLING', 'TRACTION', 'MINI-TURBO',
+  'HEAVYWEIGHT', 'SPEEDSTER', 'OFF-ROAD', 'ANTI-GRAV',
+  'TRAIL BUGGY', 'HOVER RACER', 'BALANCED',
+] as const;
+
+function stringTable(only?: string): string {
+  const lines: string[] = [];
+  const head = `${'string'.padEnd(13)}${'screen/class'.padEnd(30)}${'font'.padStart(6)}`
+    + `${'inkW'.padStart(9)}${'boxW'.padStart(9)}${'over'.padStart(8)}${'cut'.padStart(7)}  lines  verdict`;
+  for (const [w, h] of [[800, 450], [1280, 720], [1920, 1080]] as Array<[number, number]>) {
+    if (only && only !== `${w}x${h}`) continue;
+    setSize(w, h);
+    settle(2);
+    const rows = textFit().fit;
+    lines.push(`--- ${w}x${h} ---`);
+    lines.push(head);
+    for (const want of WATCHED) {
+      const hit = rows.filter((r) => r.text === want || r.text.startsWith(`${want} `));
+      if (hit.length === 0) { lines.push(`${want.padEnd(13)}(not present)`); continue; }
+      for (const r of hit) {
+        lines.push(`${want.padEnd(13)}${`${r.where}/.${r.sel}`.padEnd(30)}`
+          + `${r.fontPx.toFixed(0).padStart(5)}p`
+          + `${r.inkW.toFixed(2).padStart(9)}${r.boxW.toFixed(2).padStart(9)}`
+          + `${r.overW.toFixed(2).padStart(8)}${r.cutR.toFixed(2).padStart(7)}`
+          + `${String(r.lines).padStart(6)}  ${r.pass ? 'fits' : 'CLIPPED'}`);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * F2 — "MAIN MENUMAIN MENU".
+ *
+ * Every `.ak-num` heading is TWO stacked copies of the same string: an
+ * `-webkit-text-stroke` layer under a `background-clip: text` gradient layer.
+ * They paint at identical rects, so nothing is doubled on screen — but the
+ * string is in the DOM twice, so `textContent` reads "MAIN MENUMAIN MENU" and
+ * `innerText` reads "MAIN MENU\nMAIN MENU". Anything that consumes the UI as
+ * TEXT — the accessibility tree, a page-text dump, a screen reader — sees the
+ * heading twice, on every screen, not just the main menu.
+ *
+ * This reports one entry per heading with its layers listed separately, so the
+ * fix is provable: after it, exactly ONE layer carries text.
+ */
+function headings(): Array<{ screen: string; text: string; layers: string[]; innerText: string }> {
+  const out: Array<{ screen: string; text: string; layers: string[]; innerText: string }> = [];
+  for (const e of Array.from(stage.querySelectorAll('.ak-num'))) {
+    const screen = (e.closest('.ak-screen') as HTMLElement | null)?.dataset.screen
+      ?? (e.closest('.ak-results') ? 'results' : 'hud');
+    const layers: string[] = [];
+    for (const c of Array.from(e.children)) {
+      const t = (c.textContent ?? '');
+      if (t) layers.push(`${shortSel(c)}="${t}"`);
+    }
+    out.push({
+      screen,
+      text: (e.textContent ?? ''),
+      layers,
+      innerText: (e as HTMLElement).innerText ?? '',
+    });
+  }
+  return out;
+}
+
+// ===========================================================================
 // Item set
 // ===========================================================================
 //
@@ -1178,6 +1552,12 @@ export interface Matrix {
   boardsClipped: number;
   screens: number;
   screensClipped: number;
+  /** F1: rendered strings measured, and how many do not fit their own box. */
+  strings: number;
+  stringsClipped: number;
+  /** F1: flex/grid children whose ink lands on a sibling. */
+  inkCollisions: number;
+  worstOverW: number;
   worstCut: number;
   worstInk: number;
   fails: string[];
@@ -1192,6 +1572,7 @@ function matrix(): Matrix {
   const m: Matrix = {
     configs: 0, overflow: 0, clippedInk: 0, intersections: 0, outsideViewport: 0,
     boards: 0, boardsClipped: 0, screens: 0, screensClipped: 0,
+    strings: 0, stringsClipped: 0, inkCollisions: 0, worstOverW: 0,
     worstCut: 0, worstInk: 0, fails: [],
   };
   results.hide();
@@ -1263,6 +1644,32 @@ function matrix(): Matrix {
     }
     closeMenus();
   }
+
+  // --- F1: rendered text fit + sibling ink collisions --------------------
+  // Deliberately NOT derived from `scrollWidth` or from viewport containment:
+  // both of those pass while a label paints 30 px into the bar beside it.
+  for (const [w, h] of SIZES) {
+    setSize(w, h);
+    settle(2);
+    const a = textFit();
+    m.strings += a.fit.length;
+    for (const r of a.fit) {
+      m.worstOverW = Math.max(m.worstOverW, r.overW);
+      m.worstCut = Math.max(m.worstCut, r.cutL, r.cutR);
+      if (r.pass) continue;
+      m.stringsClipped++;
+      m.fails.push(`${r.size} ${r.where} .${r.sel} "${r.text}": ink ${r.inkW} in box ${r.boxW}`
+        + ` (over ${r.overW}${r.cutR > FIT_EPS ? `, cut ${r.cutR} by .${r.clipper}` : ''}`
+        + `, ${r.lines} line${r.lines === 1 ? '' : 's'}, font ${r.fontPx}px)`);
+    }
+    m.inkCollisions += a.overlaps.length;
+    for (const o of a.overlaps) {
+      m.fails.push(`${o.size} ${o.where} .${o.a} "${o.aText}" ink overlaps sibling .${o.b}`
+        + ` by ${o.overlapW}x${o.overlapH}px inside .${o.row}`);
+    }
+  }
+  results.hide();
+  closeMenus();
   return m;
 }
 
@@ -1305,6 +1712,14 @@ interface UiQa {
   matrix(): Matrix;
   items(): ItemReport;
   u(): number;
+  // --- added for F1 / F2 --------------------------------------------------
+  textFit(): TextAudit;
+  textTable(only?: string): string;
+  stringTable(only?: string): string;
+  /** The production entry point Game.ts calls — F2's repro. */
+  showMainMenu(): void;
+  /** Every `.ak-num` heading's text, once per LAYER, to catch doubling. */
+  headings(): Array<{ screen: string; text: string; layers: string[]; innerText: string }>;
 }
 
 /**
@@ -1401,6 +1816,9 @@ async function boot(): Promise<void> {
   button('SCREENS', () => { out.textContent = screens().map((f) => JSON.stringify(f)).join('\n'); closeMenus(); });
   button('MATRIX', () => { out.textContent = JSON.stringify(matrix(), null, 2); });
   button('items', () => { out.textContent = JSON.stringify(items(), null, 2); });
+  button('TEXT FIT', () => { out.textContent = textTable(); });
+  button('STRINGS', () => { out.textContent = stringTable(); });
+  button('headings', () => { out.textContent = headings().map((h) => JSON.stringify(h)).join('\n'); });
 
   const api: UiQa = {
     hud, karts: KARTS,
@@ -1419,6 +1837,9 @@ async function boot(): Promise<void> {
     showScreen: (id: string) => { menu?.show(id as Parameters<MenuSystem['show']>[0]); settle(3); },
     state: (id: StateId) => setState2(id),
     u: measureU,
+    textFit, textTable, stringTable,
+    showMainMenu: () => { menu?.showMainMenu(); settle(3); },
+    headings,
   };
   (window as unknown as { __UIQA__: UiQa }).__UIQA__ = api;
 
