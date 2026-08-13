@@ -28,6 +28,7 @@
 import { SurfaceType as S } from '@/core/Types';
 import { TF } from './TrackSpline';
 import type { SplineDefaults, SplineNodeSpec } from './TrackSpline';
+import { CITY_TRACKS, CITY_TRACK_ORDER } from './CityDefs';
 
 export type TrackTheme = 'coastal' | 'city' | 'volcano';
 export type SkyPresetName = 'day' | 'sunset' | 'night' | 'storm' | 'volcanic';
@@ -885,9 +886,14 @@ export const TRACKS: Record<string, TrackDef> = {
       { kind: 'oil', t: 0.845, lat: 7 },
     ],
   },
+
+  // The city series (Boston / Taipei / Tokyo) lives in `CityDefs.ts`.
+  ...CITY_TRACKS,
 };
 
-export const TRACK_ORDER: readonly string[] = ['sunsetCoastline', 'neonMetropolis', 'volcanoRush'];
+export const TRACK_ORDER: readonly string[] = [
+  'sunsetCoastline', 'neonMetropolis', 'volcanoRush', ...CITY_TRACK_ORDER,
+];
 export const DEFAULT_TRACK = 'sunsetCoastline';
 
 export function getTrackDef(id: string | undefined): TrackDef {

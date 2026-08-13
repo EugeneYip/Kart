@@ -1029,6 +1029,162 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
   }, { srgb: true, height: 1024 });
 }
 
+/**
+ * ===========================================================================
+ *  NATIONAL FLAGS — a second ATLAS, not a second cloth system
+ * ===========================================================================
+ *  The city circuits each carry one national flag on a plaza mast. The mast and
+ *  the cloth are the existing `flagpole` machinery verbatim: a `plate()` with
+ *  `flapAcross`, animated by the shared `uWind` uniform. The only new thing is
+ *  where the cloth's colour comes from — a baked atlas cell instead of a solid
+ *  hex, exactly the way `standBanner` and `screenTower` take sponsor cells.
+ *
+ *  This atlas is deliberately laid out on the SAME 4x2 cell grid as the sponsor
+ *  atlas, so `atlasRect()` applies to it unchanged. Nothing about `plate()`'s uv
+ *  ranges, `V_TOP_FIRST` or `atlasRect()` is touched — see the notes on all
+ *  three; that question is settled and this reuses the settled answer.
+ *
+ *  The canvas is 1536 x 512, not square: a cell is then 384 x 256, which is the
+ *  3:2 proportion a national flag actually has, and `flagMast()` authors its
+ *  cloth 2.7 x 1.8 m to match. `atlasRect()` never sees pixels — only uv — so a
+ *  non-square canvas costs it nothing.
+ */
+const FLAG_USA = 0;
+const FLAG_ROC = 1;
+const FLAG_JAPAN = 2;
+
+function makeFlagAtlas(): THREE.CanvasTexture {
+  return canvasTexture(1536, (ctx, w, h) => {
+    const cw = w / ATLAS_COLS, ch = h / ATLAS_ROWS;
+    const at = (i: number): [number, number] => [
+      (i % ATLAS_COLS) * cw, Math.floor(i / ATLAS_COLS) * ch,
+    ];
+    /** Soft vertical folds + a top-down light gradient, so cloth is not print. */
+    const cloth = (x: number, y: number): void => {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x, y, cw, ch); ctx.clip();
+      for (let k = 0; k < 7; k++) {
+        const fx = x + (k + 0.5) * (cw / 7);
+        const g = ctx.createLinearGradient(fx - cw / 14, 0, fx + cw / 14, 0);
+        g.addColorStop(0, 'rgba(0,0,0,0.16)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0.10)');
+        g.addColorStop(1, 'rgba(0,0,0,0.16)');
+        ctx.fillStyle = g;
+        ctx.fillRect(fx - cw / 14, y, cw / 7, ch);
+      }
+      const v = ctx.createLinearGradient(0, y, 0, y + ch);
+      v.addColorStop(0, 'rgba(255,255,255,0.10)');
+      v.addColorStop(1, 'rgba(0,0,0,0.14)');
+      ctx.fillStyle = v;
+      ctx.fillRect(x, y, cw, ch);
+      ctx.restore();
+    };
+    /** A `points`-pointed star of radius `r`. */
+    const star = (cx: number, cy: number, r: number, points = 5): void => {
+      ctx.beginPath();
+      for (let i = 0; i < points * 2; i++) {
+        const a = (i / (points * 2)) * Math.PI * 2 - Math.PI * 0.5;
+        const rr = i % 2 ? r * 0.42 : r;
+        if (i === 0) ctx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+        else ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      }
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    // ---- cell 0: the Stars and Stripes ------------------------------------
+    {
+      const [x, y] = at(FLAG_USA);
+      ctx.fillStyle = '#b31942';
+      ctx.fillRect(x, y, cw, ch);
+      ctx.fillStyle = '#ffffff';
+      for (let i = 1; i < 13; i += 2) ctx.fillRect(x, y + (i * ch) / 13, cw, ch / 13);
+      const canW = cw * 0.4, canH = (ch * 7) / 13;
+      ctx.fillStyle = '#0a3161';
+      ctx.fillRect(x, y, canW, canH);
+      ctx.fillStyle = '#ffffff';
+      // 5 x 4 offset star grid: at 154 px of canton, 50 stars would be mush.
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 5; c++) {
+          const odd = r % 2;
+          if (odd && c === 4) continue;
+          star(x + canW * ((c + (odd ? 0.82 : 0.32)) / 5), y + canH * ((r + 0.5) / 5),
+            canH * 0.075);
+        }
+      }
+      cloth(x, y);
+    }
+
+    // ---- cell 1: the Republic of China ------------------------------------
+    {
+      const [x, y] = at(FLAG_ROC);
+      ctx.fillStyle = '#fe0000';
+      ctx.fillRect(x, y, cw, ch);
+      ctx.fillStyle = '#000095';
+      ctx.fillRect(x, y, cw * 0.5, ch * 0.5);
+      const sx = x + cw * 0.25, sy = y + ch * 0.25, sr = ch * 0.19;
+      ctx.fillStyle = '#ffffff';
+      // Twelve rays, then the disc, then the blue centre.
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(sx + Math.cos(a) * sr, sy + Math.sin(a) * sr);
+        ctx.lineTo(sx + Math.cos(a - 0.13) * sr * 0.44, sy + Math.sin(a - 0.13) * sr * 0.44);
+        ctx.lineTo(sx + Math.cos(a + 0.13) * sr * 0.44, sy + Math.sin(a + 0.13) * sr * 0.44);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#000095';
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.33, 0, Math.PI * 2); ctx.fill();
+      cloth(x, y);
+    }
+
+    // ---- cell 2: Japan ----------------------------------------------------
+    {
+      const [x, y] = at(FLAG_JAPAN);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, cw, ch);
+      ctx.fillStyle = '#bc002d';
+      ctx.beginPath();
+      ctx.arc(x + cw * 0.5, y + ch * 0.5, ch * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      cloth(x, y);
+    }
+
+    // ---- cells 3-7: chequer + pennants, so no cell is ever blank ----------
+    {
+      const [x, y] = at(3);
+      const q = cw / 8;
+      for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 8; c++) {
+          ctx.fillStyle = (r + c) % 2 ? '#f4f2ec' : '#14171b';
+          ctx.fillRect(x + c * q, y + (r * ch) / 6, q, ch / 6);
+        }
+      }
+      cloth(x, y);
+    }
+    const pennant: Array<[string, string]> = [
+      ['#d8402f', '#f2c53d'], ['#0f6bd6', '#f6efdd'],
+      ['#1d6f63', '#ffd23f'], ['#7a2ed6', '#4fd6ff'],
+    ];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = at(4 + i);
+      const [a, bb] = pennant[i];
+      ctx.fillStyle = a;
+      ctx.fillRect(x, y, cw, ch);
+      ctx.fillStyle = bb;
+      ctx.beginPath();
+      ctx.moveTo(x, y + ch);
+      ctx.lineTo(x + cw, y);
+      ctx.lineTo(x + cw, y + ch);
+      ctx.closePath();
+      ctx.fill();
+      cloth(x, y);
+    }
+  }, { srgb: true, height: 512 });
+}
+
 /** Chain-link alpha for catch fencing. */
 function makeFenceAlpha(): THREE.CanvasTexture {
   const t = canvasTexture(256, (ctx, w, h) => {
@@ -1347,6 +1503,12 @@ interface AuthoredSpec {
   /** Use the dimmer `glowSoft` for the glow part (windows, buoy lamps). */
   softGlow?: boolean;
   cloth?: THREE.BufferGeometry;
+  /**
+   * Companion pass on the FLAG atlas cloth material. Same `plate(flapAcross)`
+   * geometry as `cloth`, drawn with the flag texture instead of a solid colour;
+   * author it with a baked `atlasRect()` uv range. See `makeFlagAtlas`.
+   */
+  flag?: THREE.BufferGeometry;
   /** Companion pass on the metal material — trusses, bracing, railings. */
   metal?: THREE.BufferGeometry;
   /** Companion pass on the sponsor atlas, with cells baked into the uvs. */
@@ -1453,6 +1615,11 @@ const AUTHORED_ROAD_SLACK = 2.0;
 const CORRIDOR_PROPS = new Set([
   'startgantry', 'balloonarch', 'arch', 'tunnelportal', 'hoload',
   'bridgepylon', 'spiralpylon', 'monorailpylon', 'agpylon', 'energypylon',
+  // City series: the cable-stayed bridge tower straddles its own deck and the
+  // expressway overpass crosses the carriageway 9.6 m up. Both are authored at
+  // lat 0 — `getDecorationHints().place()` yaws a lat-0 prop so local +X runs
+  // ACROSS the road — and both must keep the height they were authored at.
+  'bridgearch', 'overpassarch',
 ]);
 
 /**
@@ -1565,6 +1732,8 @@ export class Props implements ISubsystem {
   private windows!: THREE.MeshStandardMaterial;
   private atlas!: THREE.MeshStandardMaterial;
   private atlasSway!: THREE.MeshStandardMaterial;
+  /** Cloth on the FLAG atlas — see `makeFlagAtlas`. */
+  private flagSway!: THREE.MeshStandardMaterial;
   private fence!: THREE.MeshStandardMaterial;
 
   private time = 0;
@@ -1742,6 +1911,16 @@ export class Props implements ISubsystem {
     this.atlasSway = patchProp(
       base({ name: 'prop-atlas-cloth', map: sponsor, roughness: 0.9, side: THREE.DoubleSide }),
       this.u, { atlas: true, sway: 0.5 },
+    );
+
+    // A national flag is a bigger, slacker cloth than a sponsor banner, so it
+    // gets its own sway amplitude; everything else is `atlasSway`'s recipe.
+    const flags = makeFlagAtlas();
+    flags.anisotropy = this.quality.anisotropy;
+    this.textures.push(flags);
+    this.flagSway = patchProp(
+      base({ name: 'prop-flag-cloth', map: flags, roughness: 0.88, side: THREE.DoubleSide }),
+      this.u, { atlas: true, sway: 0.8 },
     );
 
     const fenceAlpha = makeFenceAlpha();
@@ -3280,6 +3459,10 @@ export class Props implements ISubsystem {
         this.emit(`authored:${key}:cloth`, spec.cloth, this.matteSway, anchors,
           { cull: spec.cull ?? CULL_MID, shadow: false, corridor });
       }
+      if (spec.flag) {
+        this.emit(`authored:${key}:flag`, spec.flag, this.flagSway, anchors,
+          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
+      }
       if (spec.metal) {
         this.emit(`authored:${key}:metal`, spec.metal, this.metal, anchors,
           { cull: spec.cull ?? CULL_MID, corridor });
@@ -4168,6 +4351,607 @@ export class Props implements ISubsystem {
         return { geo: b.build('barrelStack'), cull: CULL_NEAR };
       }
 
+      // =====================================================================
+      //  CITY SERIES LANDMARKS  (Boston / Taipei / Tokyo — see CityDefs.ts)
+      // =====================================================================
+      //  A landmark's job here is SILHOUETTE AT 200 M, per AGENTS.md section 3:
+      //  bold massing and colour blocking, not trim. Every recipe below is
+      //  authored with its local **min.y at 0** so it sits on the ground rather
+      //  than half inside it (`marshalPost`, `beachHut` and the roadside rocks
+      //  were all authored centred on y=0 and came out buried) — the two
+      //  exceptions are `overpassarch`, which hangs BELOW its anchor exactly as
+      //  `bridgepylon` does, and the flag masts' plinths, which start at 0.
+      //
+      //  Each one's built ACROSS-ROAD half-extent is stated in its comment,
+      //  because `lat` in CityDefs is a CENTRE offset and a recipe wider than
+      //  its own `lat` stands inside the road (the `alleyBlock` defect).
+      //  `.probe-tmp/crowding.ts`'s lat audit checks every number here.
+
+      case 'bridgearch': {
+        // ---- BOSTON: the cable-stayed bridge tower --------------------------
+        // An inverted Y whose legs straddle the deck and meet above it, then a
+        // single obelisk shaft. Two of these on the deck, cables fanning fore
+        // and aft, is the whole silhouette.
+        //
+        // WIDTH. Authored at lat 0, so local +-X is ACROSS the carriageway. The
+        // bridge section is hw 11 + kerb 1.55 + shoulder 1.2 = 13.75 m of
+        // corridor, so nothing may come inside 14.2 m of the centreline below
+        // the crotch. The feet stand at +-14.9 m and the legs lean IN as they
+        // rise, crossing the corridor only at 27 m — 25 m above the deck.
+        const b = this.builder();
+        const LEG = 14.9, KNEE = 27, TOP = 58;
+        for (const sx of [-1, 1]) {
+          b.box(sx * LEG, 0.6, 0, 2.2, 0.6, 2.5, 0x8f8b82, { shade: { top: 1.12 } });
+          // Four-sided tubes: a square section, and the only primitive here that
+          // can lean. Two segments per leg so the lean has a knuckle in it.
+          b.tube(sx * LEG, 0.9, 0, sx * LEG * 0.6, KNEE * 0.66, 0, 1.5, 4, 0xe0dbcd, 1.0);
+          b.tube(sx * LEG * 0.6, KNEE * 0.66, 0, sx * 1.6, KNEE, 0, 1.25, 4, 0xe0dbcd, 0.94);
+        }
+        // The obelisk above the crotch, tapered, with a pyramidal cap.
+        b.box(0, KNEE + (TOP - KNEE) * 0.5, 0, 2.5, (TOP - KNEE) * 0.5, 2.2, 0xe8e3d6,
+          { taper: 0.62, shade: { top: 1.14 } });
+        b.box(0, TOP + 1.9, 0, 1.7, 1.9, 1.5, 0xe8e3d6, { taper: 0.08, shade: { top: 1.2 } });
+        // Deck crossbeam under the crotch: what the legs are actually holding.
+        b.box(0, KNEE - 1.6, 0, LEG * 0.62, 0.8, 1.6, 0xcfc9ba, { shade: { top: 1.1 } });
+        const met = this.builder();
+        // Two cable planes, fanning fore and aft to the deck edge.
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            for (let i = 0; i < 8; i++) {
+              const f = (i + 1) / 8;
+              met.tube(sx * 1.5, KNEE + (TOP - 5 - KNEE) * f, 0,
+                sx * 12.6, 0.75, sz * (9 + f * 40), 0.09, 4, 0xc4ced6, 1.0);
+            }
+          }
+        }
+        // No deck-edge rail here on purpose: `TF.Bridge` already cuts the
+        // shoulder back to a kerb and a barrier at 12.55 m, and two towers 75 m
+        // apart would each lay a 100 m rail down the SAME edge — coincident
+        // surfaces that shimmer. The cables land on the barrier that exists.
+        const glow = this.builder();
+        glow.sphere(0, TOP + 4.2, 0, 0.5, 8, 5, 0xff3b2e);
+        for (let i = -2; i <= 2; i++) {
+          glow.box(i * 5.6, KNEE - 2.5, 0, 0.5, 0.14, 0.5, 0xfff0c8);
+        }
+        return {
+          geo: b.build('bridgeArch'), metal: met.build('bridgeArchCables'),
+          glow: glow.build('bridgeArchGlow'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'glasstower': {
+        // ---- BOSTON: the tall glass tower ----------------------------------
+        // One sheer 118 m slab. The read is proportion: far thinner than the
+        // procedural `skyscraper`'s setback massing, and mirror-dark against the
+        // brick. ACROSS-ROAD half-extent 7.3 m (the canopy), 15.9 m along.
+        const b = this.builder();
+        b.uvScale = 0.2;
+        const H = 118, hx = 14, hz = 5.4;
+        b.box(0, H * 0.5, 0, hx, H * 0.5, hz, 0x24404f,
+          { taper: 0.965, shade: { side: 1.0, top: 1.14 } });
+        b.box(0, 1.7, 0, hx + 1.2, 1.7, hz + 1.2, 0x1a252d, { shade: { top: 1.02 } });
+        b.box(0, 3.5, 0, hx + 1.9, 0.18, hz + 1.9, 0x141c23);
+        b.box(0, H + 0.55, 0, hx * 0.965, 0.55, hz * 0.965, 0xcfd6dc, { shade: { top: 1.22 } });
+        b.prism(0, H + 1.1, 0, 0.22, 8, 6, 0x9aa1a9, { taper: 0.35 });
+        // A mullion every 2.5 m. 118 m of unbroken glass reads as a painted
+        // slab; the mullions are what make it a curtain wall at any distance.
+        for (let i = -5; i <= 5; i++) {
+          for (const sz of [1, -1]) {
+            b.box(i * 2.5, H * 0.5, sz * (hz + 0.07), 0.18, H * 0.5, 0.1, 0x4a687e,
+              { taper: 0.965 });
+          }
+        }
+        const win = this.builder();
+        let cell = 0;
+        const floors = 28;
+        for (let f = 0; f < floors; f++) {
+          const y = 6 + f * ((H - 10) / floors);
+          for (const sz of [1, -1]) {
+            for (let i = -4; i <= 4; i++) {
+              win.cell = cell++;
+              win.plate(i * 2.5, y, sz * (hz + 0.14), 2.0, 2.0,
+                sz > 0 ? 0 : Math.PI, 0xa8d8ff, { single: true });
+            }
+          }
+        }
+        win.cell = 0;
+        return {
+          geo: b.build('glassTower'), windows: win.build('glassTowerWindows'),
+          cull: CULL_FAR,
+        };
+      }
+
+      case 'brownstonerow': {
+        // ---- BOSTON: the brick brownstone terrace --------------------------
+        // Three bowfront houses as one prop, so a run of them at a matched step
+        // becomes a continuous terrace for one draw call. The BOW is the read:
+        // a five-sided bay running the full height of every house.
+        //
+        // ACROSS-ROAD half-extent 6.3 m (the stoop), 11.6 m along.
+        //
+        // ---- SLIMMED after measuring. At four houses the prop was 31 m long, and
+        // a 31 m prop standing tangentially at lat 20 on the R62 kink swings its
+        // ENDS ~2.7 m closer to the road than its centre — `.probe-tmp/crowding.ts`
+        // measured the worst instance reaching **0.7 m inside the tarmac** and the
+        // recipe filling 9.63 % of the whole frame (body + glow) across 47 of 204
+        // chase stations, the largest figure on any city circuit. `lat` cannot fix
+        // a chord: three houses (23 m) halves the swing, and CityDefs also moves
+        // the run out to lat 22 and stops it before the kink. Same continuous
+        // terrace, because the authored step matches the new length.
+        const b = this.builder();
+        b.uvScale = 0.7;
+        const N = 3, W = 7.6, D = 4.6, H = 15.2;
+        const bricks = [0x8e4432, 0x7d3b2c, 0x96503a, 0x6f3428];
+        const halfRun = N * W * 0.5;
+        for (let i = 0; i < N; i++) {
+          const x = -halfRun + W * (i + 0.5);
+          const brick = bricks[(i + rng.int(0, 3)) % bricks.length];
+          b.box(x, H * 0.5, 0, W * 0.5, H * 0.5, D, brick, { shade: { top: 1.06 } });
+          b.prism(x, 0.55, D - 0.45, 1.85, H - 0.55, 5, brick,
+            { yaw: Math.PI * 0.5, shade: { top: 1.1 } });
+          // Granite basement course, and a stoop up to the parlour floor.
+          b.box(x, 0.55, D + 0.3, W * 0.5, 0.55, 0.6, 0x9a958c, { shade: { top: 1.14 } });
+          for (let s = 0; s < 4; s++) {
+            b.box(x + 2.3, 0.22 + s * 0.3, D + 1.65 - s * 0.34, 1.0, 0.15, 0.2, 0xa8a29a,
+              { shade: { top: 1.16 } });
+          }
+          // Cornice, mansard course and one chimney per house.
+          b.box(x, H + 0.3, 0, W * 0.5 + 0.24, 0.3, D + 0.32, 0x5c4a3c, { shade: { top: 1.2 } });
+          b.box(x, H + 1.55, 0, W * 0.46, 0.95, D * 0.88, 0x3a312a,
+            { taper: 0.58, shade: { top: 1.16 } });
+          b.box(x - 2.5, H + 2.7, -D * 0.4, 0.52, 1.15, 0.52, brick);
+        }
+        const glow = this.builder();
+        for (let i = 0; i < N; i++) {
+          const x = -halfRun + W * (i + 0.5);
+          for (let s = 0; s < 4; s++) {
+            const col = rng.next() < 0.5 ? 0xffdca8 : 0x1a1c22;
+            glow.plate(x, 2.4 + s * 3.4, D + 1.62, 1.5, 1.9, 0, col, { single: true });
+          }
+        }
+        return {
+          geo: b.build('brownstoneRow'), glow: glow.build('brownstoneGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'goldendome': {
+        // ---- BOSTON: the gold-domed state house ----------------------------
+        // Brick block, columned portico, granite terrace, and a GILDED DOME —
+        // which is the only part that has to read at 200 m, so it goes in the
+        // `metal` pass and catches the sun properly.
+        // ACROSS-ROAD half-extent 12.9 m, 25.4 m along.
+        const b = this.builder();
+        b.uvScale = 0.55;
+        const W = 17, D = 9.5, H = 15;
+        b.box(0, 0.7, 0, W + 2.4, 0.7, D + 3.4, 0x9a958c, { shade: { top: 1.16 } });
+        b.box(0, H * 0.5 + 1.4, 0, W, H * 0.5, D, 0x8e4a38, { shade: { top: 1.07 } });
+        for (const sx of [-1, 1]) {
+          b.box(sx * (W + 4.2), 5.6, 0, 4.2, 4.2, D * 0.8, 0x7f4130, { shade: { top: 1.09 } });
+        }
+        // Portico: five columns, entablature, pediment.
+        for (let i = -2; i <= 2; i++) {
+          b.prism(i * 3.1, 1.4, D + 1.4, 0.52, 8.4, 10, 0xe6e1d6, { taper: 0.94 });
+        }
+        b.box(0, 10.6, D + 1.4, 8.4, 0.8, 1.1, 0xe6e1d6, { shade: { top: 1.18 } });
+        b.box(0, 12.3, D + 1.4, 8.8, 0.95, 0.9, 0xdfd9cc, { taper: 0.5, shade: { top: 1.2 } });
+        // Drum. The sphere's lower half hides inside it, so this is a dome.
+        b.prism(0, H + 1.4, 0, 6.4, 4.2, 12, 0xe6e1d6, { taper: 0.96 });
+        const met = this.builder();
+        met.sphere(0, H + 5.6, 0, 6.5, 14, 7, 0xffc93a, { squash: 0.94 });
+        met.prism(0, H + 11.2, 0, 1.15, 2.6, 8, 0xffc93a, { taper: 0.72 });
+        met.sphere(0, H + 14.1, 0, 0.72, 8, 5, 0xffd96a);
+        met.prism(0, H + 14.7, 0, 0.13, 2.4, 5, 0xffd96a, { taper: 0.45 });
+        // NO terrace uplighters. They were authored at the terrace edge, 13 m out
+        // from the anchor, and `.probe-tmp/buried.ts` measured every one of them
+        // 100 % under ground: the building sits at lat -34 on natural ground 2.7 m
+        // BELOW the raised plaza, so the terrain climbs 2.3 m across the terrace
+        // toward the road. A 0.28 m light box cannot survive that, and the read
+        // here is the gilded dome, not the ground lighting. One draw call saved.
+        return {
+          geo: b.build('goldenDome'), metal: met.build('goldenDomeGild'),
+          cull: CULL_FAR,
+        };
+      }
+
+      case 'stadiumwall': {
+        // ---- BOSTON: the green outfield wall -------------------------------
+        // A 42 m dark-green slab with a yellow line along the top, the manual
+        // scoreboard facing the street, a foul pole and two flood towers behind
+        // it. Colour blocking does all the work.
+        // ACROSS-ROAD half-extent 4.9 m (the flood towers), 21.4 m along.
+        const b = this.builder();
+        b.uvScale = 0.5;
+        const L = 21, H = 11.4;
+        b.box(0, H * 0.5, 0, L, H * 0.5, 0.62, 0x1c4a2e, { shade: { top: 1.05 } });
+        b.box(0, H + 0.3, 0, L + 0.3, 0.3, 0.95, 0xd8c33a, { shade: { top: 1.22 } });
+        b.box(0, 1.1, 0, L + 0.4, 1.1, 1.15, 0x163d26, { shade: { top: 1.0 } });
+        // The scoreboard, facing the road (+Z), with its slots.
+        b.box(-L * 0.42, 4.7, 0.76, 6.4, 3.2, 0.16, 0x14171b, { shade: { top: 1.1 } });
+        for (let i = -4; i <= 4; i++) {
+          for (const sy of [-1.5, 0.2, 1.8]) {
+            b.box(-L * 0.42 + i * 1.35, 4.7 + sy, 0.9, 0.5, 0.5, 0.06, 0xe8e4d8);
+          }
+        }
+        b.prism(L - 1.4, H, -0.2, 0.17, 9.5, 6, 0xd8c33a, { taper: 0.78 });
+        for (const sx of [-0.55, 0.4]) {
+          b.prism(sx * L, 0, -3.6, 0.6, 24, 6, 0x4a5057, { taper: 0.48, capBottom: true });
+          b.box(sx * L, 24.5, -3.6, 3.6, 1.7, 0.55, 0x3a3f47, { shade: { top: 1.14 } });
+        }
+        const glow = this.builder();
+        for (const sx of [-0.55, 0.4]) {
+          for (let i = -2; i <= 2; i++) {
+            glow.box(sx * L + i * 1.3, 24.5, -3.28, 0.52, 0.66, 0.12, 0xfff4d2);
+          }
+        }
+        return {
+          geo: b.build('stadiumWall'), glow: glow.build('stadiumFloods'), cull: CULL_FAR,
+        };
+      }
+
+      case 'pagodatower': {
+        // ---- TAIPEI: the tiered supertall ----------------------------------
+        // Eight identical modules, each WIDER AT THE TOP and capped by an
+        // overhanging cornice, on a tapering podium, under a stepped cap and a
+        // spire. 184 m. The silhouette alone is the landmark, so the module
+        // count and the flare are the only numbers that matter.
+        // ACROSS-ROAD half-extent 16.5 m (podium). Authored once, far out.
+        const b = this.builder();
+        b.uvScale = 0.16;
+        const glass = 0x6f9b90, trim = 0xa3bcb2, dark = 0x46655e;
+        b.box(0, 2.2, 0, 16.5, 2.2, 16.5, 0x59696a, { shade: { top: 1.06 } });
+        b.box(0, 7.9, 0, 15, 3.5, 15, 0x60716e, { taper: 0.79, shade: { top: 1.09 } });
+        b.box(0, 15.4, 0, 11.8, 4.0, 11.8, glass, { taper: 0.85, shade: { top: 1.1 } });
+        const MOD = 15.4, GAP = 1.1;
+        let y = 19.4, r = 10.0;
+        for (let i = 0; i < 8; i++) {
+          b.box(0, y + MOD * 0.5, 0, r, MOD * 0.5, r, i % 2 ? glass : dark,
+            { taper: 1.16, shade: { side: 1.0, top: 1.0 } });
+          b.box(0, y + MOD + 0.55, 0, r * 1.2, 0.55, r * 1.2, trim, { shade: { top: 1.2 } });
+          for (const sx of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              b.box(sx * r * 1.0, y + MOD * 0.5, sz * r * 1.0, 0.32, MOD * 0.5, 0.32, trim,
+                { taper: 1.16 });
+            }
+          }
+          y += MOD + GAP;
+          r *= 0.996;
+        }
+        b.box(0, y + 4.2, 0, r * 0.92, 4.2, r * 0.92, dark, { taper: 0.48, shade: { top: 1.14 } });
+        b.prism(0, y + 8.4, 0, 1.6, 12, 8, trim, { taper: 0.32 });
+        b.prism(0, y + 20.4, 0, 0.42, 14, 6, 0xd8e2e0, { taper: 0.22 });
+        const glow = this.builder();
+        // A square light band at every setback — a torus would be a circle round
+        // a square tower. Four bars per tier.
+        for (let i = 0; i <= 8; i++) {
+          const gy = 19.4 + i * (MOD + GAP);
+          const gr = 10.0 * 1.21;
+          for (let s = 0; s < 4; s++) {
+            const ca = s % 2 === 0 ? 1 : 0, sa = s % 2 === 0 ? 0 : 1;
+            const sg = s < 2 ? 1 : -1;
+            glow.box(ca * sg * gr, gy - 0.2, sa * sg * gr,
+              ca ? 0.12 : gr, 0.16, sa ? 0.12 : gr, 0x7fe4ff);
+          }
+        }
+        glow.sphere(0, y + 34.8, 0, 0.95, 8, 5, 0xffe9a8);
+        return {
+          geo: b.build('pagodaTower'), glow: glow.build('pagodaGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'memorialhall': {
+        // ---- TAIPEI: the memorial hall on the plaza ------------------------
+        // White marble mass on a three-step platform under a DOUBLE OCTAGONAL
+        // cobalt roof. The blue octagon is the read; everything else is mass.
+        // This is also what makes the plaza a plausible home for the flag mast.
+        // ACROSS-ROAD half-extent 24.4 m. Authored once, at lat 46.
+        const b = this.builder();
+        b.uvScale = 0.45;
+        const W = 19, D = 19;
+        for (let s = 0; s < 3; s++) {
+          b.box(0, 0.45 + s * 0.9, 0, W + 5.4 - s * 1.7, 0.45, D + 5.4 - s * 1.7,
+            0xe8e4da, { shade: { top: 1.18 } });
+        }
+        b.box(0, 8.7, 0, W, 6.0, D, 0xf2eee4, { shade: { top: 1.12 } });
+        // Four tall arched recesses on the road face.
+        for (let i = -1; i <= 2; i++) {
+          b.box((i - 0.5) * 7.6, 7.9, D + 0.1, 2.4, 5.2, 0.18, 0x64707a);
+        }
+        b.prism(0, 14.7, 0, W + 3.0, 0.7, 8, 0xe8e4da,
+          { yaw: Math.PI / 8, shade: { top: 1.18 } });
+        b.prism(0, 15.4, 0, W + 2.4, 5.4, 8, 0x1f4fa8,
+          { yaw: Math.PI / 8, taper: 0.52, shade: { side: 1.0, top: 1.06 } });
+        b.prism(0, 20.8, 0, (W + 2.4) * 0.58, 0.6, 8, 0xe8e4da,
+          { yaw: Math.PI / 8, shade: { top: 1.2 } });
+        b.prism(0, 21.4, 0, (W + 2.4) * 0.5, 4.8, 8, 0x1f4fa8,
+          { yaw: Math.PI / 8, taper: 0.32, shade: { side: 1.0, top: 1.06 } });
+        b.prism(0, 26.2, 0, 1.1, 2.2, 8, 0xffc93a, { taper: 0.48 });
+        b.sphere(0, 28.8, 0, 0.88, 8, 5, 0xffd96a);
+        // NO plaza uplighters, for the same measured reason as `goldendome`: a
+        // 48 m wide building standing on a slope buries anything authored near its
+        // outer corner (5.75 m under ground at the platform edge, 2.21 m even on
+        // the top step). The blue octagonal roof is the read.
+        return { geo: b.build('memorialHall'), cull: CULL_FAR };
+      }
+
+      case 'marketstall': {
+        // ---- TAIPEI: one bay of the night-market arcade --------------------
+        // Shophouse behind, stall and striped awning in front, vertical sign
+        // boards and a lantern string in the glow pass. Authored as a run at a
+        // 9.6 m step, so a dozen of them become a lit corridor for two draws.
+        // ACROSS-ROAD half-extent 3.85 m, 4.65 m along.
+        //
+        // ---- SLIMMED after measuring, same lesson as `brownstonerow` and neon's
+        // `alleyBlock`: at 4.6 m of across-road half-extent, 32 of these on an
+        // 8.5 m half-width street filled 9.94 % of the frame (body + glow) across
+        // 41 of 200 stations with 2.9 m of clear verge. The shophouse is 1.1 m
+        // shallower, the awning reaches 0.35 m less, and CityDefs moves the run
+        // out to lat 20 and spaces it 12 m instead of 9.6 — gaps between stalls
+        // read MORE like a market than an unbroken wall did.
+        const b = this.builder();
+        b.uvScale = 0.8;
+        const W = 4.4, storeys = 3, H = storeys * 3.3;
+        b.box(0, H * 0.5, -1.35, W, H * 0.5, 2.5,
+          rng.next() < 0.5 ? 0xc0b7a4 : 0xa89c8a, { shade: { top: 1.08 } });
+        b.box(0, H + 0.4, -1.35, W + 0.25, 0.4, 2.75, 0x8d8375, { shade: { top: 1.18 } });
+        b.box(0, 1.6, 1.02, W * 0.9, 1.6, 0.14, 0x454a52);
+        // Stall counter, four posts, and an awning pitched out over the counter.
+        b.box(0, 0.55, 2.1, W * 0.82, 0.55, 0.8, 0x8a5c3a, { shade: { top: 1.14 } });
+        for (const sz of [2.72, 1.0]) {
+          for (const sx of [-1, 1]) {
+            b.prism(sx * W * 0.8, 0, sz, 0.075, sz > 2 ? 2.9 : 3.3, 4, 0x545a62);
+          }
+        }
+        b.plate(0, 3.2, 1.95, W * 2.0, 2.4, 0,
+          rng.next() < 0.5 ? 0xd8402f : 0x2f6fd0, { single: true, pitch: 1.32 });
+        const glow = this.builder();
+        glow.plate(W * 0.72, H * 0.62, 0.72, 0.95, H * 0.62, 0, 0xff4d6a, { single: true });
+        glow.plate(-W * 0.72, H * 0.48, 0.72, 0.8, H * 0.46, 0, 0x39ff88, { single: true });
+        for (let i = -2; i <= 2; i++) {
+          glow.sphere(i * W * 0.42, 3.55, 2.72, 0.28, 7, 5,
+            i % 2 ? 0xffb43a : 0xff6a4a, { squash: 1.15 });
+        }
+        glow.box(0, 1.95, 2.2, W * 0.8, 0.1, 0.12, 0xffe6b0);
+        return {
+          geo: b.build('marketStall'), glow: glow.build('marketGlow'), cull: CULL_MID,
+        };
+      }
+
+      case 'mountainridge': {
+        // ---- TAIPEI: the mountains behind ----------------------------------
+        // Three overlapping near-cones, hazed toward the top so they read as
+        // distance rather than as geometry. `shadow: false` on purpose: a 96 m
+        // hill 400 m away would otherwise throw a cascade shadow over the whole
+        // circuit for something that is meant to be backdrop.
+        // Half-extent 120 m — authored beyond lat 380, i.e. outside the whole
+        // footprint, so its box corners cannot reach any carriageway.
+        const b = this.builder();
+        b.uvScale = 0.08;
+        b.jitter = 0.07;
+        const peaks: Array<[number, number, number, number]> = [
+          [0, 0, 62, 96], [-74, 26, 46, 68], [68, -18, 52, 78],
+        ];
+        for (const [px, pz, r, h] of peaks) {
+          b.prism(px, 0, pz, r * rng.range(0.94, 1.06), h * rng.range(0.9, 1.1), 7, 0x4e6255,
+            { taper: 0.07, capBottom: false, shade: { side: 1.0, top: 1.22 } });
+          b.prism(px, h * 0.6, pz, r * 0.38, h * 0.44, 7, 0x76877a,
+            { taper: 0.09, yaw: 0.55 });
+        }
+        return { geo: b.build('mountainRidge'), cull: CULL_FAR, shadow: false };
+      }
+
+      case 'latticetower': {
+        // ---- TOKYO: the red lattice tower ----------------------------------
+        // Four legs, X-braced over nine levels, two observation decks, a mast.
+        // 99 m. Built from 4-sided `tube`s: a square member section, and the
+        // only primitive here that can lean, at 8 triangles each.
+        // ACROSS-ROAD half-extent 13.1 m. Authored once, at lat -46.
+        const b = this.builder();
+        const red = 0xe0552b, pale = 0xf0e8dc;
+        const FOOT = 11.6, KNEE = 3.4, DECK = 33, TOP = 62, MAST = 99;
+        const rAt = (y: number): number => (y < DECK
+          ? FOOT + (KNEE - FOOT) * Math.pow(y / DECK, 0.72)
+          : KNEE + (1.5 - KNEE) * ((y - DECK) / (TOP - DECK)));
+        const corners: Array<[number, number]> = [[1, 1], [1, -1], [-1, -1], [-1, 1]];
+        const LV = 9;
+        for (let l = 0; l < LV; l++) {
+          // The level-0 members LEAN at 21 degrees, and `tube()` puts its end rim
+          // perpendicular to the axis — so a 0.44 m tube starting at y = 0 reaches
+          // 0.19 m BELOW the origin, which `.probe-tmp/buried.ts`'s recipe audit
+          // flags (trap 4: every recipe's local min.y must be 0). Starting the
+          // bottom level 0.35 m up puts the ground contact on the foot castings
+          // below, which are the things that are supposed to touch the ground.
+          const y0 = l === 0 ? 0.35 : (l / LV) * TOP;
+          const y1 = ((l + 1) / LV) * TOP;
+          const r0 = rAt(y0), r1 = rAt(y1);
+          for (let c = 0; c < 4; c++) {
+            const [ax, az] = corners[c];
+            const [bx, bz] = corners[(c + 1) % 4];
+            b.tube(ax * r0, y0, az * r0, ax * r1, y1, az * r1, 0.44, 4, red, 1.0);
+            b.tube(ax * r0, y0, az * r0, bx * r1, y1, bz * r1, 0.2, 4, red, 0.9);
+            b.tube(bx * r0, y0, bz * r0, ax * r1, y1, az * r1, 0.2, 4, red, 0.94);
+            b.tube(ax * r1, y1, az * r1, bx * r1, y1, bz * r1, 0.25, 4, red, 0.96);
+          }
+        }
+        for (const [ax, az] of corners) {
+          b.box(ax * FOOT, 0.7, az * FOOT, 1.5, 0.7, 1.5, 0x8f8b82, { shade: { top: 1.12 } });
+        }
+        b.box(0, DECK + 2.4, 0, 7.4, 2.4, 7.4, pale, { taper: 0.9, shade: { top: 1.16 } });
+        b.box(0, DECK + 5.1, 0, 6.3, 0.42, 6.3, red, { shade: { top: 1.1 } });
+        b.box(0, TOP + 1.7, 0, 3.7, 1.7, 3.7, pale, { taper: 0.86, shade: { top: 1.16 } });
+        b.prism(0, TOP + 3.4, 0, 0.58, MAST - TOP - 3.4, 8, red, { taper: 0.2 });
+        const glow = this.builder();
+        glow.sphere(0, MAST + 0.7, 0, 0.62, 8, 5, 0xff3b2e);
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          glow.box(Math.cos(a) * 6.7, DECK + 1.1, Math.sin(a) * 6.7, 0.55, 0.3, 0.55, 0xffd9a0);
+        }
+        glow.box(0, TOP + 3.5, 0, 3.4, 0.2, 3.4, 0xffb43a);
+        return {
+          geo: b.build('latticeTower'), glow: glow.build('latticeGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'broadcastspire': {
+        // ---- TOKYO: the white broadcast spire ------------------------------
+        // A 196 m tapering shaft with vertical ribs, two observation pods and a
+        // needle. Taller than everything else on the circuit by a factor of two,
+        // which is the entire point: it is the horizon marker.
+        // ACROSS-ROAD half-extent 9.4 m. Authored once, 200 m off the road.
+        const b = this.builder();
+        b.uvScale = 0.12;
+        const white = 0xdfe4e8, cool = 0xb0bdc8;
+        const SEG = 7, H1 = 124;
+        let y = 0, r = 9.4;
+        for (let i = 0; i < SEG; i++) {
+          const h = H1 / SEG;
+          const rt = 9.4 * Math.pow(0.86, i + 1);
+          b.prism(0, y, 0, r, h, 9, i % 2 ? white : cool,
+            { taper: rt / r, capBottom: i === 0, capTop: false, shade: { side: 1.0 } });
+          for (let k = 0; k < 9; k++) {
+            const a = (k / 9) * Math.PI * 2;
+            b.tube(Math.cos(a) * r * 0.99, y, Math.sin(a) * r * 0.99,
+              Math.cos(a) * rt * 0.99, y + h, Math.sin(a) * rt * 0.99, 0.22, 4, cool, 0.9);
+          }
+          y += h;
+          r = rt;
+        }
+        b.prism(0, 103, 0, 8.4, 7.0, 12, white, { taper: 0.94, shade: { top: 1.14 } });
+        b.prism(0, 110, 0, 8.0, 0.5, 12, cool);
+        b.prism(0, y, 0, r * 0.85, 196 - y, 8, cool, { taper: 0.07 });
+        b.prism(0, 146, 0, 5.6, 4.6, 12, white, { taper: 0.92, shade: { top: 1.14 } });
+        const glow = this.builder();
+        glow.prism(0, 102.4, 0, 8.5, 0.6, 12, 0xa8d8ff);
+        glow.prism(0, 145.4, 0, 5.7, 0.5, 12, 0xa8d8ff);
+        glow.sphere(0, 197, 0, 0.85, 8, 5, 0xff3b2e);
+        return {
+          geo: b.build('broadcastSpire'), glow: glow.build('spireGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'screentower': {
+        // ---- TOKYO: the scramble crossing's screen block -------------------
+        // A dark corner mass whose road face is nothing but advertising. The
+        // three screens are a `sign` pass with atlas cells BAKED PER PANEL, so
+        // one building carries three different boards — the same technique the
+        // grandstand's sponsor band uses, and the reason `atlasBaked` exists.
+        // ACROSS-ROAD half-extent 8.9 m, 11.6 m along.
+        const b = this.builder();
+        b.uvScale = 0.35;
+        const W = 11, D = 8.4, H = 27;
+        b.box(0, H * 0.5, 0, W, H * 0.5, D, 0x31363d, { shade: { top: 1.09 } });
+        b.box(0, 2.0, 0, W + 0.5, 2.0, D + 0.5, 0x20242a, { shade: { top: 1.02 } });
+        b.box(0, H + 0.38, 0, W + 0.42, 0.38, D + 0.42, 0x2a2e34, { shade: { top: 1.18 } });
+        const panels: Array<[number, number, number, number]> = [
+          [0, 20.5, 8.6, 4.8], [-4.2, 13.4, 6.4, 5.2], [4.6, 12.6, 5.0, 6.6],
+        ];
+        for (const [px, py, pw, ph] of panels) {
+          b.box(px, py, D + 0.22, pw * 0.5 + 0.3, ph * 0.5 + 0.3, 0.24, 0x14171b,
+            { shade: { top: 1.12 } });
+        }
+        b.box(W * 0.55, H + 2.3, -D * 0.4, 1.2, 1.9, 1.2, 0x3a3f47);
+        b.box(-W - 0.5, H * 0.42, D * 0.5, 0.35, H * 0.4, 1.5, 0x2a2e34);
+        const sign = this.builder();
+        panels.forEach(([px, py, pw, ph], i) => {
+          sign.plate(px, py, D + 0.48, pw, ph, 0, 0xffffff,
+            { single: true, uvRect: atlasRect(i * 3 + 1) });
+        });
+        const glow = this.builder();
+        glow.box(0, H - 0.6, D + 0.3, W * 0.97, 0.22, 0.1, 0x2ef0ff);
+        glow.box(-W - 0.62, H * 0.42, D * 0.5, 0.1, H * 0.38, 1.2, 0xff4d6a);
+        // Lit windows up the -X flank. YAW SIGN MATTERS on a `single` plate:
+        // `plate()` derives its normal from the corner order, and at yaw +pi/2
+        // that normal comes out -X (outward from this face). At -pi/2 it is +X,
+        // i.e. pointing into the building, and a single-sided plate facing inward
+        // is a plate you cannot see. Same derivation as `skyscraperWindows`,
+        // which uses `yaw + Math.PI` on its -Z face for the same reason.
+        for (let f = 0; f < 7; f++) {
+          glow.plate(-W - 0.08, 3.6 + f * 3.2, D * 0.25, 1.6, 1.4, Math.PI * 0.5,
+            rng.next() < 0.6 ? 0xffdca8 : 0x1a1c22, { single: true });
+        }
+        return {
+          geo: b.build('screenTower'), sign: sign.build('screenPanels'),
+          glow: glow.build('screenGlow'), cull: CULL_FAR,
+        };
+      }
+
+      case 'torii': {
+        // ---- TOKYO: the shrine gate ----------------------------------------
+        // Vermilion torii: two battered columns, the straight `nuki` tie, and a
+        // `kasagi` that steps UP at both ends — that upturn is the difference
+        // between a torii and a goalpost, and it is the whole silhouette.
+        //
+        // Authored at yaw 0 and lat 18, i.e. FACING the road. Turning it broadside
+        // would put its 12 m width across the road instead of along it, and the
+        // lat audit measures across-road extent from the recipe's own `hz` — so a
+        // yawed gate would be 6 m wider than any probe could see. Facing the road
+        // keeps the measurement honest: ACROSS-ROAD half-extent 0.72 m, 6.1 along.
+        const b = this.builder();
+        b.uvScale = 0.9;
+        const red = 0xd6402f, dark = 0x2b2320;
+        const HW = 3.2, H = 6.4;
+        for (const sx of [-1, 1]) {
+          b.box(sx * HW, 0.3, 0, 0.72, 0.3, 0.72, dark, { shade: { top: 1.12 } });
+          b.prism(sx * HW, 0.6, 0, 0.44, H, 10, red, { taper: 0.86 });
+        }
+        b.box(0, H + 0.2, 0, HW + 0.5, 0.26, 0.34, red, { shade: { top: 1.14 } });
+        b.box(0, H + 1.28, 0, HW + 1.5, 0.3, 0.44, dark, { shade: { top: 1.16 } });
+        b.box(0, H + 1.75, 0, HW + 1.0, 0.3, 0.56, red, { shade: { top: 1.2 } });
+        for (const sx of [-1, 1]) {
+          b.box(sx * (HW + 1.55), H + 1.9, 0, 0.75, 0.28, 0.52, red, { shade: { top: 1.2 } });
+          b.box(sx * (HW + 2.28), H + 2.16, 0, 0.62, 0.26, 0.48, red, { shade: { top: 1.22 } });
+        }
+        b.box(0, H + 0.74, 0, 0.3, 0.28, 0.3, red);
+        b.plate(0, H + 0.74, 0.3, 1.5, 0.72, 0, 0xe8e4d8, { single: true });
+        return { geo: b.build('torii'), cull: 340 };
+      }
+
+      case 'overpassarch': {
+        // ---- TOKYO: the city expressway crossing overhead ------------------
+        // Authored at lat 0 with `up: 9.6`, so — exactly like `bridgepylon` —
+        // the ANCHOR is the deck and every structural part is at NEGATIVE local
+        // y. That is why this recipe's `min.y` is not 0: it hangs from its
+        // anchor rather than standing on the ground, and the piers reach down
+        // 9.6 m to meet it.
+        //
+        // The piers sit at +-21.5 m. The widest carriageway this crosses is
+        // hw 12.5 + kerb 1.55 + shoulder 5 = 19.05 m of corridor, so they stand
+        // 2.45 m outside the drivable surface and the deck soffit clears the
+        // road by 8.6 m.
+        const b = this.builder();
+        const HALF = 38, PIER = 21.5, DROP = 9.6;
+        b.box(0, -0.95, 0, HALF, 0.95, 3.4, 0x878d94,
+          { shade: { top: 1.0, bottom: 0.5 } });
+        for (const sz of [1, -1]) {
+          b.box(0, 0.62, sz * 3.5, HALF, 0.62, 0.22, 0x9aa1a9, { shade: { top: 1.16 } });
+        }
+        b.box(0, 0.06, 0, HALF, 0.12, 3.5, 0x40454c, { shade: { top: 1.0 } });
+        for (const sx of [-1, 1]) {
+          b.box(sx * PIER, -0.95 - (DROP - 1.3) * 0.5, 0, 1.9, (DROP - 1.3) * 0.5, 2.2,
+            0x8f939a, { taper: 1.16 });
+          b.box(sx * PIER, -DROP - 0.35, 0, 2.6, 0.35, 3.0, 0x71767c, { shade: { top: 1.02 } });
+        }
+        const glow = this.builder();
+        for (let i = -5; i <= 5; i++) {
+          glow.box(i * (HALF / 6), -0.12, 3.62, 0.5, 0.12, 0.1, 0xffd9a0);
+        }
+        return {
+          geo: b.build('overpassArch'), glow: glow.build('overpassGlow'),
+          softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      // ---- the national flags ---------------------------------------------
+      // One per city, on a plaza mast: the State House terrace in Boston, the
+      // memorial plaza in Taipei, the tower plaza in Tokyo. Same mast, different
+      // atlas cell. See `flagMast` and `makeFlagAtlas`.
+      case 'flagusa': return this.flagMast(FLAG_USA);
+      case 'flagroc': return this.flagMast(FLAG_ROC);
+      case 'flagjapan': return this.flagMast(FLAG_JAPAN);
+
       // ---- volcano dressing ------------------------------------------------
       // `obsidianSpire` is absent on purpose: `buildVolcano`'s shard cluster is
       // that silhouette and now claims the authored anchors.
@@ -4700,6 +5484,50 @@ export class Props implements ISubsystem {
     }
   }
 
+  /**
+   * A plaza flag mast carrying one cell of the flag atlas.
+   *
+   * This is `flagpole`'s machinery, not a second cloth system: a mast plus one
+   * `plate(..., flapAcross: true)` whose -x edge is pinned and whose +x edge is
+   * moved by the shared `uWind` uniform in `patchProp`'s `sway` block. The only
+   * difference is that the cloth's colour comes from a baked `atlasRect()` cell
+   * instead of a solid hex, so the panel is a real flag rather than a red
+   * rectangle.
+   *
+   * Local space: the mast is at x = 0 and the cloth flies out along +x. A
+   * trackside prop is yawed so local +Z faces the road, which puts the cloth's
+   * face toward the driver and its span along the road — i.e. you see the flag
+   * flat-on as you go past, which is the whole reason for placing it here.
+   *
+   * `min.y` is 0 (the plinth's underside). Across-road half-extent is 1.15 m,
+   * along-road 2.95 m.
+   */
+  private flagMast(cell: number, mastH = 9.6): AuthoredSpec {
+    const b = this.builder();
+    b.uvScale = 1.1;
+    // Stepped granite plinth, so the mast lands on something rather than
+    // sprouting from the paving.
+    b.box(0, 0.14, 0, 1.15, 0.14, 1.15, 0x8d8a82, { shade: { top: 1.14 } });
+    b.box(0, 0.42, 0, 0.8, 0.14, 0.8, 0xa5a096, { shade: { top: 1.16 } });
+    b.prism(0, 0.56, 0, 0.12, mastH, 8, 0xe4e8ec, { taper: 0.6, capBottom: true });
+    b.sphere(0, 0.56 + mastH + 0.15, 0, 0.18, 8, 5, 0xffc93a);
+    // Halyard cleat and the two lugs the cloth is bent onto: small, but they are
+    // what stop the panel looking welded to the pole.
+    b.box(0.13, 1.75, 0, 0.05, 0.14, 0.05, 0xb8bcc4);
+    for (const y of [0.56 + mastH - 0.5, 0.56 + mastH - 2.25]) {
+      b.box(0.1, y, 0, 0.06, 0.05, 0.06, 0xb8bcc4);
+    }
+    const cloth = this.builder();
+    cloth.flap = 1;
+    const cw = 2.7, chh = 1.8;
+    cloth.plate(0.11 + cw * 0.5, 0.56 + mastH - 1.4, 0, cw, chh, 0, 0xffffff,
+      { flapAcross: true, uvRect: atlasRect(cell) });
+    return {
+      geo: b.build(`flagMast${cell}`), flag: cloth.build(`flagCloth${cell}`),
+      cull: CULL_MID,
+    };
+  }
+
   private simpleAuthored(key: string): AuthoredSpec | null {
     const geo = this.authoredGeometry(key);
     if (!geo) return null;
@@ -4926,6 +5754,31 @@ function normaliseType(type: string): string | null {
     case 'trafficlight': case 'signal': case 'stoplight': return 'trafficlight';
     case 'ventstack': case 'vent': case 'roofvent': case 'chimney': return 'ventstack';
     case 'barrelstack': case 'barrels': case 'drumstack': return 'barrelstack';
+
+    // --- city series landmarks (Boston / Taipei / Tokyo) -------------------
+    // Every one of these is authored by `CityDefs.ts`. `.probe-tmp/props.ts`
+    // asserts that no authored type reaches `collectAuthored` without a builder
+    // — the failure mode is silent (one console.info) and it once cost two
+    // circuits two thirds of their scenery.
+    case 'bridgearch': case 'cabletower': case 'bridgetower': return 'bridgearch';
+    case 'glasstower': case 'glassslab': return 'glasstower';
+    case 'brownstonerow': case 'brownstone': case 'terracerow': return 'brownstonerow';
+    case 'goldendome': case 'statehouse': case 'domedhall': return 'goldendome';
+    case 'stadiumwall': case 'greenwall': case 'ballpark': return 'stadiumwall';
+    case 'pagodatower': case 'tieredtower': case 'supertall': return 'pagodatower';
+    case 'memorialhall': case 'memorial': case 'greathall': return 'memorialhall';
+    case 'marketstall': case 'nightmarket': case 'stall': return 'marketstall';
+    case 'mountainridge': case 'mountain': case 'ridge': return 'mountainridge';
+    case 'latticetower': case 'steeltower': case 'redtower': return 'latticetower';
+    // NB: no `'spire'` alias — that already resolves to `rockspire` above, and a
+    // duplicate case label would be silently dead code.
+    case 'broadcastspire': case 'skyspire': return 'broadcastspire';
+    case 'screentower': case 'screenblock': case 'adwall': return 'screentower';
+    case 'torii': case 'toriigate': case 'shrinegate': return 'torii';
+    case 'overpassarch': case 'overpass': case 'expressway': return 'overpassarch';
+    case 'flagusa': case 'usflag': return 'flagusa';
+    case 'flagroc': case 'taiwanflag': case 'rocflag': return 'flagroc';
+    case 'flagjapan': case 'japanflag': case 'jpflag': return 'flagjapan';
 
     // --- volcano dressing ------------------------------------------------
     case 'basaltcolumn': case 'basalt': case 'columncluster': return 'basaltcolumn';
