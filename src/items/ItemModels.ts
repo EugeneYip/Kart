@@ -512,7 +512,9 @@ export class ItemModels {
     this.protos.set('star', this.buildStar());
     this.protos.set('bullet', this.buildBullet());
 
-    await this.bakeIconAtlas();
+    // Canvas 2D, no GL, no await — the icon sheet is ready the moment `init()`
+    // returns, so no consumer can race it and get a placeholder.
+    this.bakeIconAtlas();
     this.ready = true;
   }
 
@@ -586,17 +588,18 @@ export class ItemModels {
    * these same rects are correct as THREE UVs too — one convention, both
    * consumers. Asserted in both directions by `.probe-tmp/icons.ts`.
    */
-  getIconUV(item: ItemType): IconRect {
-    return this.uvRects.get(item) ?? { x: 0, y: 0, w: 1, h: 1 };
+  getIconUV(item: ItemType): IconRect | null {
+    return this.uvRects.get(item) ?? null;
   }
 
   /** Raw canvas — handy for a 2D/DOM HUD that wants drawImage instead of UVs. */
   getIconCanvas(): HTMLCanvasElement | null { return this.atlasCanvas; }
 
-  /** Pixel rect within the atlas canvas, origin top-left. */
-  getIconPixelRect(item: ItemType): IconRect {
-    const { col, row } = iconAtlasCell(item);
-    return { x: col * ATLAS_CELL, y: row * ATLAS_CELL, w: ATLAS_CELL, h: ATLAS_CELL };
+  /** Pixel rect within the atlas canvas, origin top-left. `null` if it has no cell. */
+  getIconPixelRect(item: ItemType): IconRect | null {
+    const cell = iconAtlasCell(item);
+    if (!cell) return null;
+    return { x: cell.col * ATLAS_CELL, y: cell.row * ATLAS_CELL, w: ATLAS_CELL, h: ATLAS_CELL };
   }
 
   /**
@@ -1945,123 +1948,50 @@ export class ItemModels {
   // -------------------------------------------------------------------------
 
   /**
-   * Render every item into a 4x4 / 256 px atlas from a fixed 3/4 studio angle.
-   * A throwaway WebGL context is used so we never disturb the game renderer,
-   * then the result is read back into a 2D canvas -> CanvasTexture, which is
-   * portable across contexts.
+   * Paint every live item into the icon sheet with `drawIconAtlas()` — the same
+   * function, and therefore the same artwork, that the HUD calls when it draws an
+   * item that has no cell.
    *
-   * Cell placement — both the draw and the lookup — comes from
-   * `iconAtlasCell()`. Do not re-derive `col`/`row` from an index here: the
-   * previous revision had the same expression written out in three places and
-   * one of them disagreed about which corner the origin was.
+   * WHY THIS IS CANVAS 2D AND NOT A 3D RENDER. It used to spin up a throwaway
+   * `WebGLRenderer` plus a PMREM probe at boot and photograph the real item
+   * models from a studio angle. Three things were wrong with that:
+   *
+   *  1. **Tone mapping ate the chroma.** The bake ran AgX at exposure 1.35, which
+   *     is correct for the game's frame and ruinous for a 40 px icon: the star's
+   *     `emissiveIntensity 2.4` landed far up the shoulder of the curve and came
+   *     out pale cream instead of gold. Every review of these icons said so.
+   *  2. **No contour.** A photograph of a model has whatever edge the lighting
+   *     gives it. MK8's icons are illustrations with a fat dark keyline, which is
+   *     what makes them survive being drawn over a bright track.
+   *  3. **It could not be verified, and failed to a flat colour.** No GL context
+   *     means no bake, so the whole thing fell back to nine flat circles — a
+   *     direct §0 violation — and no headless probe could ever see a single texel
+   *     of the real thing. It is now measurable: `.probe-tmp/iconatlas.ts`
+   *     rasterises these very painters and asserts coverage, silhouette and hue.
+   *
+   * Cell placement — both the draw and the lookup — comes from `iconAtlasCell()`.
+   * Do not re-derive `col`/`row` here: the previous revision had the same
+   * expression written out in three places and one of them disagreed about which
+   * corner the origin was.
    */
-  private async bakeIconAtlas(): Promise<void> {
+  private bakeIconAtlas(): void {
     const W = ATLAS_W;
     const H = ATLAS_H;
 
-    // UV rects first — they're valid even if the GL bake fails. Normalised
-    // straight off the pixel rect, so there is exactly one layout expression and
-    // exactly one origin corner (top-left; see `getIconUV`).
-    for (const item of ALL_ITEM_TYPES) {
+    // UV rects first, normalised straight off the pixel rect, so there is exactly
+    // one layout expression and exactly one origin corner (top-left; see
+    // `getIconUV`). Only `ICON_ITEMS` get an entry — that is what makes "no cell
+    // for a dead item" structural instead of a comment.
+    for (const item of ICON_ITEMS) {
       const px = this.getIconPixelRect(item);
+      if (!px) continue;
       this.uvRects.set(item, { x: px.x / W, y: px.y / H, w: px.w / W, h: px.h / H });
     }
 
-    const out = make2d(1);
+    const out = make2d(ATLAS_CELL);
     out.canvas.width = W;
     out.canvas.height = H;
-
-    let renderer: THREE.WebGLRenderer | null = null;
-    try {
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
-      renderer.setSize(ATLAS_CELL, ATLAS_CELL, false);
-      renderer.setPixelRatio(2);
-      renderer.setClearColor(0x000000, 0);
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.AgXToneMapping;
-      renderer.toneMappingExposure = 1.35;
-
-      const scene = new THREE.Scene();
-      const cam = new THREE.PerspectiveCamera(26, 1, 0.1, 40);
-      cam.position.set(1.55, 1.25, 2.55);
-      cam.lookAt(0, 0, 0);
-
-      // Studio rig: warm key, cool fill, white rim + hemi bounce.
-      const key = new THREE.DirectionalLight(0xfff2e0, 3.4);
-      key.position.set(2.2, 3.0, 2.4);
-      const fill = new THREE.DirectionalLight(0x9fc4ff, 1.5);
-      fill.position.set(-2.6, 0.6, 1.6);
-      const rim = new THREE.DirectionalLight(0xffffff, 3.0);
-      rim.position.set(-0.8, 1.6, -3.0);
-      const hemi = new THREE.HemisphereLight(0xdfeaff, 0x3a3f52, 1.5);
-      scene.add(key, fill, rim, hemi);
-
-      // A tiny PMREM environment so metals (bullet, bomb, battery can) read right.
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      const envScene = this.makeStudioEnvScene();
-      const envRT = pmrem.fromScene(envScene, 0.04);
-      scene.environment = envRT.texture;
-      for (const m of this.metalMats) m.mat.metalness = m.full;
-
-      const holder = new THREE.Group();
-      scene.add(holder);
-
-      for (const item of ALL_ITEM_TYPES) {
-        holder.clear();
-        const node = this.buildIconSubject(item);
-        holder.add(node);
-        holder.updateMatrixWorld(true);
-
-        // Frame the subject: fit its bounding sphere to the camera.
-        const box = new THREE.Box3().setFromObject(node);
-        const sphere = box.getBoundingSphere(new THREE.Sphere());
-        if (sphere.radius > 0 && Number.isFinite(sphere.radius)) {
-          node.position.sub(sphere.center);
-          const dist = (sphere.radius * 1.06) / Math.sin((cam.fov * Math.PI) / 360);
-          cam.position.set(0.52, 0.42, 0.86).normalize().multiplyScalar(dist);
-          cam.lookAt(0, 0, 0);
-          cam.updateProjectionMatrix();
-        }
-
-        renderer.render(scene, cam);
-        const px = this.getIconPixelRect(item);
-        out.drawImage(renderer.domElement, px.x, px.y, px.w, px.h);
-      }
-
-      envRT.dispose();
-      pmrem.dispose();
-      envScene.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.geometry.dispose();
-          (Array.isArray(m.material) ? m.material : [m.material]).forEach((mm) => mm.dispose());
-        }
-      });
-      // Restore the no-IBL fallback until the real scene reports an environment.
-      for (const m of this.metalMats) m.mat.metalness = m.fallback;
-    } catch (err) {
-      console.warn('[ItemModels] icon atlas bake failed, using flat fallback', err);
-      // Fall back to readable coloured chips so the HUD still has something.
-      // Keyed by MODEL id, not by index — a chip is now guaranteed to be the
-      // right colour for whatever prototype the item actually resolves to.
-      const chip: Record<ItemModelId, string> = {
-        battery: '#2a3358', rocket: '#e33a26', bottle: '#0f9d8c', ninja: '#2b3358',
-        star: '#ffe14a', greenShell: '#2fbf3f', blueShell: '#2b6fe8', bomb: '#1b1f28',
-        bullet: '#8b93a5',
-      };
-      for (const item of ALL_ITEM_TYPES) {
-        const px = this.getIconPixelRect(item);
-        out.fillStyle = chip[MODEL_FOR_ITEM[item]] ?? '#888';
-        out.beginPath();
-        out.arc(px.x + px.w * 0.5, px.y + px.h * 0.5, px.w * 0.375, 0, Math.PI * 2);
-        out.fill();
-      }
-    } finally {
-      if (renderer) {
-        renderer.dispose();
-        renderer.forceContextLoss();
-      }
-    }
+    drawIconAtlas(out, ATLAS_CELL);
 
     this.atlasCanvas = out.canvas;
     this.atlas = canvasTexture(out);
@@ -2073,84 +2003,6 @@ export class ItemModels {
     this.atlas.generateMipmaps = true;
     this.atlas.needsUpdate = true;
     this.texs.push(this.atlas);
-  }
-
-  /** Emissive box rig that PMREM turns into a plausible studio reflection. */
-  private makeStudioEnvScene(): THREE.Scene {
-    const s = new THREE.Scene();
-    const room = new THREE.Mesh(
-      new THREE.BoxGeometry(12, 8, 12),
-      new THREE.MeshBasicMaterial({ color: 0x30384a, side: THREE.BackSide }),
-    );
-    s.add(room);
-    const panel = (w: number, h: number, c: number, i: number) => {
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(w, h),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(i) }),
-      );
-      return m;
-    };
-    const top = panel(9, 9, 0xffffff, 5.5);
-    top.position.y = 3.9; top.rotation.x = Math.PI / 2; s.add(top);
-    const left = panel(6, 5, 0xbfd8ff, 2.4);
-    left.position.set(-5.9, 0.6, 0); left.rotation.y = Math.PI / 2; s.add(left);
-    const right = panel(6, 5, 0xffd9b0, 2.0);
-    right.position.set(5.9, 0.6, 0); right.rotation.y = -Math.PI / 2; s.add(right);
-    const back = panel(9, 5, 0xffffff, 1.4);
-    back.position.set(0, 0.4, -5.9); s.add(back);
-    const floor = panel(10, 10, 0x8a93a8, 0.7);
-    floor.position.y = -3.9; floor.rotation.x = -Math.PI / 2; s.add(floor);
-    return s;
-  }
-
-  /**
-   * Icon subject, posed for the 3/4 studio camera at `(0.52, 0.42, 0.86)`.
-   *
-   * The atlas cell is 256 px and the HUD draws it far smaller, so each of the
-   * P0d-D5 re-skins is turned to the angle where its silhouette is widest:
-   *
-   *  - ROCKET: stood on end and leaned back, so nose, body band and all three
-   *    fins are visible. Left lying along -Z it presents as a circle.
-   *  - BOTTLE: stood upright for the icon (it lies down only on the road), with
-   *    a quarter turn so the label's droplet mark faces the key light.
-   *  - BATTERY: leaned toward the camera so the +nub breaks the top edge and the
-   *    bolt sits square on.
-   *  - NINJA: turned a few degrees off axis so the shuriken clears the hood.
-   *
-   * `TRIPLE_ITEMS` is empty now, so the fan-out branch is dead in a race; it
-   * stays for a triple forced through `grantItem()`.
-   */
-  private buildIconSubject(item: ItemType): THREE.Object3D {
-    const g = new THREE.Group();
-    const id = MODEL_FOR_ITEM[item];
-    if (TRIPLE_ITEMS.has(item)) {
-      for (let k = 0; k < 3; k++) {
-        const m = this.create(id);
-        const a = (k - 1) * 0.62;
-        m.position.set(Math.sin(a) * 0.60, -Math.abs(k - 1) * 0.06, Math.cos(a) * 0.34 - 0.34);
-        m.scale.setScalar(0.80);
-        m.rotation.y += a * 0.5;
-        g.add(m);
-      }
-    } else {
-      const m = this.create(id);
-      if (item === ItemType.Bullet) m.rotation.y = Math.PI * 0.86;
-      if (id === 'rocket') {
-        // Nose is down -Z: rotate +X by -80 deg to stand it up, then yaw so a fin
-        // faces the camera rather than hiding edge-on.
-        m.rotation.set(-Math.PI * 0.44, Math.PI * 0.18, 0.10);
-      }
-      if (id === 'bottle') {
-        // Undo the lie-down so the icon shows a standing bottle.
-        m.rotation.set(0, Math.PI * 0.12, -Math.PI / 2);
-      }
-      if (id === 'battery') m.rotation.set(-0.16, Math.PI * 0.02, 0.10);
-      if (id === 'ninja') m.rotation.set(0.05, -Math.PI * 0.10, 0);
-      if (item === ItemType.Lightning) m.rotation.set(0, 0.25, 0.12);
-      if (item === ItemType.Star) m.rotation.set(0, 0.15, 0);
-      g.add(m);
-    }
-    return g;
   }
 
   // -------------------------------------------------------------------------
@@ -2166,7 +2018,856 @@ export class ItemModels {
     this.protos.clear();
     this.uvRects.clear();
     this.atlas = null;
+    this.stubAtlas = null;
     this.atlasCanvas = null;
     this.ready = false;
+  }
+}
+
+// ===========================================================================
+// ICON ARTWORK — CANVAS 2D, ONE COPY, TWO CONSUMERS
+// ===========================================================================
+//
+//  These painters are the ONLY item artwork in the project outside the 3-D
+//  models. `drawIconAtlas()` bakes them into the sheet the HUD samples, and
+//  `ItemIcons.paint()` in `src/ui/Widgets.ts` calls the same function for an
+//  item that has no cell. That is deliberate: `Widgets.ts` used to carry its own
+//  parallel set — a banana, a mushroom, a ghost, a coin, a squid and three
+//  shells, i.e. the art from BEFORE the P0d-D5 re-skin — as a "fallback". A
+//  fallback that draws different objects from the real thing is not a fallback,
+//  it is a second product, and it is what let the owner's report ("the battery
+//  icon shows the bottle item") survive a round of fixes: whichever path you
+//  audited, the other one was wrong.
+//
+//  THE BAR is MK8DX's item icons, which are illustrations, not photographs of
+//  the models:
+//
+//   * ONE LIGHT DIRECTION for the whole set — key from the upper LEFT. Every
+//     gradient below runs light->dark along (-1,-1)->(+1,+1) and every specular
+//     sits upper-left. Mixed light directions are the main reason a procedural
+//     icon set reads as clip art.
+//   * A FAT DARK KEYLINE on every silhouette (`inked()` strokes before it fills,
+//     so the line sits half outside the shape and never eats the interior). This
+//     is what makes an icon survive being drawn over a bright sky or white
+//     tarmac — the previous 3-D bake had no contour at all.
+//   * TWO INNER RIMS: a warm bright one on the key side, a cool dim one on the
+//     shade side. Cheap, and it is the difference between "flat vector" and
+//     "moulded plastic".
+//   * HIGH CHROMA. The bake these replace ran AgX tone mapping at exposure 1.35,
+//     which pushed the star's emissive far enough up the shoulder that it came
+//     out pale cream. Authoring in sRGB straight into the sheet means the gold
+//     is gold.
+//   * A CONTACT SHADOW under everything, so five icons sit on the same floor.
+//
+//  Silhouettes are also chosen to be mutually unmistakable at 40 px, because
+//  that is the size the HUD actually draws: a TALL POINTED rocket, a NECKED
+//  bottle, a SQUAT NUBBED can, a HOODED head, a 5-POINT star. Two of those used
+//  to be confusable (`.probe-tmp/iconatlas.ts` asserts a coarse-occupancy
+//  signature per cell to keep them apart).
+// ===========================================================================
+
+type IconStop = readonly [number, string];
+
+/** Key-side / shade-side keyline inks. Cool navy for everything but the star. */
+const INK = '#0a1020';
+const INK_WARM = '#3d1f00';
+
+function lin(
+  c: CanvasRenderingContext2D,
+  x0: number, y0: number, x1: number, y1: number, stops: readonly IconStop[],
+): CanvasGradient {
+  const g = c.createLinearGradient(x0, y0, x1, y1);
+  for (const [t, col] of stops) g.addColorStop(t, col);
+  return g;
+}
+
+function rad(
+  c: CanvasRenderingContext2D,
+  x: number, y: number, r0: number, r1: number, stops: readonly IconStop[],
+): CanvasGradient {
+  const g = c.createRadialGradient(x, y, r0, x, y, r1);
+  for (const [t, col] of stops) g.addColorStop(t, col);
+  return g;
+}
+
+/**
+ * Keyline + fill for the path already on `c`.
+ *
+ * Stroke FIRST, then fill: half the stroke width ends up outside the silhouette
+ * and the other half is covered by the fill, so a 6 % keyline reads as a crisp
+ * 3 % outline without shrinking the artwork. Filling first and stroking after
+ * would eat 3 % of every shape — at 40 px that is the difference between a
+ * bottle with a neck and a bottle without one.
+ */
+function inked(
+  c: CanvasRenderingContext2D, S: number,
+  fill: string | CanvasGradient, w = 0.055, ink = INK,
+): void {
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+  c.lineWidth = S * w;
+  c.strokeStyle = ink;
+  c.stroke();
+  c.fillStyle = fill;
+  c.fill();
+}
+
+/** Soft elliptical contact shadow, so the whole set sits on one floor. */
+function ground(c: CanvasRenderingContext2D, S: number, y: number, rx: number): void {
+  c.save();
+  c.fillStyle = rad(c, 0, y, 0, rx, [[0, 'rgba(6,10,20,0.42)'], [0.55, 'rgba(6,10,20,0.20)'], [1, 'rgba(6,10,20,0)']]);
+  c.beginPath();
+  c.ellipse(0, y, rx, rx * 0.30, 0, 0, Math.PI * 2);
+  c.fill();
+  c.restore();
+  void S;
+}
+
+/**
+ * Inner rim along one side of a shape: clip to the silhouette, then stroke the
+ * SAME silhouette shifted a little, so only the arc on the far side of the shift
+ * survives the clip. Shift down-right for a key-side (upper-left) rim.
+ */
+function innerRim(
+  c: CanvasRenderingContext2D, S: number,
+  build: (cc: CanvasRenderingContext2D) => void,
+  color: string, dx: number, dy: number, w: number,
+): void {
+  c.save();
+  build(c);
+  c.clip();
+  c.translate(dx, dy);
+  build(c);
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+  c.lineWidth = S * w;
+  c.strokeStyle = color;
+  c.stroke();
+  c.restore();
+}
+
+/** Soft specular blob — the one highlight that says "this surface is glossy". */
+function spec(
+  c: CanvasRenderingContext2D,
+  x: number, y: number, rx: number, ry: number, rot: number, a = 0.85,
+): void {
+  c.save();
+  c.fillStyle = rad(c, x, y, 0, Math.max(rx, ry), [
+    [0, `rgba(255,255,255,${a})`], [0.5, `rgba(255,255,255,${a * 0.35})`], [1, 'rgba(255,255,255,0)'],
+  ]);
+  c.beginPath();
+  c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
+  c.fill();
+  c.restore();
+}
+
+/**
+ * Rounded N-point star path. The fillets matter: a hard-vertex star is the
+ * "visible low-poly silhouette" AGENTS.md §3 names as an instant fail, and at
+ * 40 px the points alias into grey mush without them.
+ */
+function starPath(
+  c: CanvasRenderingContext2D,
+  cx: number, cy: number, outer: number, inner: number, points: number, rot = -Math.PI / 2,
+  round = 0.30,
+): void {
+  const n = points * 2;
+  const px: number[] = [];
+  const py: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = rot + (i / n) * Math.PI * 2;
+    px.push(cx + Math.cos(a) * r);
+    py.push(cy + Math.sin(a) * r);
+  }
+  c.beginPath();
+  for (let i = 0; i < n; i++) {
+    const prev = (i - 1 + n) % n;
+    const next = (i + 1) % n;
+    const ax = px[i] + (px[prev] - px[i]) * round;
+    const ay = py[i] + (py[prev] - py[i]) * round;
+    const bx = px[i] + (px[next] - px[i]) * round;
+    const by = py[i] + (py[next] - py[i]) * round;
+    if (i === 0) c.moveTo(ax, ay); else c.lineTo(ax, ay);
+    c.quadraticCurveTo(px[i], py[i], bx, by);
+  }
+  c.closePath();
+}
+
+/** Symmetric silhouette from a half-profile: down the right side, up the left. */
+function profilePath(
+  c: CanvasRenderingContext2D, half: ReadonlyArray<readonly [number, number]>,
+): void {
+  c.beginPath();
+  c.moveTo(half[0][0], half[0][1]);
+  for (let i = 1; i < half.length; i++) c.lineTo(half[i][0], half[i][1]);
+  for (let i = half.length - 1; i >= 0; i--) c.lineTo(-half[i][0], half[i][1]);
+  c.closePath();
+}
+
+// ---------------------------------------------------------------------------
+//  STAR — invulnerability. Reads as GOLD, at any size, on any background.
+// ---------------------------------------------------------------------------
+
+function paintStar(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  // Warm halo. Saturated amber, not white: a white halo is what made the old
+  // bake read as cream.
+  c.fillStyle = rad(c, 0, 0, R * 0.30, R * 1.16, [
+    [0, 'rgba(255,196,40,0.55)'], [0.55, 'rgba(255,150,20,0.26)'], [1, 'rgba(255,120,0,0)'],
+  ]);
+  c.beginPath();
+  c.arc(0, 0, R * 1.16, 0, Math.PI * 2);
+  c.fill();
+
+  ground(c, S, R * 0.98, R * 0.62);
+
+  const body = (cc: CanvasRenderingContext2D): void =>
+    starPath(cc, 0, -R * 0.02, R * 0.97, R * 0.43, 5);
+
+  body(c);
+  inked(c, S, lin(c, -R * 0.55, -R * 0.85, R * 0.60, R * 0.90, [
+    [0, '#fff6c2'], [0.22, '#ffe25c'], [0.52, '#ffc21a'], [0.80, '#f08a00'], [1, '#c25c00'],
+  ]), 0.058, INK_WARM);
+
+  // Faceted core: a second, smaller star in a hotter tone gives the flat fill a
+  // centre and a direction without needing a normal map.
+  c.save();
+  body(c);
+  c.clip();
+  starPath(c, -R * 0.05, -R * 0.10, R * 0.62, R * 0.26, 5);
+  c.fillStyle = rad(c, -R * 0.22, -R * 0.30, 0, R * 0.95, [
+    [0, 'rgba(255,252,214,0.95)'], [0.45, 'rgba(255,225,90,0.45)'], [1, 'rgba(255,190,20,0)'],
+  ]);
+  c.fill();
+  c.restore();
+
+  innerRim(c, S, body, 'rgba(255,253,226,0.95)', S * 0.022, S * 0.022, 0.030);
+  innerRim(c, S, body, 'rgba(196,88,0,0.85)', -S * 0.018, -S * 0.018, 0.026);
+  spec(c, -R * 0.20, -R * 0.44, R * 0.20, R * 0.11, -0.5, 0.9);
+
+  // Twinkle on the upper-left arm — the one piece of "magic" in the set.
+  starPath(c, -R * 0.60, -R * 0.62, R * 0.28, R * 0.05, 4, -Math.PI / 2, 0.06);
+  c.fillStyle = 'rgba(255,255,255,0.92)';
+  c.fill();
+}
+
+// ---------------------------------------------------------------------------
+//  ROCKET — was Red Shell. STANDING UP, nose at the top.
+// ---------------------------------------------------------------------------
+//
+//  The 3-D bake posed this with `rotation.x = -Math.PI * 0.44`, which points a
+//  -Z nose DOWN, not up: the icon was a dark diagonal torpedo with its graphite
+//  nozzle uppermost, and every review called it exactly that. A rocket icon has
+//  one readable pose — vertical, tip up, flame down — so it is authored that way
+//  here and cannot be re-posed by accident.
+// ---------------------------------------------------------------------------
+
+function paintRocket(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  c.save();
+  c.rotate(-0.09);
+
+  const BW = R * 0.335;          // body half-width
+  const NOSE_Y = -R * 1.02;
+  const SHOULDER = -R * 0.30;
+  const TAIL = R * 0.50;
+
+  // --- exhaust, behind everything ----------------------------------------
+  for (const [k, col] of [[1.0, 'rgba(255,96,10,0.85)'], [0.62, 'rgba(255,186,60,0.95)'],
+    [0.30, 'rgba(255,246,206,0.98)']] as ReadonlyArray<readonly [number, string]>) {
+    c.beginPath();
+    c.moveTo(-BW * 0.80 * k, TAIL + R * 0.10);
+    c.quadraticCurveTo(-BW * 0.42 * k, TAIL + R * 0.62 * k, 0, TAIL + R * 0.94 * k);
+    c.quadraticCurveTo(BW * 0.42 * k, TAIL + R * 0.62 * k, BW * 0.80 * k, TAIL + R * 0.10);
+    c.quadraticCurveTo(0, TAIL + R * 0.30, -BW * 0.80 * k, TAIL + R * 0.10);
+    c.closePath();
+    c.fillStyle = col;
+    c.fill();
+  }
+
+  // --- centre fin, behind the body ---------------------------------------
+  c.beginPath();
+  c.moveTo(0, R * 0.02);
+  c.lineTo(BW * 0.16, TAIL + R * 0.16);
+  c.lineTo(-BW * 0.16, TAIL + R * 0.16);
+  c.closePath();
+  inked(c, S, '#7d1710', 0.045);
+
+  // --- side fins ----------------------------------------------------------
+  for (const s of [-1, 1]) {
+    c.beginPath();
+    c.moveTo(s * BW * 0.92, R * 0.02);
+    c.quadraticCurveTo(s * BW * 2.05, R * 0.46, s * BW * 1.86, TAIL + R * 0.20);
+    c.lineTo(s * BW * 0.94, TAIL - R * 0.02);
+    c.closePath();
+    inked(c, S, lin(c, -BW * 2, R * 0.1, BW * 2, TAIL, s < 0
+      ? [[0, '#ff7358'], [0.6, '#e33a26'], [1, '#a5210f']]
+      : [[0, '#e0402c'], [0.6, '#b8281a'], [1, '#7d1710']]), 0.048);
+  }
+
+  // --- body: one silhouette so the keyline is continuous -----------------
+  const body = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.moveTo(0, NOSE_Y);
+    cc.bezierCurveTo(BW * 0.72, NOSE_Y + R * 0.30, BW, SHOULDER - R * 0.22, BW, SHOULDER);
+    cc.lineTo(BW, TAIL - R * 0.10);
+    cc.lineTo(BW * 0.86, TAIL);
+    cc.lineTo(-BW * 0.86, TAIL);
+    cc.lineTo(-BW, TAIL - R * 0.10);
+    cc.lineTo(-BW, SHOULDER);
+    cc.bezierCurveTo(-BW, SHOULDER - R * 0.22, -BW * 0.72, NOSE_Y + R * 0.30, 0, NOSE_Y);
+    cc.closePath();
+  };
+  body(c);
+  inked(c, S, lin(c, -BW, 0, BW, 0, [
+    [0, '#ffffff'], [0.30, '#eef1f6'], [0.66, '#c3ccda'], [1, '#8f99aa'],
+  ]), 0.055);
+
+  // --- nose cone, its own keyline: the seam reads as a panel joint --------
+  c.beginPath();
+  c.moveTo(0, NOSE_Y);
+  c.bezierCurveTo(BW * 0.72, NOSE_Y + R * 0.30, BW, SHOULDER - R * 0.22, BW, SHOULDER);
+  c.quadraticCurveTo(0, SHOULDER + R * 0.13, -BW, SHOULDER);
+  c.bezierCurveTo(-BW, SHOULDER - R * 0.22, -BW * 0.72, NOSE_Y + R * 0.30, 0, NOSE_Y);
+  c.closePath();
+  inked(c, S, lin(c, -BW * 0.9, NOSE_Y, BW * 0.9, SHOULDER, [
+    [0, '#ff8a6e'], [0.32, '#f2503a'], [0.72, '#d02a18'], [1, '#8e1a10'],
+  ]), 0.048);
+
+  // --- hazard band: graphite with red chevrons ----------------------------
+  c.save();
+  body(c);
+  c.clip();
+  const bandTop = R * 0.06;
+  const bandH = R * 0.26;
+  c.fillStyle = '#2a2f3a';
+  c.beginPath();
+  c.rect(-BW, bandTop, BW * 2, bandH);
+  c.fill();
+  c.fillStyle = '#e33a26';
+  for (let i = -3; i <= 3; i++) {
+    const x = i * BW * 0.46;
+    c.beginPath();
+    c.moveTo(x, bandTop);
+    c.lineTo(x + BW * 0.24, bandTop);
+    c.lineTo(x + BW * 0.02, bandTop + bandH);
+    c.lineTo(x - BW * 0.22, bandTop + bandH);
+    c.closePath();
+    c.fill();
+  }
+  // Panel line at the shoulder.
+  c.strokeStyle = 'rgba(10,16,32,0.35)';
+  c.lineWidth = S * 0.012;
+  c.beginPath();
+  c.moveTo(-BW, -R * 0.10);
+  c.lineTo(BW, -R * 0.10);
+  c.stroke();
+  c.restore();
+
+  // --- nozzle -------------------------------------------------------------
+  c.beginPath();
+  c.moveTo(-BW * 0.86, TAIL - R * 0.02);
+  c.lineTo(BW * 0.86, TAIL - R * 0.02);
+  c.lineTo(BW * 0.66, TAIL + R * 0.17);
+  c.lineTo(-BW * 0.66, TAIL + R * 0.17);
+  c.closePath();
+  inked(c, S, lin(c, -BW, 0, BW, 0, [[0, '#5d6675'], [0.5, '#2a2f3a'], [1, '#14171f']]), 0.042);
+
+  innerRim(c, S, body, 'rgba(255,255,255,0.92)', S * 0.020, S * 0.020, 0.026);
+  innerRim(c, S, body, 'rgba(90,104,130,0.75)', -S * 0.016, -S * 0.016, 0.024);
+  spec(c, -BW * 0.42, -R * 0.52, BW * 0.24, R * 0.34, -0.12, 0.8);
+  c.restore();
+  ground(c, S, R * 1.06, R * 0.56);
+}
+
+// ---------------------------------------------------------------------------
+//  PLASTIC BOTTLE — was Banana. Upright, so the neck is part of the silhouette.
+// ---------------------------------------------------------------------------
+
+function paintBottle(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  ground(c, S, R * 1.02, R * 0.50);
+
+  const W = R * 0.52;
+  // Half-profile, cap -> base. The two pinches are the grip ribs; the crease at
+  // the waist is the crush that makes this litter rather than shop stock.
+  const half: ReadonlyArray<readonly [number, number]> = [
+    [R * 0.005, -R * 1.00],
+    [W * 0.56, -R * 0.99],
+    [W * 0.56, -R * 0.74],
+    [W * 0.40, -R * 0.72],
+    [W * 0.40, -R * 0.60],
+    [W * 0.72, -R * 0.40],
+    [W * 0.97, -R * 0.10],
+    [W, R * 0.04],
+    [W * 0.90, R * 0.16],
+    [W, R * 0.28],
+    [W, R * 0.52],
+    [W * 0.90, R * 0.64],
+    [W, R * 0.76],
+    [W * 0.97, R * 0.90],
+    [W * 0.72, R * 1.00],
+    [R * 0.005, R * 1.01],
+  ];
+  const body = (cc: CanvasRenderingContext2D): void => profilePath(cc, half);
+
+  body(c);
+  inked(c, S, lin(c, -W, -R, W, R, [
+    [0, '#f4fffc'], [0.26, '#cdf3e9'], [0.58, '#8fd9c9'], [0.86, '#4fa697'], [1, '#2f7a6e'],
+  ]), 0.055);
+
+  // --- label sleeve: the item's colour identity ---------------------------
+  c.save();
+  body(c);
+  c.clip();
+  const lt = -R * 0.06;
+  const lh = R * 0.62;
+  c.fillStyle = lin(c, -W, lt, W, lt + lh, [
+    [0, '#5ff2d8'], [0.22, '#17d9bd'], [0.60, '#0f9d8c'], [1, '#064b45'],
+  ]);
+  c.beginPath();
+  c.rect(-W * 1.1, lt, W * 2.2, lh);
+  c.fill();
+  // Two printed bars + a droplet mark, the same white-on-teal the 3-D label uses.
+  c.fillStyle = 'rgba(244,251,249,0.95)';
+  c.beginPath();
+  c.rect(-W * 1.1, lt + lh * 0.10, W * 2.2, lh * 0.075);
+  c.rect(-W * 1.1, lt + lh * 0.84, W * 2.2, lh * 0.075);
+  c.fill();
+  c.beginPath();
+  c.moveTo(0, lt + lh * 0.28);
+  c.quadraticCurveTo(W * 0.52, lt + lh * 0.54, 0, lt + lh * 0.74);
+  c.quadraticCurveTo(-W * 0.52, lt + lh * 0.54, 0, lt + lh * 0.28);
+  c.closePath();
+  c.fill();
+  c.fillStyle = 'rgba(15,157,140,0.9)';
+  c.beginPath();
+  c.ellipse(0, lt + lh * 0.55, W * 0.15, lh * 0.10, 0, 0, Math.PI * 2);
+  c.fill();
+  // Shrink-wrap shading down the shade side.
+  c.fillStyle = lin(c, 0, 0, W, 0, [[0, 'rgba(4,40,36,0)'], [1, 'rgba(4,40,36,0.45)']]);
+  c.beginPath();
+  c.rect(0, lt, W * 1.1, lh);
+  c.fill();
+  c.restore();
+
+  // --- cap ---------------------------------------------------------------
+  c.beginPath();
+  c.rect(-W * 0.60, -R * 1.00, W * 1.20, R * 0.27);
+  inked(c, S, lin(c, -W * 0.6, -R, W * 0.6, -R * 0.73, [
+    [0, '#78a6ff'], [0.35, '#2f6ef0'], [1, '#16307a'],
+  ]), 0.045);
+  c.save();
+  c.beginPath();
+  c.rect(-W * 0.60, -R * 1.00, W * 1.20, R * 0.27);
+  c.clip();
+  c.strokeStyle = 'rgba(10,16,40,0.45)';
+  c.lineWidth = S * 0.010;
+  for (let i = -3; i <= 3; i++) {
+    c.beginPath();
+    c.moveTo(i * W * 0.17, -R * 1.00);
+    c.lineTo(i * W * 0.17, -R * 0.73);
+    c.stroke();
+  }
+  c.restore();
+
+  innerRim(c, S, body, 'rgba(255,255,255,0.95)', S * 0.020, S * 0.020, 0.026);
+  innerRim(c, S, body, 'rgba(24,96,88,0.70)', -S * 0.016, -S * 0.016, 0.024);
+  // The tall highlight streak is what makes it read as PET rather than paper.
+  c.save();
+  body(c);
+  c.clip();
+  c.fillStyle = lin(c, -W * 0.62, 0, -W * 0.22, 0, [
+    [0, 'rgba(255,255,255,0)'], [0.5, 'rgba(255,255,255,0.72)'], [1, 'rgba(255,255,255,0)'],
+  ]);
+  c.beginPath();
+  c.rect(-W * 0.62, -R * 0.68, W * 0.40, R * 1.62);
+  c.fill();
+  c.restore();
+  spec(c, -W * 0.26, -R * 0.86, W * 0.16, R * 0.07, -0.3, 0.85);
+}
+
+// ---------------------------------------------------------------------------
+//  BATTERY — was Mushroom. Squat can, steel nub, GOLD bolt.
+// ---------------------------------------------------------------------------
+
+function paintBattery(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  ground(c, S, R * 1.00, R * 0.62);
+
+  const W = R * 0.66;
+  const TOP = -R * 0.72;
+  const BOT = R * 0.94;
+  const CAP = R * 0.16;      // ellipse minor radius of the can ends
+
+  // --- positive nub -------------------------------------------------------
+  c.beginPath();
+  c.moveTo(-W * 0.32, TOP);
+  c.lineTo(-W * 0.28, -R * 1.00);
+  c.lineTo(W * 0.28, -R * 1.00);
+  c.lineTo(W * 0.32, TOP);
+  c.closePath();
+  inked(c, S, lin(c, -W * 0.3, 0, W * 0.3, 0, [
+    [0, '#ffffff'], [0.4, '#d7deea'], [1, '#7d8697'],
+  ]), 0.042);
+
+  // --- can body -----------------------------------------------------------
+  const body = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.moveTo(-W, TOP);
+    cc.lineTo(-W, BOT - CAP * 0.6);
+    cc.quadraticCurveTo(-W, BOT, 0, BOT);
+    cc.quadraticCurveTo(W, BOT, W, BOT - CAP * 0.6);
+    cc.lineTo(W, TOP);
+    cc.quadraticCurveTo(W, TOP - CAP, 0, TOP - CAP);
+    cc.quadraticCurveTo(-W, TOP - CAP, -W, TOP);
+    cc.closePath();
+  };
+  body(c);
+  inked(c, S, lin(c, -W, TOP, W, BOT, [
+    [0, '#5a6aa8'], [0.20, '#39456e'], [0.62, '#1b2140'], [1, '#0d1020'],
+  ]), 0.055);
+
+  // --- steel collars ------------------------------------------------------
+  c.save();
+  body(c);
+  c.clip();
+  for (const [y, h] of [[TOP, CAP * 0.9], [BOT - CAP * 1.05, CAP * 0.7]] as ReadonlyArray<readonly [number, number]>) {
+    c.fillStyle = lin(c, -W, 0, W, 0, [[0, '#f2f5fa'], [0.35, '#cfd6e2'], [1, '#6f7889']]);
+    c.beginPath();
+    c.rect(-W, y, W * 2, h);
+    c.fill();
+  }
+  // Positive end cap, seen slightly from above.
+  c.fillStyle = lin(c, -W, TOP - CAP, W, TOP, [[0, '#ffffff'], [0.45, '#dbe2ee'], [1, '#8d96a7']]);
+  c.beginPath();
+  c.ellipse(0, TOP, W, CAP, 0, Math.PI, Math.PI * 2);
+  c.fill();
+  c.restore();
+
+  // --- printed gold bolt --------------------------------------------------
+  // Same polygon the 3-D wrap point-in-polygons for its albedo, emissive mask
+  // and normal map. One definition, four consumers — so the icon and the item in
+  // the player's hand carry the identical mark.
+  const boltPath = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    for (let i = 0; i < BOLT_OUTLINE.length; i++) {
+      const [bx, by] = BOLT_OUTLINE[i];
+      const x = bx * W * 0.60;
+      const y = R * 0.16 - by * R * 0.50;
+      if (i === 0) cc.moveTo(x, y); else cc.lineTo(x, y);
+    }
+    cc.closePath();
+  };
+  boltPath(c);
+  inked(c, S, lin(c, -W * 0.5, -R * 0.4, W * 0.5, R * 0.6, [
+    [0, '#fff3b0'], [0.30, '#ffd24a'], [0.68, '#ffc63a'], [1, '#b8760c'],
+  ]), 0.034, '#241505');
+  innerRim(c, S, boltPath, 'rgba(255,251,214,0.9)', S * 0.012, S * 0.012, 0.018);
+
+  // --- charge gauge, four pips up the shade side --------------------------
+  c.save();
+  body(c);
+  c.clip();
+  for (let i = 0; i < 4; i++) {
+    c.fillStyle = i === 3 ? 'rgba(108,255,196,0.55)' : '#6cffc4';
+    c.beginPath();
+    c.rect(W * 0.58, BOT - R * 0.34 - i * R * 0.17, W * 0.26, R * 0.10);
+    c.fill();
+  }
+  c.restore();
+
+  innerRim(c, S, body, 'rgba(190,208,255,0.85)', S * 0.020, S * 0.020, 0.026);
+  innerRim(c, S, body, 'rgba(8,12,26,0.85)', -S * 0.016, -S * 0.016, 0.026);
+  spec(c, -W * 0.52, -R * 0.30, W * 0.16, R * 0.44, -0.06, 0.55);
+}
+
+// ---------------------------------------------------------------------------
+//  NINJA — was Boo. Hood, glowing eyes, scarf, shuriken.
+// ---------------------------------------------------------------------------
+//
+//  Reviewed before as "an ambiguous white dart". It was a lathe photographed
+//  head-on with the shuriken edge-on behind the hood. Four marks make it read:
+//  the peaked hood, the black eye band, two lit almond eyes, and a shuriken
+//  BREAKING the silhouette at the lower right so it cannot hide.
+// ---------------------------------------------------------------------------
+
+function paintNinja(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  ground(c, S, R * 0.98, R * 0.60);
+
+  // --- scarf tails, behind the head ---------------------------------------
+  for (const [k, col] of [[1, '#8e1f1a'], [0.72, '#d8413a']] as ReadonlyArray<readonly [number, string]>) {
+    c.beginPath();
+    c.moveTo(R * 0.10, R * 0.34);
+    c.quadraticCurveTo(R * 0.86 * k, R * 0.10, R * 1.06 * k, -R * 0.44 * k);
+    c.quadraticCurveTo(R * 0.72 * k, R * 0.16, R * 0.28, R * 0.62);
+    c.closePath();
+    inked(c, S, col, 0.040, '#3a0b08');
+  }
+
+  // --- hood ---------------------------------------------------------------
+  const body = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.moveTo(0, -R * 1.00);
+    cc.bezierCurveTo(R * 0.52, -R * 0.94, R * 0.74, -R * 0.44, R * 0.72, -R * 0.06);
+    cc.bezierCurveTo(R * 0.70, R * 0.26, R * 0.86, R * 0.42, R * 0.90, R * 0.72);
+    cc.lineTo(-R * 0.90, R * 0.72);
+    cc.bezierCurveTo(-R * 0.86, R * 0.42, -R * 0.70, R * 0.26, -R * 0.72, -R * 0.06);
+    cc.bezierCurveTo(-R * 0.74, -R * 0.44, -R * 0.52, -R * 0.94, 0, -R * 1.00);
+    cc.closePath();
+  };
+  body(c);
+  inked(c, S, lin(c, -R * 0.7, -R, R * 0.7, R * 0.7, [
+    [0, '#6b7cc4'], [0.24, '#414d7a'], [0.62, '#1b2036'], [1, '#0a0c14'],
+  ]), 0.055);
+
+  // --- eye band + eyes ----------------------------------------------------
+  c.save();
+  body(c);
+  c.clip();
+  c.fillStyle = lin(c, 0, -R * 0.22, 0, R * 0.16, [[0, '#141826'], [1, '#05060c']]);
+  c.beginPath();
+  c.moveTo(-R * 0.78, -R * 0.20);
+  c.quadraticCurveTo(0, -R * 0.30, R * 0.78, -R * 0.20);
+  c.lineTo(R * 0.78, R * 0.14);
+  c.quadraticCurveTo(0, R * 0.24, -R * 0.78, R * 0.14);
+  c.closePath();
+  c.fill();
+  // Hood fold, so the cowl is not one flat field.
+  c.strokeStyle = 'rgba(120,140,210,0.30)';
+  c.lineWidth = S * 0.016;
+  c.beginPath();
+  c.moveTo(-R * 0.40, -R * 0.86);
+  c.quadraticCurveTo(-R * 0.10, -R * 0.52, -R * 0.22, -R * 0.24);
+  c.stroke();
+  c.restore();
+
+  for (const s of [-1, 1]) {
+    // Glow first, then the almond, so the light bleeds onto the band.
+    c.fillStyle = rad(c, s * R * 0.30, -R * 0.03, 0, R * 0.30, [
+      [0, 'rgba(255,207,106,0.75)'], [1, 'rgba(255,180,60,0)'],
+    ]);
+    c.beginPath();
+    c.arc(s * R * 0.30, -R * 0.03, R * 0.30, 0, Math.PI * 2);
+    c.fill();
+    c.save();
+    c.translate(s * R * 0.30, -R * 0.03);
+    c.rotate(s * 0.26);
+    c.beginPath();
+    c.moveTo(-R * 0.20, 0);
+    c.quadraticCurveTo(0, -R * 0.15, R * 0.20, 0);
+    c.quadraticCurveTo(0, R * 0.09, -R * 0.20, 0);
+    c.closePath();
+    c.fillStyle = lin(c, -R * 0.2, 0, R * 0.2, 0, [[0, '#fffdf0'], [0.6, '#ffe9a8'], [1, '#ffb43c']]);
+    c.fill();
+    c.restore();
+  }
+
+  // --- scarf knot across the throat --------------------------------------
+  c.beginPath();
+  c.moveTo(-R * 0.62, R * 0.34);
+  c.quadraticCurveTo(0, R * 0.14, R * 0.62, R * 0.34);
+  c.quadraticCurveTo(0, R * 0.54, -R * 0.62, R * 0.34);
+  c.closePath();
+  inked(c, S, lin(c, -R * 0.6, R * 0.2, R * 0.6, R * 0.5, [
+    [0, '#ff6a58'], [0.4, '#c0342a'], [1, '#7a1712'],
+  ]), 0.042, '#3a0b08');
+
+  innerRim(c, S, body, 'rgba(150,168,235,0.85)', S * 0.020, S * 0.020, 0.026);
+  innerRim(c, S, body, 'rgba(4,6,12,0.9)', -S * 0.016, -S * 0.016, 0.024);
+
+  // --- shuriken, breaking the silhouette ---------------------------------
+  const shur = (cc: CanvasRenderingContext2D): void =>
+    starPath(cc, R * 0.66, R * 0.52, R * 0.40, R * 0.13, 4, -Math.PI * 0.36, 0.18);
+  shur(c);
+  inked(c, S, lin(c, R * 0.3, R * 0.2, R * 1.0, R * 0.9, [
+    [0, '#ffffff'], [0.3, '#dfe6f2'], [0.7, '#98a2b3'], [1, '#4e5666'],
+  ]), 0.046);
+  c.save();
+  shur(c);
+  c.clip();
+  c.beginPath();
+  c.arc(R * 0.66, R * 0.52, R * 0.11, 0, Math.PI * 2);
+  c.fillStyle = '#2a3040';
+  c.fill();
+  c.restore();
+  innerRim(c, S, shur, 'rgba(255,255,255,0.95)', S * 0.014, S * 0.014, 0.020);
+}
+
+// ---------------------------------------------------------------------------
+//  RETAINED PROTOTYPES — no atlas cell, drawn on demand only
+// ---------------------------------------------------------------------------
+//
+//  `ItemRoulette` gives these weight 0 in every row, so a box can never produce
+//  one; `grantItem()` (dev harness, cheats) still can, and `Projectiles` still
+//  pools the kinds. They therefore need artwork but must NOT occupy a cell — a
+//  dead cell in a live atlas is what turns an off-by-one into another item's
+//  picture instead of a blank. `ItemIcons.apply()` calls these directly when
+//  `getIconUV()` returns null.
+// ---------------------------------------------------------------------------
+
+function paintShell(c: CanvasRenderingContext2D, S: number, hi: string, mid: string, lo: string): void {
+  const R = S * 0.44;
+  ground(c, S, R * 0.90, R * 0.66);
+  c.beginPath();
+  c.ellipse(0, R * 0.36, R * 0.94, R * 0.42, 0, 0, Math.PI * 2);
+  inked(c, S, lin(c, -R, R * 0.1, R, R * 0.7, [[0, '#ffffff'], [0.55, '#f0efe6'], [1, '#b9b6a6']]), 0.046);
+  const dome = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.arc(0, R * 0.12, R * 0.92, Math.PI, 0);
+    cc.closePath();
+  };
+  dome(c);
+  inked(c, S, rad(c, -R * 0.34, -R * 0.50, R * 0.05, R * 1.20, [[0, hi], [0.42, mid], [1, lo]]), 0.052);
+  c.save();
+  dome(c);
+  c.clip();
+  c.strokeStyle = 'rgba(10,20,32,0.32)';
+  c.lineWidth = S * 0.018;
+  for (let i = -2; i <= 2; i++) {
+    c.beginPath();
+    c.moveTo(i * R * 0.34, R * 0.12);
+    c.quadraticCurveTo(i * R * 0.40, -R * 0.40, i * R * 0.18, -R * 0.82);
+    c.stroke();
+  }
+  c.restore();
+  innerRim(c, S, dome, 'rgba(255,255,255,0.85)', S * 0.020, S * 0.020, 0.024);
+  spec(c, -R * 0.34, -R * 0.42, R * 0.26, R * 0.15, -0.45, 0.8);
+}
+
+function paintGreenShell(c: CanvasRenderingContext2D, S: number): void {
+  paintShell(c, S, '#d9ffb0', '#3fd12c', '#0d6b1c');
+}
+
+function paintBlueShell(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  for (let i = 0; i < 5; i++) {
+    const a = Math.PI + (i / 4) * Math.PI;
+    const x = Math.cos(a) * R * 0.80;
+    const y = R * 0.10 + Math.sin(a) * R * 0.80;
+    c.beginPath();
+    c.moveTo(x + Math.cos(a) * R * 0.34, y + Math.sin(a) * R * 0.34);
+    c.lineTo(x + Math.cos(a - 0.30) * R * 0.10, y + Math.sin(a - 0.30) * R * 0.10);
+    c.lineTo(x + Math.cos(a + 0.30) * R * 0.10, y + Math.sin(a + 0.30) * R * 0.10);
+    c.closePath();
+    inked(c, S, '#eaf4ff', 0.036);
+  }
+  paintShell(c, S, '#dff3ff', '#3f8dff', '#0f2fa8');
+}
+
+function paintBomb(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  ground(c, S, R * 0.98, R * 0.60);
+  const body = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.arc(0, R * 0.16, R * 0.80, 0, Math.PI * 2);
+  };
+  body(c);
+  inked(c, S, rad(c, -R * 0.30, -R * 0.20, R * 0.05, R * 1.05, [
+    [0, '#6b7c9e'], [0.40, '#222b40'], [1, '#05070e'],
+  ]), 0.050);
+  for (const s of [-1, 1]) {
+    c.beginPath();
+    c.ellipse(s * R * 0.42, R * 0.90, R * 0.24, R * 0.12, 0, 0, Math.PI * 2);
+    inked(c, S, '#f4c02a', 0.034);
+  }
+  c.strokeStyle = '#d8dce6';
+  c.lineWidth = S * 0.040;
+  c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(R * 0.18, -R * 0.58);
+  c.quadraticCurveTo(R * 0.62, -R * 0.88, R * 0.50, -R * 1.00);
+  c.stroke();
+  starPath(c, R * 0.52, -R * 1.02, R * 0.30, R * 0.10, 6, -Math.PI / 2, 0.10);
+  c.fillStyle = rad(c, R * 0.52, -R * 1.02, 0, R * 0.32, [
+    [0, '#fffbe0'], [0.5, '#ffcf3a'], [1, 'rgba(255,106,0,0)'],
+  ]);
+  c.fill();
+  innerRim(c, S, body, 'rgba(160,180,220,0.7)', S * 0.020, S * 0.020, 0.024);
+  spec(c, -R * 0.32, -R * 0.28, R * 0.22, R * 0.13, -0.5, 0.75);
+}
+
+function paintBullet(c: CanvasRenderingContext2D, S: number): void {
+  const R = S * 0.44;
+  ground(c, S, R * 0.86, R * 0.62);
+  c.save();
+  c.rotate(-0.16);
+  const body = (cc: CanvasRenderingContext2D): void => {
+    cc.beginPath();
+    cc.moveTo(-R * 0.86, -R * 0.48);
+    cc.lineTo(R * 0.26, -R * 0.48);
+    cc.quadraticCurveTo(R * 0.92, -R * 0.48, R * 0.92, 0);
+    cc.quadraticCurveTo(R * 0.92, R * 0.48, R * 0.26, R * 0.48);
+    cc.lineTo(-R * 0.86, R * 0.48);
+    cc.closePath();
+  };
+  body(c);
+  inked(c, S, lin(c, 0, -R * 0.5, 0, R * 0.5, [
+    [0, '#7d8db0'], [0.4, '#242c40'], [1, '#080b16'],
+  ]), 0.050);
+  c.fillStyle = '#182034';
+  for (const s of [-1, 1]) {
+    c.beginPath();
+    c.ellipse(-R * 0.10, s * R * 0.58, R * 0.32, R * 0.14, 0, 0, Math.PI * 2);
+    inked(c, S, '#182034', 0.032);
+  }
+  c.fillStyle = '#ffffff';
+  for (const s of [-1, 1]) {
+    c.beginPath();
+    c.ellipse(R * 0.32, s * R * 0.15, R * 0.12, R * 0.13, 0, 0, Math.PI * 2);
+    c.fill();
+  }
+  innerRim(c, S, body, 'rgba(200,215,245,0.75)', S * 0.020, S * 0.020, 0.024);
+  c.restore();
+  spec(c, -R * 0.28, -R * 0.30, R * 0.26, R * 0.10, -0.35, 0.7);
+}
+
+/**
+ * Artwork per prototype. `Record<ItemModelId, …>` keeps it TOTAL: a new item
+ * model is a compile error here, not a silently blank atlas cell.
+ */
+const ICON_PAINTERS: Record<ItemModelId, (c: CanvasRenderingContext2D, S: number) => void> = {
+  rocket: paintRocket,
+  bottle: paintBottle,
+  battery: paintBattery,
+  ninja: paintNinja,
+  star: paintStar,
+  greenShell: paintGreenShell,
+  blueShell: paintBlueShell,
+  bomb: paintBomb,
+  bullet: paintBullet,
+};
+
+/**
+ * Draw one item's icon centred on the current origin, filling a `size` box.
+ *
+ * Routed through `MODEL_FOR_ITEM`, so the icon and the object that appears in the
+ * player's hand can never disagree about which item they are: there is one
+ * mapping from `ItemType` to identity and both consult it.
+ */
+export function paintItemIcon(c: CanvasRenderingContext2D, item: ItemType, size: number): void {
+  c.save();
+  ICON_PAINTERS[MODEL_FOR_ITEM[item]](c, size);
+  c.restore();
+}
+
+/**
+ * Paint the whole sheet: `ICON_ITEMS` in order, each centred in the cell that
+ * `iconAtlasCell()` names.
+ *
+ * The bake and the probe both call THIS, so "the cell the art is drawn into" and
+ * "the cell the HUD samples" are one expression evaluated once — the property the
+ * P0d icon bug violated when the same arithmetic was written out three times.
+ */
+export function drawIconAtlas(c: CanvasRenderingContext2D, cell: number): void {
+  for (const item of ICON_ITEMS) {
+    const at = iconAtlasCell(item);
+    if (!at) continue;
+    c.save();
+    c.translate(at.col * cell + cell * 0.5, at.row * cell + cell * 0.5);
+    paintItemIcon(c, item, cell);
+    c.restore();
   }
 }

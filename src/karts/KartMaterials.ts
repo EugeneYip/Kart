@@ -514,6 +514,137 @@ function makeKnitNormal(size: number): THREE.DataTexture {
   return normalFromHeight(h, size, 1.35);
 }
 
+/**
+ * Skin: a neutral-luminance detail albedo plus a pore normal.
+ *
+ * The `skin` slot used to be a solid colour with no maps at all — a §0
+ * violation on the *entire cranium* of seven of the ten drivers, which is most
+ * of why the humans read as vinyl dolls next to MK8DX. The albedo has to be
+ * neutral (mean ≈ 1.0) because it multiplies a per-driver skin colour, so the
+ * variation is carried as a ±6 % mottle rather than as a tint: subdermal
+ * blotching at low frequency, a warm capillary flush over it, and pores.
+ */
+function makeSkinTextures(size: number): { map: THREE.CanvasTexture; normal: THREE.DataTexture } {
+  const { c, g } = canvas2d(size, size);
+  const img = g.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      // Two mottle octaves at very different scales — one reads as bone shadow
+      // under the skin, the other as blood colour in it.
+      const deep = fbm(u * 3.2, v * 3.2, 3, 211) - 0.5;
+      const flush = fbm(u * 9.0, v * 9.0, 3, 223) - 0.5;
+      const pore = hash2(x, y, 229) - 0.5;
+      const lum = 1 + deep * 0.085 + flush * 0.055 + pore * 0.030;
+      // Flush is warm: it lifts red and drops blue, which is what stops a
+      // uniform tint reading as painted plastic.
+      const i = (y * size + x) * 4;
+      img.data[i] = Math.round(clamp255(lum + flush * 0.045));
+      img.data[i + 1] = Math.round(clamp255(lum));
+      img.data[i + 2] = Math.round(clamp255(lum - flush * 0.040));
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      // Pores are a dense field of small dimples; the low-frequency term is the
+      // soft undulation of flesh over bone.
+      const cellX = Math.floor(x / 3), cellY = Math.floor(y / 3);
+      const pore = hash2(cellX, cellY, 233) > 0.58 ? 0.0 : 1.0;
+      const soft = fbm(u * 5.0, v * 5.0, 3, 239);
+      h[y * size + x] = soft * 0.72 + pore * 0.28;
+    }
+  }
+  return { map: canvasTexture(c, true, 1, 8), normal: normalFromHeight(h, size, 0.42) };
+}
+
+/**
+ * Glass: wipe streaks and a dust rim.
+ *
+ * A visor is the largest single facet on three of the drivers' heads and it was
+ * a mathematically perfect flat pane. `map` stays near-white so the dark tint
+ * still comes from the material colour; the read comes from the streak normal
+ * and the roughness variation, which is what makes a highlight travel across a
+ * visor instead of sitting on it like a sticker.
+ */
+function makeGlassTextures(size: number): {
+  map: THREE.CanvasTexture; normal: THREE.DataTexture; rough: THREE.CanvasTexture;
+} {
+  const { c, g } = canvas2d(size, size);
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, size, size);
+  // Faint dust and polish haze, heavier toward the edges of the tile.
+  for (let i = 0; i < 90; i++) {
+    const x = hash2(i, 1, 401) * size;
+    const y = hash2(i, 2, 409) * size;
+    const r = size * (0.004 + hash2(i, 3, 419) * 0.012);
+    g.fillStyle = `rgba(214,222,232,${0.10 + hash2(i, 4, 421) * 0.16})`;
+    g.beginPath();
+    g.ellipse(x, y, r * (1 + hash2(i, 5, 431) * 2.4), r, hash2(i, 6, 433) * Math.PI, 0, Math.PI * 2);
+    g.fill();
+  }
+  const { c: rc, g: rg } = canvas2d(size, size);
+  const rimg = rg.createImageData(size, size);
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      // Wipe arcs: long low-amplitude ridges swept one way, the trace a
+      // squeegee leaves. Plus a very fine polish grain.
+      const arc = Math.sin((u * 3.1 + v * 0.8) * Math.PI * 2 + fbm(u * 2, v * 2, 2, 443) * 3.0);
+      const grain = fbm(u * 60, v * 60, 2, 449);
+      h[y * size + x] = 0.5 + arc * 0.055 + grain * 0.12;
+      // Roughness map: mostly mirror, rougher where the wipe streaks sit.
+      const r = clamp255(0.030 + Math.abs(arc) * 0.055 + grain * 0.030);
+      const i = (y * size + x) * 4;
+      rimg.data[i] = 255;
+      rimg.data[i + 1] = Math.round(r);   // g = roughness
+      rimg.data[i + 2] = 0;
+      rimg.data[i + 3] = 255;
+    }
+  }
+  rg.putImageData(rimg, 0, 0);
+  return {
+    map: canvasTexture(c, true, 1, 8),
+    normal: normalFromHeight(h, size, 0.30),
+    rough: canvasTexture(rc, false, 1, 4),
+  };
+}
+
+/**
+ * Emissive accents: a hot core banded by cooler ribs.
+ *
+ * `glow` was a solid emissive colour, so a drift-charge disc or a robot's
+ * chest core was a featureless bright blob — the one thing bloom exaggerates.
+ * Banding it means the bloom picks up structure instead of a flat pool.
+ */
+function makeGlowTexture(size: number): THREE.CanvasTexture {
+  const { c, g } = canvas2d(size, size);
+  const img = g.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      // Concentric ribs in the tile plus a slow pulse across it. Both are
+      // scale-free enough to survive whatever UVs a small accent part carries.
+      const rib = 0.5 + 0.5 * Math.sin(v * Math.PI * 2 * 6 + Math.sin(u * Math.PI * 2 * 2) * 0.9);
+      const core = fbm(u * 4, v * 4, 3, 457);
+      const lum = clamp255(0.52 + rib * 0.34 + core * 0.20);
+      const i = (y * size + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.round(lum);
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  // One texture serves both `map` and `emissiveMap` — three binds the same
+  // sampler twice quite happily and a second upload of identical pixels is
+  // 64 KB of VRAM for nothing.
+  return canvasTexture(c, true, 1, 4);
+}
+
 /** Fine woven cloth for the driver suits. */
 function makeClothNormal(size: number): THREE.DataTexture {
   const h = new Float32Array(size * size);
@@ -972,6 +1103,42 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
       sh.addColorStop(1, 'rgba(0,0,0,0.30)');
       g.fillStyle = sh;
       g.fillRect(0, 0, cell, cell);
+      // Painted anatomy. The animal cells have had a stippled pelt since they
+      // were authored; the human cells were a flat fill plus one radial ramp,
+      // so a human head was a matte plastic egg with a decal on it. These are
+      // the three shadows a stylised face cannot do without: the brow, the
+      // cheekbone and the underside of the jaw.
+      const brow = g.createLinearGradient(0, cell * 0.20, 0, cell * 0.40);
+      brow.addColorStop(0, 'rgba(96,54,34,0.20)');
+      brow.addColorStop(1, 'rgba(96,54,34,0)');
+      g.fillStyle = brow;
+      g.fillRect(0, cell * 0.20, cell, cell * 0.20);
+      for (const sgn of [-1, 1]) {
+        const ck = g.createRadialGradient(
+          cell * (0.5 + sgn * 0.30), cell * 0.60, cell * 0.02,
+          cell * (0.5 + sgn * 0.30), cell * 0.60, cell * 0.24,
+        );
+        ck.addColorStop(0, 'rgba(255,236,214,0.16)');
+        ck.addColorStop(1, 'rgba(255,236,214,0)');
+        g.fillStyle = ck;
+        g.fillRect(0, 0, cell, cell);
+      }
+      const jaw = g.createLinearGradient(0, cell * 0.80, 0, cell);
+      jaw.addColorStop(0, 'rgba(70,38,26,0)');
+      jaw.addColorStop(1, 'rgba(70,38,26,0.26)');
+      g.fillStyle = jaw;
+      g.fillRect(0, cell * 0.80, cell, cell * 0.20);
+      // Pore stipple, matching the `skin` material's own pore normal so the
+      // face patch and the skull around it read as one surface.
+      for (let i = 0; i < 300; i++) {
+        const px = hash2(i, 11, 613) * cell;
+        const py = hash2(i, 12, 617) * cell;
+        const dark = hash2(i, 13, 619) > 0.5;
+        g.fillStyle = dark ? 'rgba(120,74,52,0.10)' : 'rgba(255,242,226,0.10)';
+        g.beginPath();
+        g.arc(px, py, cell * 0.0055, 0, Math.PI * 2);
+        g.fill();
+      }
     } else {
       const sh = g.createLinearGradient(0, 0, 0, cell);
       sh.addColorStop(0, '#23272f');
@@ -1365,6 +1532,12 @@ export class KartMaterialLibrary {
   readonly clothNormal: THREE.DataTexture;
   readonly knitNormal: THREE.DataTexture;
   readonly furNormal: THREE.DataTexture;
+  readonly skinMap: THREE.CanvasTexture;
+  readonly skinNormal: THREE.DataTexture;
+  readonly glassMap: THREE.CanvasTexture;
+  readonly glassNormal: THREE.DataTexture;
+  readonly glassRough: THREE.CanvasTexture;
+  readonly glowMap: THREE.CanvasTexture;
   readonly contactShadow: THREE.CanvasTexture;
   readonly billboard: THREE.CanvasTexture;
 
@@ -1389,6 +1562,14 @@ export class KartMaterialLibrary {
     this.clothNormal = makeClothNormal(small);
     this.knitNormal = makeKnitNormal(small);
     this.furNormal = makeFurNormal(big);
+    const skin = makeSkinTextures(small);
+    this.skinMap = skin.map;
+    this.skinNormal = skin.normal;
+    const glass = makeGlassTextures(small);
+    this.glassMap = glass.map;
+    this.glassNormal = glass.normal;
+    this.glassRough = glass.rough;
+    this.glowMap = makeGlowTexture(quality.tier === 'low' ? 64 : 128);
     this.contactShadow = makeContactShadowTexture(quality.tier === 'low' ? 64 : 128);
     this.billboard = makeBillboardTexture(64);
 
@@ -1396,6 +1577,7 @@ export class KartMaterialLibrary {
     for (const t of [
       this.panelNormal, this.tyreMap, this.seatMap, this.brushedNormal,
       this.rubberNormal, this.furNormal, this.knitNormal,
+      this.skinMap, this.skinNormal, this.glassMap, this.glassNormal,
     ]) {
       t.anisotropy = aniso;
     }
@@ -1407,6 +1589,16 @@ export class KartMaterialLibrary {
     // Knit is a coarse, physically-sized stitch; fur is much finer than cloth.
     this.knitNormal.repeat.set(3, 3);
     this.furNormal.repeat.set(7, 7);
+    // Pores are the finest detail on the model — a head is ~0.25 m across and a
+    // pore is sub-millimetre, so the tile has to repeat hard. The albedo mottle
+    // is deliberately four times coarser than the pore normal so the two do not
+    // beat against each other into a visible moiré.
+    this.skinMap.repeat.set(3, 3);
+    this.skinNormal.repeat.set(12, 12);
+    this.glassMap.repeat.set(1.6, 1.6);
+    this.glassNormal.repeat.set(1.6, 1.6);
+    this.glassRough.repeat.set(1.6, 1.6);
+    this.glowMap.repeat.set(2, 2);
   }
 
   // -------------------------------------------------------------------------
@@ -1484,13 +1676,19 @@ export class KartMaterialLibrary {
 
     const glass = new THREE.MeshPhysicalMaterial({
       color: 0x11161f,
+      map: this.glassMap,
       metalness: 0.1,
-      roughness: 0.045,
+      roughness: 1.0,
+      roughnessMap: this.glassRough,
+      normalMap: this.glassNormal,
+      normalScale: new THREE.Vector2(0.30, 0.30),
       transparent: true,
       opacity: 0.55,
       envMapIntensity: 2.4,
       clearcoat: 1.0,
       clearcoatRoughness: 0.02,
+      clearcoatNormalMap: this.glassNormal,
+      clearcoatNormalScale: new THREE.Vector2(0.22, 0.22),
       side: THREE.FrontSide,
       depthWrite: false,
       vertexColors: true,
@@ -1519,7 +1717,9 @@ export class KartMaterialLibrary {
 
     const glow = new THREE.MeshStandardMaterial({
       color: new THREE.Color(spec.glow ?? spec.secondary),
+      map: this.glowMap,
       emissive: new THREE.Color(spec.glow ?? spec.secondary),
+      emissiveMap: this.glowMap,
       emissiveIntensity: 2.2,
       roughness: 0.3,
       metalness: 0.0,
@@ -1542,8 +1742,15 @@ export class KartMaterialLibrary {
     });
     seat.name = 'seat';
 
+    // Skin carries a pore normal and a neutral mottle albedo. Without them the
+    // whole human cranium is one flat colour, which is a §0 violation and the
+    // single biggest reason the eight human drivers read as vinyl next to the
+    // two animals (whose pelt has had a strand normal all along).
     const skin = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(spec.skin ?? 0xf0c39a),
+      map: this.skinMap,
+      normalMap: this.skinNormal,
+      normalScale: new THREE.Vector2(0.42, 0.42),
       roughness: 0.68,
       metalness: 0.0,
       clearcoat: 0.18,
@@ -1591,6 +1798,13 @@ export class KartMaterialLibrary {
         sheen: 1.0,
         sheenRoughness: 0.62,
         sheenColor: new THREE.Color(sheenTint),
+        // Real anisotropic shading, not just a strand normal: a pelt's specular
+        // lobe is stretched ACROSS the hairs, which is why fur catches a broken
+        // band of light and a sphere with a bump map does not. `anisotropy` needs
+        // a tangent frame, and three derives one from the UV gradient — every
+        // fur part is swept or lofted with real UVs, so that frame exists.
+        anisotropy: 0.62,
+        anisotropyRotation: Math.PI * 0.5,
         envMapIntensity: 0.7,
         vertexColors: true,
       });
@@ -1606,9 +1820,14 @@ export class KartMaterialLibrary {
     const furDark = furTone(spec.furDark ?? 0x4a2e20, 0xc79a72, 0.80);
     furDark.name = 'furDark';
 
-    // 'face' is replaced per-kart by a FaceMaterial; this is the fallback.
+    // 'face' is replaced per-kart by a FaceMaterial; this is the fallback, and
+    // it still has to be §0-compliant because the model viewer and any caller
+    // that passes `null` for the face material draws with it.
     const face = new THREE.MeshStandardMaterial({
       color: new THREE.Color(spec.skin ?? 0xf0c39a),
+      map: this.skinMap,
+      normalMap: this.skinNormal,
+      normalScale: new THREE.Vector2(0.42, 0.42),
       roughness: 0.7,
       vertexColors: true,
     });
@@ -1756,6 +1975,12 @@ export class KartMaterialLibrary {
     this.clothNormal.dispose();
     this.knitNormal.dispose();
     this.furNormal.dispose();
+    this.skinMap.dispose();
+    this.skinNormal.dispose();
+    this.glassMap.dispose();
+    this.glassNormal.dispose();
+    this.glassRough.dispose();
+    this.glowMap.dispose();
     this.contactShadow.dispose();
     this.billboard.dispose();
   }

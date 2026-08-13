@@ -7,8 +7,10 @@
  *
  *   - tiny DOM helpers (`el`, `svgEl`, `restartAnim`, `punch`)
  *   - `Spring`: critically-tunable numeric spring for smoothed readouts
- *   - `ItemIcons`: procedural, chunky item artwork (uses the items subsystem's
- *     atlas when one exists, otherwise paints its own — both must look good)
+ *   - `ItemIcons`: the HUD's item artwork. It samples the items subsystem's baked
+ *     atlas, and for an item with no cell calls `paintItemIcon()` — the SAME
+ *     painter the atlas was baked from. This file no longer owns any item art of
+ *     its own; see the note on `paint()`.
  *   - procedural `characterPortrait`, `kartThumb`, `trackPreview` art
  *   - `confetti`
  *   - the *structural* host interfaces every UI class takes in its constructor

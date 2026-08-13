@@ -311,10 +311,16 @@ export class ItemSystem implements ISubsystem {
   }
 
   getIconAtlas(): THREE.Texture { return this.models.getIconAtlas(); }
-  getIconUV(item: ItemTypeT): IconRect { return this.models.getIconUV(item); }
+  /**
+   * Cell rect, or `null` for an item with no cell — the atlas carries exactly the
+   * live set (see `ICON_ITEMS`). The HUD reads `null` as "draw it yourself" and
+   * paints the same artwork on demand, so a forced `grantItem(Bomb)` still shows
+   * a bob-omb without the sheet holding a cell no roll can reach.
+   */
+  getIconUV(item: ItemTypeT): IconRect | null { return this.models.getIconUV(item); }
   /** Pixel rect + raw canvas, for a DOM/2D HUD that prefers drawImage. */
   getIconCanvas(): HTMLCanvasElement | null { return this.models.getIconCanvas(); }
-  getIconPixelRect(item: ItemTypeT): IconRect { return this.models.getIconPixelRect(item); }
+  getIconPixelRect(item: ItemTypeT): IconRect | null { return this.models.getIconPixelRect(item); }
 
   /** What the HUD slot should draw while the roulette spins (null when idle). */
   getRouletteDisplay(kartId: number): ItemType | null { return this.roulette.getDisplay(kartId); }

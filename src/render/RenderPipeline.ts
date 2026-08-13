@@ -347,10 +347,65 @@ const COST_DROP_MOTION_BLUR = 2.2;
  */
 const FPS_STRAINED = 48;
 const FPS_RECOVERED = 58;
-/** Below this share of the fill budget, the frame-rate latch is ignored. */
-const COST_STRAIN_FLOOR = 0.5;
+/**
+ * Below this frame rate the number is not a GPU verdict, it is a throttled or
+ * backgrounded loop, and shedding effects cannot fix it.
+ *
+ * The review pane drives rAF at ~10 Hz and drops to ~4 Hz whenever
+ * `visibilityState` is `hidden` (AGENTS.md §5). Nothing this chain can switch off
+ * turns 10 fps into 60, so a latch that fires there is pure quality loss for no
+ * gain — it just hands the visual critic a frame with no AO, no reflections and
+ * no depth of field. A real GPU missing 60 fps on this content lands in the 25–50
+ * band, so the latch is only eligible inside a *plausible* window.
+ */
+const FPS_IMPLAUSIBLE = 20;
+/**
+ * Below this share of the fill budget, the frame-rate latch is ignored.
+ *
+ * Was 0.5, which was too blunt: the owner's own machine, after Engine's adaptive
+ * controller walks the pixel ratio to its 0.65 floor, renders 1040x585 = 0.29x —
+ * *under* the old floor, so the latch was dead exactly on the machine that
+ * reported "lag is still severe". The floor only ever existed to protect the
+ * 800x450 review pane (0.185x); 0.25 keeps that and re-arms everything above it.
+ * `FPS_IMPLAUSIBLE` and the `visible` guard are the real protection now.
+ */
+const COST_STRAIN_FLOOR = 0.25;
+/** Hysteresis on the floor, so a resolution flap across it cannot reset the latch. */
+const COST_STRAIN_FLOOR_LOW = 0.20;
 /** How often the budget re-reads the frame rate, seconds. */
 const BUDGET_POLL = 1.0;
+/**
+ * ==========================================================================
+ *  HYSTERESIS AND SETTLING — why a *stable* verdict beats a correct one
+ * ==========================================================================
+ *  Observed on the owner's machine: the resolution cycled 1280x720 -> 1600x900
+ *  -> 1440x810 "with SSAO, reflections and DOF toggling as it goes". Both halves
+ *  of that are explained, and neither is this file deciding wrongly — they are
+ *  two controllers with no dead band between them:
+ *
+ *   1. `Engine.trackPerformance` steps the pixel ratio down 0.1 and up 0.05 with
+ *      a 1.5 s cooldown, and its up/down thresholds (11.5 ms / 15.5 ms) leave a
+ *      band that a frame sitting near 13 ms crosses on noise. Each step calls
+ *      `handleResize`, which calls `composer.setSize` — **every render target in
+ *      the chain is reallocated**, which is itself a hitch. That controller is
+ *      `src/core/*`; see the report.
+ *   2. Each of those steps moved `costScale` across a threshold in the ladder
+ *      below, and the old strain floor at 0.5 sat *inside* the range the flapping
+ *      covered (1600x900 = 0.69x, 1280x720 = 0.44x). So every flap flipped the
+ *      whole effect set at once — and an `aa` flip re-runs `SMAAEffect
+ *      .applyPreset()`, which regenerates its lookup textures.
+ *
+ *  Two mechanisms fix the half that is ours. Each threshold gets a **dead band**
+ *  (a flag that has been dropped is only restored well below the line that
+ *  dropped it), and a verdict must **hold still for `BUDGET_SETTLE` seconds**
+ *  before it is applied at all. The settle time is deliberately longer than
+ *  Engine's 1.5 s cooldown: while the resolution is still hunting, no verdict is
+ *  stable for long enough to apply, so the effect set simply stays put — which is
+ *  the correct behaviour, because visible pumping is worse than either state.
+ */
+const COST_HYSTERESIS = 0.12;
+/** Seconds a changed verdict must persist before it is applied. */
+const BUDGET_SETTLE = 2.5;
 
 /** What the budget decides. One flag per pass it can take out of the frame. */
 export interface BudgetVerdict {
