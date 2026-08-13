@@ -36,7 +36,32 @@ interface ProbeResult {
   p99: number;
   blown: number;
   crushed: number;
+  /**
+   * Where the pixels came from. `screen` is a readback of the default
+   * framebuffer — only valid in a composited view. `composer` is a readback of
+   * the buffer the terminal pass wrote, which is valid anywhere. Always check
+   * this before trusting a number: an all-black `screen` result means the view
+   * was never composited, not that the frame was black.
+   */
+  source: 'screen' | 'composer' | 'screen (unverifiable)';
 }
+
+/**
+ * Which surface to read.
+ *  - `auto`     — the default framebuffer, falling back to the composer's own
+ *                 buffer when that comes back empty. Identical numbers and an
+ *                 identical code path in a real composited view.
+ *  - `screen`   — force the default framebuffer (the pre-fix behaviour).
+ *  - `composer` — force the composer buffer, even if the screen would work.
+ */
+export type ProbeSource = 'auto' | 'screen' | 'composer';
+
+/**
+ * Set by `installPostQA`. `probe()` needs the pipeline to reach
+ * `captureFrame()`, and threading it through ~15 existing call sites would be
+ * churn for no gain — there is exactly one pipeline per session.
+ */
+let capturePipeline: RenderPipeline | null = null;
 
 interface EngineLike {
   renderer: {
@@ -436,10 +461,104 @@ function describeBoundTextures(pipeline: RenderPipeline): Array<Record<string, u
   return out;
 }
 
-/** Wait two frames, then read the composited frame back and summarise it. */
-function probe(engine: EngineLike): Promise<ProbeResult> {
+/**
+ * Histogram summary of an RGBA plane. `at(i)` returns channel `i` normalised to
+ * 0..1, so the same maths serves an 8-bit screen readback and a half-float
+ * render-target readback.
+ *
+ * Exported for `.probe-tmp/postqa-probe.ts`, which asserts the source-selection
+ * rules headlessly — there is no GL context in the node harness, so the only way
+ * to regression-test this is to drive it with synthetic planes.
+ */
+export function summariseRgba(
+  at: (i: number) => number,
+  w: number,
+  h: number,
+  source: ProbeResult['source'],
+): ProbeResult {
+  const step = 4;
+  const lumas: number[] = [];
+  let sumL = 0;
+  let sumS = 0;
+  let n = 0;
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      const r = at(i);
+      const g = at(i + 1);
+      const b = at(i + 2);
+      const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const mx = Math.max(r, g, b);
+      const mn = Math.min(r, g, b);
+      sumL += l;
+      sumS += mx <= 1e-4 ? 0 : (mx - mn) / mx;
+      lumas.push(l);
+      n++;
+    }
+  }
+  if (n === 0) n = 1;
+  lumas.sort((a, b) => a - b);
+  const q = (p: number): number => (lumas.length === 0 ? 0
+    : +lumas[Math.min(lumas.length - 1, Math.floor(lumas.length * p))].toFixed(4));
+  const mean = sumL / n;
+  let v = 0;
+  for (const l of lumas) v += (l - mean) * (l - mean);
+  return {
+    meanLuma: +mean.toFixed(4),
+    stdLuma: +Math.sqrt(v / n).toFixed(4),
+    meanSat: +(sumS / n).toFixed(4),
+    p1: q(0.01), p5: q(0.05), p50: q(0.5), p95: q(0.95), p99: q(0.99),
+    blown: +(lumas.filter((l) => l > 0.98).length / n).toFixed(4),
+    crushed: +(lumas.filter((l) => l < 0.02).length / n).toFixed(4),
+    source,
+  };
+}
+
+/**
+ * A screen readback that is entirely black is not a measurement — it is the
+ * signature of a view that was never composited. Nothing in this game renders a
+ * frame with zero lit pixels *and* zero sky, so this is safe to treat as "no
+ * data" rather than as data. (A genuine fade-to-black would also trip it; the
+ * fallback then reads the same black frame off the composer and reports
+ * `source: 'composer'`, so nothing is misattributed either way.)
+ */
+function isEmpty(p: ProbeResult): boolean {
+  return p.meanLuma <= 1e-4 && p.crushed >= 0.999;
+}
+
+/**
+ * ============================================================================
+ *  Read the finished frame back and summarise it.
+ * ============================================================================
+ *  This used to read the DEFAULT framebuffer only: `setRenderTarget(null)` then
+ *  `readPixels` on FBO 0, two rAFs after the fact. An off-screen WKWebView is
+ *  never composited, so on this host it returns all zeroes — `meanLuma 0`,
+ *  `crushed 1.0` — on every circuit, including one independently measured at 54.
+ *  That has now blocked two agents from verifying their own brightness work, and
+ *  it is indistinguishable from "the frame really is black", which is the worst
+ *  property a measurement tool can have.
+ *
+ *  `auto` therefore tries the screen exactly as before and, only if that comes
+ *  back empty, re-reads the same chain off the buffer the terminal pass wrote
+ *  (`RenderPipeline.captureFrame()`, which documents why those pixels are
+ *  numerically the same). In a composited view the first read succeeds and the
+ *  code path, the pixels and the numbers are unchanged.
+ */
+function probe(engine: EngineLike, source: ProbeSource = 'auto'): Promise<ProbeResult> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      const fromComposer = (): ProbeResult | null => {
+        const cap = capturePipeline?.captureFrame() ?? null;
+        if (!cap) return null;
+        return summariseRgba((i) => cap.data[i], cap.width, cap.height, 'composer');
+      };
+
+      if (source === 'composer') {
+        const c = fromComposer();
+        resolve(c ?? summariseRgba(() => 0, 1, 1, 'screen (unverifiable)'));
+        return;
+      }
+
       const gl = engine.renderer.getContext();
       const w = gl.drawingBufferWidth;
       const h = gl.drawingBufferHeight;
@@ -447,40 +566,14 @@ function probe(engine: EngineLike): Promise<ProbeResult> {
       engine.renderer.setRenderTarget(null);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      const screen = summariseRgba((i) => buf[i] / 255, w, h, 'screen');
 
-      const step = 4;
-      const lumas: number[] = [];
-      let sumL = 0;
-      let sumS = 0;
-      let n = 0;
-      for (let y = 0; y < h; y += step) {
-        for (let x = 0; x < w; x += step) {
-          const i = (y * w + x) * 4;
-          const r = buf[i] / 255;
-          const g = buf[i + 1] / 255;
-          const b = buf[i + 2] / 255;
-          const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          const mx = Math.max(r, g, b);
-          const mn = Math.min(r, g, b);
-          sumL += l;
-          sumS += mx <= 1e-4 ? 0 : (mx - mn) / mx;
-          lumas.push(l);
-          n++;
-        }
-      }
-      lumas.sort((a, b) => a - b);
-      const q = (p: number): number => +lumas[Math.min(n - 1, Math.floor(n * p))].toFixed(4);
-      const mean = sumL / n;
-      let v = 0;
-      for (const l of lumas) v += (l - mean) * (l - mean);
-      resolve({
-        meanLuma: +mean.toFixed(4),
-        stdLuma: +Math.sqrt(v / n).toFixed(4),
-        meanSat: +(sumS / n).toFixed(4),
-        p1: q(0.01), p5: q(0.05), p50: q(0.5), p95: q(0.95), p99: q(0.99),
-        blown: +(lumas.filter((l) => l > 0.98).length / n).toFixed(4),
-        crushed: +(lumas.filter((l) => l < 0.02).length / n).toFixed(4),
-      });
+      if (source === 'screen' || !isEmpty(screen)) { resolve(screen); return; }
+
+      // The window gave us nothing. Read what the chain actually wrote.
+      const c = fromComposer();
+      if (c) { resolve(c); return; }
+      resolve({ ...screen, source: 'screen (unverifiable)' });
     }));
   });
 }
@@ -500,9 +593,17 @@ async function frameTime(frames: number): Promise<number> {
 }
 
 export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): void {
+  // `probe()` needs this to reach captureFrame() when the window is not
+  // composited. Set before anything can call probe().
+  capturePipeline = pipeline;
   const api = {
     pipeline,
-    probe: () => probe(engine),
+    /**
+     * Histogram of the current frame. Pass `'screen'` or `'composer'` to force a
+     * surface; the default tries the window and falls back to the composer's own
+     * buffer, so it is valid off-screen. Check `result.source`.
+     */
+    probe: (source: ProbeSource = 'auto') => probe(engine, source),
 
     /**
      * Prove the presence or absence of the `Mismatch between texture format and
@@ -694,6 +795,141 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
         if (typeof v === 'number' && !k.endsWith(')')) total += v;
       }
       out['TOTAL_post_ms'] = +total.toFixed(3);
+      return out;
+    },
+
+    /**
+     * ======================================================================
+     *  WHOLE-FRAME per-pass GPU cost. The one call that answers "where do the
+     *  4.7 ms go".
+     * ======================================================================
+     *  `gpuCost()` above only instruments the composer's passes, so it cannot see
+     *  the three things that turned out to matter most:
+     *
+     *   - the **shadow group**. Counted headlessly at 2.00 passes/frame of
+     *     2048² depth = 8.39 Mpx — which at the owner's 1040x585 backbuffer is
+     *     **56 % of every pixel the frame rasterises**, and it does not shrink
+     *     when the window does. `.probe-tmp/framecost.ts` has the table.
+     *   - the **water planar reflection**, timed by camera identity, so a circuit
+     *     where it does not run reports `did not run` instead of nothing.
+     *   - the **whole frame**, so the parts can be checked against the total
+     *     rather than summed and hoped over.
+     *
+     *  One target at a time: `EXT_disjoint_timer_query_webgl2` allows a single
+     *  active query per context, and `shadowMap.render` is called from *inside*
+     *  `renderer.render`, so instrumenting both at once would nest and return
+     *  nothing. Everything is restored in a `finally`, including on a throw.
+     *
+     *  Read the `(min..max n=)` spread before trusting a median. A shared dev
+     *  machine with other agents on it produces very torn samples, and a torn
+     *  sample is how a modelled number gets mistaken for a measured one.
+     */
+    async frameCost(framesPerTarget = 6): Promise<Record<string, number | string>> {
+      const gl = engine.renderer.getContext();
+      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as
+        { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
+      if (!ext) return { error: 'EXT_disjoint_timer_query_webgl2 unavailable' };
+
+      type Fn = (...a: unknown[]) => unknown;
+      /** Runs `body` inside a TIME_ELAPSED query and records it. */
+      type Measure = (body: () => unknown) => unknown;
+
+      /** Wrap `obj[key]` so each call is timed. Returns the restore closure. */
+      const wrap = (obj: object, key: string, m: Measure): (() => void) => {
+        const host = obj as unknown as Record<string, Fn>;
+        const orig = host[key].bind(obj) as Fn;
+        host[key] = (...args: unknown[]): unknown => m(() => orig(...args));
+        return () => { host[key] = orig; };
+      };
+
+      const renderer = engine.renderer as unknown as {
+        shadowMap: object;
+        render: Fn;
+      };
+
+      interface Site { label: string; install(m: Measure): () => void }
+      const sites: Site[] = [
+        {
+          label: 'shadow group (world/Lighting, all due cascades)',
+          install: (m) => wrap(renderer.shadowMap, 'render', m),
+        },
+        {
+          label: 'water planar reflection (world/Water)',
+          install: (m) => {
+            const host = renderer as unknown as Record<string, Fn>;
+            const orig = host['render'].bind(renderer) as Fn;
+            host['render'] = (...args: unknown[]): unknown => {
+              const cam = args[1] as { userData?: Record<string, unknown> } | undefined;
+              // Only the reflection's own camera; every other re-entry is
+              // somebody else's pass and would pollute the median.
+              if (cam?.userData?.['apxReflectionCam'] !== true) return orig(...args);
+              return m(() => orig(...args));
+            };
+            return () => { host['render'] = orig; };
+          },
+        },
+        {
+          label: 'SubjectMask (render/SubjectMask)',
+          install: (m) => wrap(pipeline, 'renderSubjectMask', m),
+        },
+        ...pipeline.composer.passes.filter((p) => p.enabled).map((p) => ({
+          label: `composer: ${describe(p)}`,
+          install: (m: Measure) => wrap(p, 'render', m),
+        })),
+        {
+          label: 'WHOLE FRAME (pipeline.render — everything above)',
+          install: (m) => wrap(pipeline, 'render', m),
+        },
+      ];
+
+      const out: Record<string, number | string> = {};
+      const st = pipeline.getStats();
+      out['resolution'] = `${st.megapixels} Mpx (${st.costScale}x the 1920x1080 budget)`;
+      out['scenePasses'] = st.scenePasses;
+      out['verdicts'] = `ssao ${st.ssao ? 'on' : 'off'}, refl `
+        + `${st.reflections ? 'on' : 'off'}, juice ${st.juice ? 'on' : 'off'}, `
+        + `motion ${st.motion ? 'on' : 'off'}${st.strained ? ', STRAINED' : ''}`;
+
+      for (const site of sites) {
+        const queries: WebGLQuery[] = [];
+        const measure: Measure = (body) => {
+          const q = gl.createQuery();
+          if (q === null) return body();
+          gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
+          const r = body();
+          gl.endQuery(ext.TIME_ELAPSED_EXT);
+          queries.push(q);
+          return r;
+        };
+        let restore: (() => void) | null = null;
+        try {
+          restore = site.install(measure);
+          await settleFrames(framesPerTarget);
+        } finally {
+          restore?.();
+        }
+        // Let the GPU retire the last queries before reading them.
+        await settleFrames(2);
+
+        const times: number[] = [];
+        const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
+        for (const q of queries) {
+          if (!disjoint && gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === true) {
+            times.push((gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6);
+          }
+          gl.deleteQuery(q);
+        }
+        if (queries.length === 0) {
+          out[site.label] = 'did not run';
+        } else if (disjoint || times.length === 0) {
+          out[site.label] = 'no sample';
+        } else {
+          times.sort((a, b) => a - b);
+          out[site.label] = +times[Math.floor(times.length / 2)].toFixed(3);
+          out[`${site.label} (min..max)`] =
+            `${times[0].toFixed(3)}..${times[times.length - 1].toFixed(3)} n=${times.length}`;
+        }
+      }
       return out;
     },
 
@@ -1111,8 +1347,13 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
 
   (globalThis as unknown as Record<string, unknown>).__POST__ = api;
   console.info(
-    '[PostQA] window.__POST__ ready — probe() passCost() toneMap() exposure() passes() autoRun()'
-    + ' glValidate() boundTextures() mbArm() mbFrame(shot,speed,boost,mode) mbRelease()',
+    '[PostQA] window.__POST__ ready — probe(source?) frameCost() passCost() gpuCost()'
+    + ' toneMap() exposure() passes() autoRun() glValidate() boundTextures() mbArm()'
+    + ' mbFrame(shot,speed,boost,mode) mbRelease()'
+    + '\n  frameCost() is the whole-frame per-pass GPU timer, including the shadow'
+    + ' group and the water reflection, which gpuCost() cannot see.'
+    + '\n  probe() now falls back to the composer\'s own buffer when the window is'
+    + ' not composited — check result.source.',
   );
 
   let auto = '';
