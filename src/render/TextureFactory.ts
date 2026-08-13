@@ -652,6 +652,294 @@ export function canvasTexture(
   return tex;
 }
 
+/**
+ * `canvasTexture` for a CUT-OUT (anything with transparent texels that will be
+ * minified): draws on a canvas, then dilates the RGB into the transparent texels
+ * and uploads the bytes directly. See {@link alphaBleed} for why this is not
+ * optional for mipmapped cut-outs.
+ */
+export function bledCanvasTexture(
+  w: number,
+  h: number,
+  draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void,
+  opts: { srgb?: boolean; cells?: number; repeat?: number; aniso?: number } = {},
+): THREE.DataTexture {
+  const { canvas, ctx } = domCanvas(w, h);
+  draw(ctx, w, h);
+  return alphaBleed(canvas, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Alpha bleed  (a.k.a. "solidify" / RGB dilation)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ EVERY MIPMAPPED CUT-OUT TEXTURE NEEDS THIS. Verified against the installed
+ *    three@0.185.1, not from memory:
+ *
+ *  * `Texture.premultiplyAlpha` defaults to **false**, and `WebGLTextures` feeds
+ *    it straight to `gl.pixelStorei(UNPACK_PREMULTIPLY_ALPHA_WEBGL, …)` — so the
+ *    texels the GPU stores are un-premultiplied.
+ *  * `finalize()` above sets `generateMipmaps = true` and
+ *    `minFilter = LinearMipmapLinearFilter`, so `gl.generateMipmap` averages
+ *    those un-premultiplied texels — RGB and A independently.
+ *  * `WebGLState` selects `blendFuncSeparate( SRC_ALPHA, ONE_MINUS_SRC_ALPHA, … )`
+ *    for `NormalBlending` when `premultipliedAlpha` is false.
+ *
+ * Put those three together for paint of colour C covering a fraction `c` of a
+ * footprint, over transparent BLACK (which is what `clearRect` and
+ * `globalCompositeOperation = 'destination-out'` leave behind — a canvas stores
+ * premultiplied, so an alpha-0 texel is (0,0,0,0) whatever colour you drew):
+ *
+ *      mip.rgb = c·C     mip.a = c
+ *      out     = mip.rgb·mip.a + road·(1 - mip.a) = c²·C + (1-c)·road
+ *
+ * The paint contributes **c² instead of c**. At the mip level where a whole
+ * 512 px atlas cell collapses to one texel that is a 1/c error — the markings
+ * fade out several mip levels earlier than they should, and their edge texels
+ * go darker than either the paint or the road. Because the mip level is chosen
+ * from the screen-space derivative of the UV, the strength of that error is a
+ * function of the VIEW ANGLE: the same lane arrow is crisp white looked at from
+ * above and a washed-out grey smear at a grazing angle.
+ *
+ * The fix is to make the RGB of the transparent texels agree with their opaque
+ * neighbours, so averaging can no longer pull the colour toward black. Alpha is
+ * never touched, so nothing about the shape or the coverage changes — only the
+ * colour that alpha-0 texels contribute to a filtered fetch.
+ *
+ * NOTE the return type. It has to be a `DataTexture`, NOT a `CanvasTexture`:
+ * `putImageData` re-premultiplies, and premultiplied 8-bit storage of an alpha-0
+ * texel is identically (0,0,0,0), so a canvas round-trip throws the bled colour
+ * straight back away. The bytes have to go to the GPU directly.
+ *
+ * @param cells Optional N x N cell grid. An atlas is bled **per cell**, so cell
+ *              15's paint never leaks into cell 14's cut-outs at the mip levels
+ *              where each cell is still several texels wide.
+ */
+export function alphaBleed(
+  canvas: HTMLCanvasElement,
+  opts: { srgb?: boolean; cells?: number; repeat?: number; aniso?: number } = {},
+): THREE.DataTexture {
+  const w = canvas.width;
+  const h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('TextureFactory.alphaBleed: no 2d context');
+  const src = ctx.getImageData(0, 0, w, h).data;
+  const out = new Uint8Array(w * h * 4);
+  // ⚠️ ROW ORDER. `CanvasTexture` leaves `flipY = true`, `DataTexture` sets it
+  // false, and whether `UNPACK_FLIP_Y_WEBGL` is honoured for an ArrayBufferView
+  // upload is exactly the sort of thing not to bet a black road on. Flip the
+  // rows here and leave `flipY` at the DataTexture default, so the V axis is
+  // bit-identical to the canvas this replaces and every authored UV still lands
+  // on the cell it used to.
+  const row = w * 4;
+  for (let y = 0; y < h; y++) {
+    out.set(src.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  }
+
+  alphaBleedBytes(out, w, h, opts.cells ?? 1);
+
+  const tex = new THREE.DataTexture(out, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+  finalize(tex, opts.srgb !== false, opts.repeat ?? 1);
+  if (opts.aniso !== undefined) tex.anisotropy = opts.aniso;
+  tex.userData.apxAlphaBled = true;
+  return tex;
+}
+
+/**
+ * The same dilation, in place, over a raw RGBA byte buffer — for `DataTexture`
+ * cut-outs, and so the audit probe can measure it on real bytes (the headless
+ * canvas shim rasterises nothing, so {@link alphaBleed} cannot be tested
+ * end to end under Node).
+ *
+ * @param cells Optional N x N cell grid; each cell is bled independently.
+ */
+export function alphaBleedBytes(
+  data: Uint8Array,
+  w: number,
+  h: number,
+  cells = 1,
+): void {
+  const n = Math.max(1, Math.floor(cells));
+  const cw = Math.floor(w / n);
+  const ch = Math.floor(h / n);
+  if (cw < 1 || ch < 1) return;
+  for (let cy = 0; cy < n; cy++) {
+    for (let cx = 0; cx < n; cx++) {
+      bleedRegion(data, w, cx * cw, cy * ch, cw, ch);
+    }
+  }
+}
+
+/**
+ * Push–pull pyramid fill over one rectangle of an RGBA byte buffer.
+ *
+ * Down: each level is the alpha-WEIGHTED mean colour of its 2x2 children, so a
+ * level's colour is "the colour of whatever paint is under here", never
+ * contaminated by empty texels. Up: any texel with alpha 0 takes the colour of
+ * its nearest non-empty ancestor. O(4/3 · n) and it terminates with every texel
+ * carrying a sensible colour, including a fully-empty cell (left black, which is
+ * correct — there is no paint to bleed).
+ *
+ * Alpha is read but never written.
+ *
+ * ⚠️ Level 0 is deliberately NOT materialised. A 2048 x 2048 atlas cell grid would
+ *    need 4 x 4 M floats — 67 MB of transient garbage during track load, in a game
+ *    with a fixed frame budget — so the first halving reads the byte buffer
+ *    directly and only levels >= 1 are stored (about a third as much).
+ */
+function bleedRegion(
+  buf: Uint8Array,
+  stride: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): void {
+  if (w < 1 || h < 1) return;
+  const levels: Array<{ w: number; h: number; r: F32; g: F32; b: F32; a: F32 }> = [];
+  let lw = Math.max(1, w >> 1);
+  let lh = Math.max(1, h >> 1);
+  {
+    const r = new Float32Array(lw * lh);
+    const g = new Float32Array(lw * lh);
+    const b = new Float32Array(lw * lh);
+    const a = new Float32Array(lw * lh);
+    let any = false;
+    // Iterate the OUTPUT and gather its 2x2 source texels, rather than scattering
+    // from the input: a quarter of the loop overhead and no per-texel clamping on
+    // the (always, in practice) even path.
+    const maxY = h - 1, maxX = w - 1;
+    for (let y = 0; y < lh; y++) {
+      const rb0 = (y0 + y * 2) * stride + x0;
+      const rb1 = (y0 + Math.min(maxY, y * 2 + 1)) * stride + x0;
+      const o = y * lw;
+      for (let x = 0; x < lw; x++) {
+        const sx0 = x * 2;
+        const sx1 = Math.min(maxX, sx0 + 1);
+        let sr = 0, sg = 0, sb = 0, sa = 0;
+        let p = (rb0 + sx0) * 4;
+        let av = buf[p + 3];
+        if (av !== 0) { const f = av / 255; sr += buf[p] * f; sg += buf[p + 1] * f; sb += buf[p + 2] * f; sa += f; }
+        p = (rb0 + sx1) * 4;
+        av = buf[p + 3];
+        if (av !== 0) { const f = av / 255; sr += buf[p] * f; sg += buf[p + 1] * f; sb += buf[p + 2] * f; sa += f; }
+        p = (rb1 + sx0) * 4;
+        av = buf[p + 3];
+        if (av !== 0) { const f = av / 255; sr += buf[p] * f; sg += buf[p + 1] * f; sb += buf[p + 2] * f; sa += f; }
+        p = (rb1 + sx1) * 4;
+        av = buf[p + 3];
+        if (av !== 0) { const f = av / 255; sr += buf[p] * f; sg += buf[p + 1] * f; sb += buf[p + 2] * f; sa += f; }
+        if (sa > 0) {
+          any = true;
+          const i = o + x;
+          r[i] = sr; g[i] = sg; b[i] = sb; a[i] = sa;
+        }
+      }
+    }
+    if (!any) return;                      // nothing painted here — nothing to bleed
+    levels.push({ w: lw, h: lh, r, g, b, a });
+  }
+
+  // Every typed array is hoisted into a local inside these loops. It reads worse
+  // and it matters: leaving them as `prev.r[j]` costs 16 property loads per output
+  // texel and measured 10 Mtexel/s, i.e. ~600 ms of extra track load per circuit
+  // for the 2048 atlas plus the stain strip.
+  while (lw > 1 || lh > 1) {
+    const prev = levels[levels.length - 1];
+    const pr = prev.r, pg = prev.g, pb = prev.b, pa = prev.a;
+    const nw = Math.max(1, lw >> 1);
+    const nh = Math.max(1, lh >> 1);
+    const r = new Float32Array(nw * nh);
+    const g = new Float32Array(nw * nh);
+    const b = new Float32Array(nw * nh);
+    const a = new Float32Array(nw * nh);
+    for (let y = 0; y < nh; y++) {
+      const s0 = (y * 2) * lw;
+      const s1 = Math.min(lh - 1, y * 2 + 1) * lw;
+      const o = y * nw;
+      for (let x = 0; x < nw; x++) {
+        const c0 = x * 2;
+        const c1 = Math.min(lw - 1, c0 + 1);
+        const j00 = s0 + c0, j01 = s0 + c1, j10 = s1 + c0, j11 = s1 + c1;
+        const i = o + x;
+        r[i] = pr[j00] + pr[j01] + pr[j10] + pr[j11];
+        g[i] = pg[j00] + pg[j01] + pg[j10] + pg[j11];
+        b[i] = pb[j00] + pb[j01] + pb[j10] + pb[j11];
+        a[i] = pa[j00] + pa[j01] + pa[j10] + pa[j11];
+      }
+    }
+    levels.push({ w: nw, h: nh, r, g, b, a });
+    lw = nw;
+    lh = nh;
+  }
+
+  // Normalise every level's weighted sum to a colour, and reuse `a` as a
+  // "has a colour" flag. Must happen only after ALL the sums exist, because each
+  // level was accumulated from the sums of the one below it.
+  for (const lv of levels) {
+    const r = lv.r, g = lv.g, b = lv.b, a = lv.a;
+    for (let i = 0; i < a.length; i++) {
+      const s = a[i];
+      if (s > 0) {
+        const inv = 1 / s;
+        r[i] *= inv;
+        g[i] *= inv;
+        b[i] *= inv;
+        a[i] = 1;
+      }
+    }
+  }
+
+  // PULL, top-down and level-by-level rather than per-texel-walk-up. Filling
+  // each level from its parent once makes the whole fill O(4/3 · n); the
+  // walk-up version costs O(n · levels) and measured 793 ms on a 2048 atlas,
+  // which is a second of track load for nothing.
+  for (let l = levels.length - 2; l >= 0; l--) {
+    const lv = levels[l];
+    const up = levels[l + 1];
+    const lr = lv.r, lg = lv.g, lb = lv.b, la = lv.a;
+    const ur = up.r, ug = up.g, ub = up.b, ua = up.a;
+    const lvw = lv.w, upw = up.w, upMaxY = up.h - 1, upMaxX = up.w - 1;
+    for (let y = 0; y < lv.h; y++) {
+      const uy = Math.min(upMaxY, y >> 1) * upw;
+      const o = y * lvw;
+      for (let x = 0; x < lvw; x++) {
+        const i = o + x;
+        if (la[i] !== 0) continue;
+        const j = uy + Math.min(upMaxX, x >> 1);
+        if (ua[j] === 0) continue;
+        lr[i] = ur[j];
+        lg[i] = ug[j];
+        lb[i] = ub[j];
+        la[i] = 1;
+      }
+    }
+  }
+
+  // Level 1 now carries a colour everywhere (unless the whole region was empty,
+  // which returned early). Write it into the fully-transparent texels only.
+  const l1 = levels[0];
+  const cr = l1.r, cg = l1.g, cb = l1.b, ca = l1.a;
+  const l1w = l1.w, l1MaxY = l1.h - 1, l1MaxX = l1.w - 1;
+  for (let y = 0; y < h; y++) {
+    const ly = Math.min(l1MaxY, y >> 1) * l1w;
+    const rowBase = (y0 + y) * stride + x0;
+    for (let x = 0; x < w; x++) {
+      const p = (rowBase + x) * 4;
+      // A texel with any alpha of its own already carries a usable colour; only
+      // the fully transparent ones have had theirs destroyed by premultiplication.
+      if (buf[p + 3] !== 0) continue;
+      const i = ly + Math.min(l1MaxX, x >> 1);
+      if (ca[i] === 0) continue;
+      const rv = cr[i], gv = cg[i], bv = cb[i];
+      buf[p] = rv < 0 ? 0 : rv > 255 ? 255 : (rv + 0.5) | 0;
+      buf[p + 1] = gv < 0 ? 0 : gv > 255 ? 255 : (gv + 0.5) | 0;
+      buf[p + 2] = bv < 0 ? 0 : bv > 255 ? 255 : (bv + 0.5) | 0;
+    }
+  }
+}
+
 /** Square sprite, clamped, for particles / flares / glows. */
 export function radialSprite(
   size: number,

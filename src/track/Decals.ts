@@ -77,9 +77,48 @@ export interface DecalQuad {
 // Canvas painting
 // ---------------------------------------------------------------------------
 
-function paintAtlas(size: number): THREE.CanvasTexture {
+/**
+ * ⚠️ `bledCanvasTexture`, NOT `canvasTexture`, AND THAT IS THE VIEW-ANGLE HALF OF
+ *    G6. Do not "simplify" it back.
+ *
+ * Every cell here is bright paint over a canvas that was `clearRect`-ed and then
+ * had `destination-out` holes punched in it by `wear()`. A canvas stores
+ * premultiplied, so every one of those texels is (0,0,0,0) — transparent BLACK,
+ * regardless of the colour that was drawn there. `finalize()` then asks for
+ * mipmaps and `LinearMipmapLinearFilter`, three uploads with
+ * `UNPACK_PREMULTIPLY_ALPHA_WEBGL = false` (the `Texture.premultiplyAlpha`
+ * default), and `NormalBlending` resolves to
+ * `blendFunc( SRC_ALPHA, ONE_MINUS_SRC_ALPHA )` — all three verified in
+ * three@0.185.1, not remembered.
+ *
+ * So for paint of colour C covering fraction `c` of a filtered footprint:
+ *
+ *      mip.rgb = c·C,  mip.a = c   ->   out = c²·C + (1-c)·road
+ *
+ * The paint lands at c² of the strength it was authored at. Since the mip level
+ * is picked from the screen-space derivative of the UV, `c` — and therefore the
+ * error — is a function of the VIEWING ANGLE: a lane arrow that is crisp white
+ * from behind the kart washes out to a grey smear at a grazing angle, and its
+ * edge texels come out darker than either the paint or the road under it. That
+ * is the "text and decorations go dark from certain angles" half of the report.
+ *
+ * `cells: ATLAS_COLS` bleeds each atlas cell separately, so the grid band's black
+ * chequers cannot leak into the FINISH lettering's cut-outs.
+ *
+ * (NOTE for anyone chasing pure BLACK with this: the bound is
+ * `out >= road·(1 - road/(4·C))`, i.e. at most ~2 % below the road. This makes
+ * paint FADE, it cannot make it black. The black surfaces are the winding bugs —
+ * see the block comments in `RoadMaterial.ts`.)
+ *
+ * COST, measured in `.probe-tmp/road-black-audit.ts`: 75 ms warm to 740 ms cold
+ * for the 2048 atlas (a quarter of that at `low`, where it is 1024). It is a
+ * once-per-circuit TRACK-LOAD cost behind the existing loading screen and it
+ * touches no frame, but it is real — if it ever needs to go, one word
+ * (`canvasTexture`) reverts it and the audit downgrades to a warning.
+ */
+function paintAtlas(size: number): THREE.Texture {
   const cs = size / ATLAS_COLS;
-  return TX.canvasTexture(size, size, (ctx) => {
+  return TX.bledCanvasTexture(size, size, (ctx) => {
     ctx.clearRect(0, 0, size, size);
     const at = (idx: number) => {
       ctx.save();
@@ -315,7 +354,7 @@ function paintAtlas(size: number): THREE.CanvasTexture {
       wear(ctx, s, 0.4);
       end();
     }
-  }, { srgb: true, repeat: 1 });
+  }, { srgb: true, repeat: 1, cells: ATLAS_COLS });
 }
 
 /** Knock holes in whatever was just drawn so paint reads as worn. */
@@ -375,7 +414,7 @@ function paintStains(
   def: TrackDef,
   w: number,
   h: number,
-): THREE.CanvasTexture {
+): THREE.Texture {
   const L = spline.length;
   const rng = new Rng(def.terrainSeed ^ 0x5f3a);
 
@@ -389,6 +428,13 @@ function paintStains(
     sm[i] = (curv[(i - 1 + N) % N] + 2 * curv[i] + curv[(i + 1) % N]) * 0.25;
   }
 
+  // DELIBERATELY *NOT* `bledCanvasTexture`, unlike the atlas. This layer has the
+  // same un-premultiplied mip error, but its stains are already dark, so the error
+  // is bounded at about `A·C/4` — roughly 5 % of the road's albedo — and it errs
+  // dark, i.e. in the direction the artist was aiming anyway. Bleeding a
+  // 512 x 4096 strip measured 175-1135 ms (cold) of extra track load per circuit
+  // in `.probe-tmp/road-black-audit.ts`, which is not worth 5 %. The atlas, where
+  // the paint is bright and the error is up to 1/c, is worth it.
   return TX.canvasTexture(w, h, (ctx) => {
     ctx.clearRect(0, 0, w, h);
 
@@ -548,10 +594,10 @@ const _pd = new THREE.Vector3();
 
 export class Decals {
   /** Sampled by the road shader through the second UV set. */
-  readonly stainTexture: THREE.CanvasTexture;
+  readonly stainTexture: THREE.Texture;
   /** Crisp paint, one draw call. */
   readonly mesh: THREE.Mesh;
-  private atlas: THREE.CanvasTexture;
+  private atlas: THREE.Texture;
   private material: THREE.MeshStandardMaterial;
   private geometry: THREE.BufferGeometry;
 

@@ -90,9 +90,54 @@ uniform vec3 apxRoadTone;
  *  - macro field kills the tiling repeat
  *  - baked racing line darkens + polishes
  *  - the track-space decal atlas paints over the top
+ *
+ * ⚠️ LAP-CLOSING SEAM GUARD — a view-angle-dependent dark band, not a tidy-up.
+ *    Keep `apxSeam` until TrackBuilder closes the ribbon properly.
+ *
+ * `apxUv2.y` is arcLength / lapLength, and the builder closes the loop by
+ * stitching the last ring straight onto ring 0 — whose `v2` is 0.0, not 1.0. One
+ * quad of road therefore interpolates v across the ENTIRE 0..1 range:
+ * `.probe-tmp/road-black-audit.ts` measures |dv| across a single edge at 0.99935
+ * on all three circuits, which is 1348x the 7.41e-4 per-ring step.
+ *
+ * The *value* being wrong for 1.2 m of road is cosmetic. The MIP LEVEL is not. A
+ * fetch's LOD comes from the screen-space derivative of the coordinate it is
+ * fetched with, so on that one quad the stain fetch lands up to 11 levels down
+ * the chain — the average of the entire 512 x 4096 canvas — and HOW far down
+ * depends on how many pixels the quad covers, i.e. on the viewing angle and the
+ * distance. The stain canvas is dark marks over a cleared (0,0,0,0) background,
+ * so that average is a dark colour with real alpha, applied through
+ * `mix(diffuseColor.rgb, dc.rgb, dc.a)`: a full-width band across the road that
+ * darkens and lightens as you drive at it, sitting exactly on the start/finish
+ * line — under the grid band and the FINISH lettering.
+ *
+ * Clamping the LOD is NOT the fix. A coarse mip is the mathematically right
+ * answer for a coordinate that really does sweep the whole range; forcing a fine
+ * one just trades the band for aliasing. The only material-side repair is to drop
+ * the track-space layer on that quad and leave plain asphalt.
+ *
+ * The 0.005 threshold splits the two populations cleanly. Per metre of road the
+ * seam quad's |dv| is ~0.83 and every other quad's is ~6.2e-4 — 1348x apart, i.e.
+ * 3.1 decades, while screen scale spans about the same range. At 0.005 the guard
+ * fires on the seam from LOD ~4.3 upward, and on ordinary road only below ~0.3
+ * pixels per metre of lap, where the ribbon is a sliver on the horizon and the
+ * stain layer is an average of hundreds of metres either way.
+ *
+ * ROOT CAUSE is TrackBuilder's "close the loop on the road ribbon" block, which
+ * must stitch to a DUPLICATED ring whose `apxUv2.y` is 1.0 (owned elsewhere;
+ * reported). Drop this guard in the same commit that lands that.
  */
 const ROAD_FRAG = /* glsl */ `
 {
+  // --- lap-closing seam guard ----------------------------------------------
+  // See the LAP-CLOSING SEAM GUARD note above this string for why this exists.
+  // Short version: apxUv2.y jumps ~1.0 across the one quad that closes the lap,
+  // which drags the stain fetch's mip level 10.4 levels down the chain at a
+  // strength that depends on the viewing angle. Deleting these two lines puts a
+  // view-angle-dependent dark band back across the start/finish line.
+  float apxDv = max(abs(dFdx(vApxUv2.y)), abs(dFdy(vApxUv2.y)));
+  float apxSeam = 1.0 - step(0.005, apxDv);
+
   // --- highlight knee on the aggregate -------------------------------------
   float aLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
   float over = max(aLum - apxRoadTone.y, 0.0);
@@ -117,7 +162,7 @@ const ROAD_FRAG = /* glsl */ `
 
   // --- track-space decals (paint, arrows, logos, skid marks) ---------------
   vec4 dc = texture2D(apxDecalMap, vApxUv2);
-  float da = dc.a * apxRoadParams.x;
+  float da = dc.a * apxRoadParams.x * apxSeam;
   diffuseColor.rgb = mix(diffuseColor.rgb, dc.rgb, da);
   // fresh paint is smoother than aggregate, skid rubber is rougher; the
   // decal's green channel biases between the two.
@@ -500,9 +545,21 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
    * the pairing and fails if only one side of it changes.
    */
   const wall = new Map<WallStyle, THREE.Material>();
-  /** Barrier strips: two-sided, and normals repaired to match the winding. */
+  /**
+   * Barrier strips: two-sided, and normals repaired to match the winding.
+   *
+   * `shadowSide` is pinned so that switching `side` does NOT quietly change what
+   * these cast into the shadow map. three maps
+   * `shadowSide = { FrontSide: BackSide, BackSide: FrontSide, DoubleSide: DoubleSide }`
+   * when `material.shadowSide` is null, so going FrontSide -> DoubleSide would
+   * have moved every barrier from casting its far face to casting both — which on
+   * a thin, open strip is exactly how you buy self-shadowing acne. The barriers'
+   * shadows were not part of the complaint, so they stay bit-identical to before
+   * and this fix changes only whether the surface is drawn and lit.
+   */
   const barrier = (m: THREE.Material): THREE.Material => {
     m.side = THREE.DoubleSide;
+    m.shadowSide = THREE.BackSide;
     MX.flipVertexNormals(m);
     return m;
   };
@@ -663,15 +720,65 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
   MX.flipVertexNormals(tunnel);
   owned.push(tunnel);
 
+  /**
+   * ⚠️ `DoubleSide` + `flatShading` — AND `flipVertexNormals` WOULD BE WRONG HERE.
+   *
+   * The bridge deck is the one piece of `TrackBuilder` geometry whose winding is
+   * inverted on only PART of itself, which is why it survived the barrier and
+   * tunnel sweep. Per bridge ring the builder emits ten triangles:
+   *
+   *   * 8 FASCIA triangles (two quads per side, over the three profile steps).
+   *     `.probe-tmp/road-black-audit.ts` measures every one of them with
+   *     `dot(faceNormal, vertexNormal) < 0`: `_n2` is authored outward+down,
+   *     correct for the surface you see from off the track, but `deck.quad(...)`
+   *     winds them so the front face points back INTO the bridge box. Under
+   *     `FrontSide` the outward side is therefore back-face culled, and the side
+   *     that does get drawn is shaded with a normal pointing away from it.
+   *   * 2 SOFFIT triangles (the flat span between the two sides), which are
+   *     CORRECT.
+   *
+   * 8/10 = the 80 % the probe reports. So `flipVertexNormals` cannot be the
+   * repair: it would fix the fascia and break the soffit.
+   *
+   * `flatShading` fixes both at once, and this is the part worth remembering.
+   * With `FLAT_SHADED` three drops `vNormal` entirely and builds the shading
+   * normal in `normal_fragment_begin` as
+   * `normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) )` — from
+   * the WINDING and the screen-space orientation, never from the geometry's
+   * `normal` attribute. That vector points at the camera for whichever face is
+   * being rasterised, on both sides, so a flat-shaded surface **cannot** be unlit
+   * by a wrong vertex normal. (Verified in three@0.185.1: the FLAT_SHADED branch
+   * also deliberately skips the `DOUBLE_SIDED` `normal *= faceDirection`, because
+   * the derivative normal has already flipped, and the `tbn` that
+   * `addDetailNormal` writes into is built outside that branch, so the detail
+   * normal still applies.)
+   *
+   * `DoubleSide` is the other half: flat shading makes the fascia lit, but it is
+   * the winding that decides whether it is DRAWN at all, and from outside the
+   * bridge the outward face is the back one.
+   *
+   * The cost is that the fascia's authored 3-step normal ramp becomes two facets
+   * per side. On a concrete bridge edge that is a wash at worst.
+   *
+   * ROOT CAUSE is the `deck.quad(...)` index order in `TrackBuilder`'s
+   * "bridge fascia / deck underside" block (owned elsewhere; reported). When it
+   * is fixed, drop `flatShading` and `DoubleSide` together — the audit probe
+   * asserts the pairing and fails if only one side of it moves.
+   */
   const deck = MX.standardFromPbr(cloneSet(TX.makeConcrete(mid), ownedTex), {
     name: 'apx-deck',
     repeat: new THREE.Vector2(2, 2),
     color: 0x9aa0a8,
     roughness: 0.95,
     vertexColors: true,
+    side: THREE.DoubleSide,
+    flatShading: true,
     anisotropy: quality.anisotropy,
     detail: { scale: 3, strength: 0.5 },
   });
+  // Same reason as `barrier()`: keep the shadow-map side exactly what it was
+  // before the visibility fix. See the note there.
+  deck.shadowSide = THREE.BackSide;
   owned.push(deck);
 
   const boost = MX.emissiveGlow(0x33c6ff, 2.4, { base: 0x06121c, name: 'apx-boost' });
