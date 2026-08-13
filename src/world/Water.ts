@@ -35,6 +35,7 @@ import {
   type TerrainField, type WorldContext, type WorldTheme,
   worldFogUniforms, worldSunUniforms,
 } from './WorldTextures';
+import { splitClipmapGrid } from './Terrain';
 
 export type WaterPresetName = 'ocean' | 'lake' | 'lava' | 'none';
 
@@ -74,6 +75,20 @@ const LOOKS: Record<'ocean' | 'lake', WaterLook> = {
 const HALF_EXTENT = 760;
 const RES_FOR_TIER: Record<string, number> = { low: 97, medium: 121, high: 145, ultra: 161 };
 
+/**
+ * Radial bands / angular sectors the disc is cut into so it can be culled — see
+ * `splitClipmapGrid` in Terrain.ts for why one camera-centred mesh cannot be.
+ * Scaled to this disc's 760 m half-extent, and at the same measured knee as the
+ * terrain's: 9 sectors, 6.4 submitted on average, 76 % of the 51 200 triangles
+ * (against 14.5 calls for 67 % at 23 sectors — see `.probe-tmp/g5.ts`). Water is
+ * the better candidate of the two per vertex saved: its vertex shader sums five
+ * Gerstner waves and their analytic derivatives, so a vertex that ends up behind
+ * the camera is among the most expensive things in the frame to compute and throw
+ * away.
+ */
+const DISC_BANDS: readonly number[] = [0, 130, Infinity];
+const DISC_SECTORS: readonly number[] = [1, 8];
+
 const _up = new THREE.Vector3(0, 1, 0);
 const _normal = new THREE.Vector3(0, 1, 0);
 const _view = new THREE.Vector3();
@@ -83,6 +98,9 @@ const _reflectorPos = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 const _rot = new THREE.Matrix4();
 const _hidden: THREE.Object3D[] = [];
+const _frustum = new THREE.Frustum();
+const _projScreen = new THREE.Matrix4();
+const _sphere = new THREE.Sphere();
 
 /**
  * Scene roots that are never worth a planar-reflection pass. Particle systems
@@ -172,7 +190,13 @@ vec3 skyApprox(vec3 rd){
 
 export class Water implements ISubsystem {
   readonly group = new THREE.Group();
-  mesh: THREE.Mesh | null = null;
+  /**
+   * The disc's follow pivot. Toggling THIS is how the surface is hidden (from its
+   * own reflection, or by `setPreset('none')`) — the sectors under it are many.
+   */
+  readonly surface = new THREE.Group();
+  /** Cullable disc sectors. `chunks[0]` is the always-visible centre disc. */
+  readonly chunks: THREE.Mesh[] = [];
 
   preset: WaterPresetName = 'lake';
   camera: THREE.PerspectiveCamera | null = null;
@@ -201,6 +225,16 @@ export class Water implements ISubsystem {
   private reflectionsWanted = false;
   private reflectionsOn = false;
   private time = 0;
+  /**
+   * Armed by the first `update()`, not at build time — see Terrain's `culling`
+   * field for the full argument. Short version: three culls before any draw
+   * callback runs, so the pivot has to be placed from `update()` for the bounds
+   * to mean anything, and latching means "update() never ran" degrades to
+   * today's uncullable-but-visible behaviour instead of an invisible ocean.
+   */
+  private culling = false;
+  /** Sectors that passed the frustum test this frame, for the perf readout. */
+  private live = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -235,28 +269,57 @@ export class Water implements ISubsystem {
 
     this.geometry = buildDisc(RES_FOR_TIER[this.quality.tier] ?? 129);
 
-    const mesh = new THREE.Mesh(this.geometry, this.ensureWaterMaterial());
-    mesh.name = 'WaterSurface';
-    mesh.frustumCulled = false;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    mesh.renderOrder = RENDER_ORDER.WATER;
-    mesh.position.y = this.waterLevel;
-    // Recentre on whichever camera is drawing us. Deliberately cheap: the
-    // reflection pass is NOT kicked from here (see `update()`) because
-    // onBeforeRender fires once per scene pass — main pass, NormalPass, and once
-    // more inside the reflection itself — which used to multiply one reflection
-    // into four full-scene re-renders per frame.
-    mesh.onBeforeRender = (_renderer, _scene, camera) => {
-      const pc = camera as THREE.PerspectiveCamera;
-      if (!pc.isPerspectiveCamera) return;
-      if (!pc.userData.apxReflectionCam) this.camera = pc;
-      mesh.position.set(pc.position.x, this.waterLevel, pc.position.z);
-      mesh.updateMatrix();
-      mesh.updateMatrixWorld(true);
-    };
-    this.mesh = mesh;
-    this.group.add(mesh);
+    this.surface.name = 'WaterSurface';
+    this.surface.position.y = this.waterLevel;
+    this.group.add(this.surface);
+
+    // Where a sector's vertices can end up in the pivot's local frame. Both this
+    // material and the lava one have two branches:
+    //
+    //   offshore  wp.y = uWaterLevel + gerstner        -> local ±2.22·uSwell.x,
+    //             and `setWind` can drive uSwell.x to 0.99 in a gale, so ±2.3.
+    //   inland    wp.y = terrain - 6.0, taken only where depth < -2.5, i.e. only
+    //             where terrain > waterLevel + 2.5 — so it reaches DOWN to just
+    //             waterLevel − 3.5, but UP to (maxHeight − 6). That upward reach
+    //             is the one that is easy to miss: the first version of this
+    //             bounded the disc at +3 m and `.probe-tmp/g5.ts` caught sector
+    //             vertices 2.6 m outside their own sphere, which is a sea that
+    //             disappears in patches. Those vertices are all discarded by the
+    //             fragment shader (`if (depth < -0.03) discard`) and buried under
+    //             the terrain, but three culls on geometry, not on outcome.
+    const mat = this.ensureWaterMaterial();
+    const sectors = splitClipmapGrid(
+      this.geometry, DISC_BANDS, DISC_SECTORS,
+      -5, Math.max(4, this.field.maxHeight - 6 - this.waterLevel) + 1,
+    );
+    for (let i = 0; i < sectors.length; i++) {
+      const mesh = new THREE.Mesh(sectors[i], mat);
+      mesh.name = i === 0 ? 'WaterDisc' : `WaterDisc.s${i}`;
+      mesh.frustumCulled = false;          // armed by `update()`; see `culling`
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.renderOrder = RENDER_ORDER.WATER;
+      mesh.matrixAutoUpdate = false;
+      this.chunks.push(mesh);
+      this.surface.add(mesh);
+    }
+
+    // Recentre on whichever camera is drawing us, as a backstop for a pass whose
+    // camera `update()` never saw. Only the centre disc carries it: it is the one
+    // sector that is never culled, so it is the one that always gets the callback.
+    // Deliberately cheap, and the reflection pass is NOT kicked from here (see
+    // `update()`) because onBeforeRender fires once per scene pass — main pass,
+    // NormalPass, and once more inside the reflection itself — which used to
+    // multiply one reflection into four full-scene re-renders per frame.
+    const centre = this.chunks[0];
+    if (centre) {
+      centre.onBeforeRender = (_renderer, _scene, camera) => {
+        const pc = camera as THREE.PerspectiveCamera;
+        if (!pc.isPerspectiveCamera) return;
+        if (!pc.userData.apxReflectionCam) this.camera = pc;
+        this.recentre(pc.position.x, pc.position.z);
+      };
+    }
 
     if (this.reflectionsWanted) this.setupReflection();
     this.setPreset(themeToPreset(this.ctx.theme));
@@ -660,18 +723,17 @@ export class Water implements ISubsystem {
     const preset: WaterPresetName = (name === 'ocean' || name === 'lake' || name === 'lava' || name === 'none')
       ? name : themeToPreset(name);
     this.preset = preset;
-    if (!this.mesh) return;
+    if (!this.chunks.length) return;
 
     if (preset === 'none') {
-      this.mesh.visible = false;
+      this.surface.visible = false;
       this.reflectionsOn = false;
       return;
     }
-    this.mesh.visible = true;
+    this.surface.visible = true;
 
     if (preset === 'lava') {
-      this.mesh.material = this.ensureLavaMaterial();
-      this.mesh.layers.enable(LAYERS.BLOOM);
+      this.applyMaterial(this.ensureLavaMaterial());
       this.reflectionsOn = false;
       return;
     }
@@ -691,10 +753,26 @@ export class Water implements ISubsystem {
     u.uGlint.value = look.glint;
     u.uCaustic.value = look.causticStrength;
     u.uWhitecap.value = look.whitecap;
-    this.mesh.material = mat;
-    this.mesh.layers.enable(LAYERS.BLOOM);
+    this.applyMaterial(mat);
     this.reflectionsOn = this.reflectionsWanted && !!this.reflRT;
     u.uReflAmount.value = this.reflectionsOn ? 0.82 : 0;
+  }
+
+  /** One material across every sector — they are one surface, cut for culling. */
+  private applyMaterial(mat: THREE.ShaderMaterial): void {
+    for (const c of this.chunks) {
+      c.material = mat;
+      c.layers.enable(LAYERS.BLOOM);
+    }
+  }
+
+  /** Slide the disc pivot under a camera. Cheap and idempotent. */
+  private recentre(x: number, z: number): void {
+    const p = this.surface.position;
+    if (p.x === x && p.z === z) return;
+    p.set(x, this.waterLevel, z);
+    this.surface.updateMatrix();
+    this.surface.updateMatrixWorld(true);
   }
 
   setCamera(camera: THREE.PerspectiveCamera): void {
@@ -791,8 +869,8 @@ export class Water implements ISubsystem {
     camera: THREE.PerspectiveCamera,
   ): void {
     const rt = this.reflRT;
-    const mesh = this.mesh;
-    if (!rt || !mesh || !mesh.visible) return;
+    const surface = this.surface;
+    if (!rt || !this.chunks.length || !surface.visible) return;
     // Nothing above the water to mirror if we're looking from below.
     if (camera.position.y < this.waterLevel + 0.25) return;
     if (!this.planeInFrustum(camera)) return;
@@ -842,7 +920,7 @@ export class Water implements ISubsystem {
     // Scanned two levels deep (scene roots and their groups) rather than with a
     // full traverse, because this runs every frame.
     _hidden.length = 0;
-    mesh.visible = false;
+    surface.visible = false;
     for (const child of scene.children) {
       if (!child.visible) continue;
       if (child.userData.noReflect === true || SKIP_NAMES.has(child.name)) {
@@ -881,7 +959,7 @@ export class Water implements ISubsystem {
       renderer.clippingPlanes = prevClip;
       renderer.shadowMap.autoUpdate = prevShadow;
       renderer.xr.enabled = prevXr;
-      mesh.visible = true;
+      surface.visible = true;
       for (const o of _hidden) o.visible = true;
       _hidden.length = 0;
       this.reflecting = false;
@@ -895,28 +973,65 @@ export class Water implements ISubsystem {
     if (this.waterMat) this.waterMat.uniforms.uTime.value = this.time;
     if (this.lavaMat) this.lavaMat.uniforms.uTime.value = this.time;
 
+    const cam = this.camera;
+    if (!this.chunks.length || !cam) return;
+
+    // Placing the pivot HERE, ahead of every pass, is what makes the sectors
+    // cullable: three frustum-tests in `projectObject`, before any draw callback,
+    // so a disc that only re-centres from onBeforeRender is being culled against
+    // last pass's position. Note this runs for lava and for reflections-off too —
+    // it used to sit below the `reflectionsOn` early-out, which would have left
+    // the volcano's lava disc uncentred and therefore wrongly culled.
+    this.recentre(cam.position.x, cam.position.z);
+    if (!this.culling) {
+      this.culling = true;
+      // The centre disc stays uncullable: it owns the re-centre callback, and it
+      // is in frustum from any pose that can see the surface at all.
+      for (let i = 1; i < this.chunks.length; i++) this.chunks[i].frustumCulled = true;
+    }
+    this.live = this.countLive(cam);
+
     // ONE reflection pass per frame, driven from the simulation step rather than
     // from `onBeforeRender`. The pipeline renders the scene more than once a
     // frame (RenderPass, then NormalPass with an override material) and a
     // reflection kicked off from a draw callback fires in each of them — the
     // second one drawing the whole world as flat normals into a buffer nobody
     // reads. Doing it here also lets `planeInFrustum` skip the pass entirely.
-    if (!this.reflectionsOn || !this.mesh || !this.camera) return;
-    const cam = this.camera;
-    // Keep the disc under the camera before mirroring, so the pass agrees with
-    // where the surface will actually be drawn this frame.
-    this.mesh.position.set(cam.position.x, this.waterLevel, cam.position.z);
-    this.mesh.updateMatrix();
-    this.mesh.updateMatrixWorld(true);
+    if (!this.reflectionsOn) return;
     this.renderReflection(this.renderer, this.scene, cam);
   }
 
+  /**
+   * Repeat three's own frustum test over the sectors, purely so `drawCalls`
+   * reports what the frame actually submits instead of the sector total. ~23
+   * sphere tests; it is also the number the G5 probe cross-checks its own walk
+   * of the scene graph against.
+   */
+  private countLive(camera: THREE.PerspectiveCamera): number {
+    if (!this.surface.visible) return 0;
+    _projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_projScreen);
+    let n = 0;
+    for (const c of this.chunks) {
+      const bs = c.geometry.boundingSphere;
+      if (!bs) { n++; continue; }
+      if (!c.frustumCulled) { n++; continue; }
+      _sphere.copy(bs).applyMatrix4(c.matrixWorld);
+      if (_frustum.intersectsSphere(_sphere)) n++;
+    }
+    return n;
+  }
+
   get drawCalls(): number {
-    if (!this.mesh || !this.mesh.visible) return 0;
-    return 1;
+    if (!this.surface.visible) return 0;
+    return this.live;
   }
 
   dispose(): void {
+    for (const c of this.chunks) c.geometry.dispose();
+    this.chunks.length = 0;
+    // Disposed after the sectors: they share its vertex attributes, and three's
+    // attribute cache drops a shared buffer on the first dispose that names it.
     this.geometry?.dispose();
     this.waterMat?.dispose();
     this.lavaMat?.dispose();
@@ -931,7 +1046,7 @@ export class Water implements ISubsystem {
     this.foamTex = null;
     this.causticTex = null;
     this.reflRT = null;
-    this.mesh = null;
+    this.surface.clear();
     this.scene.remove(this.group);
     this.group.clear();
   }

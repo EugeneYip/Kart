@@ -72,7 +72,34 @@ interface GrassRing {
   radius: number;
   /** cell size the mesh snaps to, metres */
   snap: number;
+  chunks: RingChunks;
 }
+
+/**
+ * Radial band boundaries as a fraction of the ring radius, and how many azimuth
+ * sectors each band is cut into. Only the innermost band is left whole: it is the
+ * one that wraps the camera, and any bucket containing the camera position is
+ * inside every frustum by definition, so splitting it would buy nothing. It is
+ * deliberately tiny — 8 % of the radius is 0.6 % of the area.
+ *
+ * Pushed much finer than the Terrain/Water sector counts on purpose, because the
+ * economics are the opposite way round: a ring repacks its instance buffer, so it
+ * is ONE draw call at every setting and the only cost of another bucket is one
+ * box-vs-frustum test. `.probe-tmp/g5.ts` measured, over 24 poses round the lap
+ * (19 000 blades on neon):
+ *
+ *      buckets   submitted blades
+ *            2       19 000  100 %   <- two uncullable rings, today
+ *           50       12 156   64 %
+ *           74       11 092   58 %
+ *          154       10 206   54 %   <- this config
+ *          218        9 882   52 %
+ *
+ * It flattens out at ~52 %, which is roughly the fraction of a 360° ring a 97°
+ * horizontal frustum plus the slack in an axis-aligned box can ever reach.
+ */
+const RING_BANDS: readonly number[] = [0, 0.08, 0.22, 0.42, 0.68, 1.0];
+const RING_SECTORS: readonly number[] = [1, 16, 20, 20, 20];
 
 interface TreeSpecies {
   name: string;
@@ -134,6 +161,200 @@ const _col = new THREE.Color();
 /** Trees are the tallest thing in the scenery — they stay visible a long way. */
 const TREE_CULL = 420;
 
+/** Wind sway + the kart's push-away can move a blade this far off its anchor. */
+const BLADE_SLACK = 2;
+
+const _ringFrustum = new THREE.Frustum();
+const _ringProj = new THREE.Matrix4();
+const _ringBox = new THREE.Box3();
+
+/**
+ * Per-frame visible-set culling for one camera-relative instanced grass ring.
+ *
+ * `InstanceChunks` (WorldTextures) cannot do this job, which is why this exists
+ * rather than reusing it: that class buckets instances by the translation in
+ * their `instanceMatrix`, and a grass ring's instance matrices are ALL identity —
+ * every blade's offset lives in the `aBlade` attribute, in a frame that slides
+ * with the camera every frame. So the buckets have to be camera-relative and the
+ * repack has to carry `aBlade`, not the matrices.
+ *
+ * The mechanism is deliberately the same shape as `InstanceChunks`: source arrays
+ * pre-sorted into bucket order at build time, one pre-made view per bucket so the
+ * per-frame repack allocates nothing, a hash of the live set to skip the repack
+ * and the upload when nothing crossed a boundary. Two mechanisms that behave
+ * alike are easier to reason about than two that differ.
+ *
+ * ⚠️ Same gotcha as `InstanceChunks`: after this runs, `mesh.count` is "instances
+ * submitted this frame", NOT "instances in the ring". Use `total` for that.
+ *
+ * Buckets are tested as boxes, not spheres, and their Y span is the terrain
+ * field's whole height range. That is on purpose: a blade's world Y comes from
+ * `fieldHeight()` in the vertex shader, so the CPU does not know it without
+ * re-sampling the field under a footprint that moves every frame. Over-tall
+ * bounds only ever keep a bucket that could have been dropped; too-short bounds
+ * would erase grass the player is looking at. The azimuth is what does the
+ * culling anyway — a sector behind you is behind you at every height.
+ */
+class RingChunks {
+  readonly total: number;
+
+  private mesh: THREE.InstancedMesh;
+  private blade: THREE.InstancedBufferAttribute;
+  private colour: THREE.InstancedBufferAttribute | null;
+  private srcBlade: Float32Array;
+  private srcColour: Float32Array | null;
+  private viewBlade: Float32Array[] = [];
+  private viewColour: Float32Array[] = [];
+  private counts: Int32Array;
+  private x0: Float32Array;
+  private x1: Float32Array;
+  private z0: Float32Array;
+  private z1: Float32Array;
+  private live: Int32Array;
+  private buckets: number;
+  private yMin: number;
+  private yMax: number;
+  private signature = -1;
+  private drawn: number;
+
+  constructor(
+    mesh: THREE.InstancedMesh,
+    blade: THREE.InstancedBufferAttribute,
+    radius: number,
+    yMin: number,
+    yMax: number,
+  ) {
+    this.mesh = mesh;
+    this.blade = blade;
+    this.colour = mesh.instanceColor ?? null;
+    this.yMin = yMin;
+    this.yMax = yMax;
+
+    const n = mesh.count;
+    this.total = n;
+    this.drawn = n;
+
+    const bandBase: number[] = [];
+    let buckets = 0;
+    for (let b = 0; b < RING_SECTORS.length; b++) {
+      bandBase.push(buckets);
+      buckets += Math.max(1, RING_SECTORS[b]);
+    }
+    this.buckets = buckets;
+    this.counts = new Int32Array(buckets);
+    this.live = new Int32Array(buckets);
+    this.x0 = new Float32Array(buckets).fill(Infinity);
+    this.x1 = new Float32Array(buckets).fill(-Infinity);
+    this.z0 = new Float32Array(buckets).fill(Infinity);
+    this.z1 = new Float32Array(buckets).fill(-Infinity);
+
+    // --- assign every blade to a bucket, and grow that bucket's footprint -----
+    const src = blade.array as Float32Array;
+    const owner = new Int32Array(n);
+    const TAU = Math.PI * 2;
+    for (let i = 0; i < n; i++) {
+      const x = src[i * 4];
+      const z = src[i * 4 + 1];
+      const r = Math.sqrt(x * x + z * z) / Math.max(1e-3, radius);
+      let band = RING_SECTORS.length - 1;
+      for (let b = 0; b < RING_SECTORS.length; b++) {
+        if (r < (RING_BANDS[b + 1] ?? Infinity)) { band = b; break; }
+      }
+      const s = Math.max(1, RING_SECTORS[band]);
+      let sec = 0;
+      if (s > 1) {
+        sec = Math.floor(((Math.atan2(z, x) + Math.PI) / TAU) * s);
+        if (sec < 0) sec = 0; else if (sec >= s) sec = s - 1;
+      }
+      const id = bandBase[band] + sec;
+      owner[i] = id;
+      this.counts[id]++;
+      if (x < this.x0[id]) this.x0[id] = x;
+      if (x > this.x1[id]) this.x1[id] = x;
+      if (z < this.z0[id]) this.z0[id] = z;
+      if (z > this.z1[id]) this.z1[id] = z;
+    }
+    for (let c = 0; c < buckets; c++) {
+      if (!this.counts[c]) { this.x0[c] = this.x1[c] = this.z0[c] = this.z1[c] = 0; continue; }
+      this.x0[c] -= BLADE_SLACK; this.x1[c] += BLADE_SLACK;
+      this.z0[c] -= BLADE_SLACK; this.z1[c] += BLADE_SLACK;
+    }
+
+    // --- sort the source arrays into bucket order ----------------------------
+    const starts = new Int32Array(buckets);
+    let acc = 0;
+    for (let c = 0; c < buckets; c++) { starts[c] = acc; acc += this.counts[c]; }
+    this.srcBlade = new Float32Array(n * 4);
+    const rawColour = this.colour ? this.colour.array as Float32Array : null;
+    this.srcColour = rawColour ? new Float32Array(n * 3) : null;
+    const cursor = new Int32Array(buckets);
+    for (let i = 0; i < n; i++) {
+      const c = owner[i];
+      const slot = starts[c] + cursor[c]++;
+      for (let k = 0; k < 4; k++) this.srcBlade[slot * 4 + k] = src[i * 4 + k];
+      if (rawColour && this.srcColour) {
+        for (let k = 0; k < 3; k++) this.srcColour[slot * 3 + k] = rawColour[i * 3 + k];
+      }
+    }
+    for (let c = 0; c < buckets; c++) {
+      const s = starts[c], e = s + this.counts[c];
+      this.viewBlade.push(this.srcBlade.subarray(s * 4, e * 4));
+      this.viewColour.push(
+        this.srcColour ? this.srcColour.subarray(s * 3, e * 3) : new Float32Array(0),
+      );
+    }
+
+    // Start with the whole ring live, so a ring whose camera never arrives still
+    // draws every blade rather than none.
+    src.set(this.srcBlade);
+    blade.needsUpdate = true;
+    if (rawColour && this.srcColour) {
+      rawColour.set(this.srcColour);
+      if (this.colour) this.colour.needsUpdate = true;
+    }
+    mesh.count = n;
+  }
+
+  get drawnInstances(): number { return this.drawn; }
+  get bucketCount(): number { return this.buckets; }
+
+  /**
+   * Repack against `frustum`, with the ring's mesh sitting at (px, pz). Call once
+   * per frame from `update()` — never from a draw callback, which fires after
+   * three has already decided what to cull.
+   */
+  cullTo(frustum: THREE.Frustum, px: number, pz: number): void {
+    let sig = 17;
+    let live = 0;
+    for (let c = 0; c < this.buckets; c++) {
+      if (!this.counts[c]) continue;
+      _ringBox.min.set(this.x0[c] + px, this.yMin, this.z0[c] + pz);
+      _ringBox.max.set(this.x1[c] + px, this.yMax, this.z1[c] + pz);
+      if (!frustum.intersectsBox(_ringBox)) continue;
+      this.live[live++] = c;
+      sig = (sig * 31 + c + 1) | 0;
+    }
+    if (sig === this.signature) return;
+    this.signature = sig;
+
+    const bd = this.blade.array as Float32Array;
+    const cl = this.colour ? this.colour.array as Float32Array : null;
+    let w = 0;
+    for (let i = 0; i < live; i++) {
+      const c = this.live[i];
+      bd.set(this.viewBlade[c], w * 4);
+      if (cl) cl.set(this.viewColour[c], w * 3);
+      w += this.counts[c];
+    }
+    this.drawn = w;
+    this.mesh.count = w;
+    if (w > 0) {
+      this.blade.needsUpdate = true;
+      if (this.colour) this.colour.needsUpdate = true;
+    }
+  }
+}
+
 export class Foliage implements ISubsystem {
   readonly group = new THREE.Group();
   /** Written by Environment each frame so grass can bend away from the kart. */
@@ -150,6 +371,16 @@ export class Foliage implements ISubsystem {
   private scatterMeshes: THREE.InstancedMesh[] = [];
   /** Per-chunk visible-set culling for everything that isn't camera-relative. */
   private chunked: InstanceChunks[] = [];
+  /**
+   * Ring culling is armed by the first `update()`, never at build time. Three
+   * culls in `projectObject`, before any `onBeforeRender`, so a ring is tested
+   * against wherever it was last placed. If culling were live from frame zero and
+   * `update()` never ran, an unplaced ring at the world origin would be culled,
+   * its draw callback would never fire to move it, and the grass would be
+   * permanently invisible. Latching means the worst case is exactly today's
+   * behaviour: uncullable but correct.
+   */
+  private culling = false;
 
   private uTime = { value: 0 };
   private uWindDir = { value: new THREE.Vector2(0.82, 0.57) };
@@ -395,6 +626,7 @@ reflectedLight.indirectDiffuse += diffuseColor.rgb * trans * vTip * 0.85 * terra
       const mat = this.grassMaterial();
       const mesh = new THREE.InstancedMesh(geo, mat, spec.count);
       mesh.name = `GrassRing${s}`;
+      // Armed by `update()` once the ring has been positioned; see `culling`.
       mesh.frustumCulled = false;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
@@ -426,31 +658,65 @@ reflectedLight.indirectDiffuse += diffuseColor.rgb * trans * vTip * 0.85 * terra
         _col.offsetHSL((rng.next() - 0.5) * 0.045, (rng.next() - 0.5) * 0.16, (rng.next() - 0.5) * 0.09);
         colors[i * 3] = _col.r; colors[i * 3 + 1] = _col.g; colors[i * 3 + 2] = _col.b;
       }
-      geo.setAttribute('aBlade', new THREE.InstancedBufferAttribute(data, 4));
+      const bladeAttr = new THREE.InstancedBufferAttribute(data, 4);
+      geo.setAttribute('aBlade', bladeAttr);
       mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
       mesh.instanceColor.needsUpdate = true;
+
+      // Correct bounds for the ring as a whole, so `frustumCulled` can be true
+      // instead of switched off. Three would otherwise derive the sphere from the
+      // instance matrices, which are all identity — a 0.7 m sphere at the mesh
+      // origin for a 58 m carpet — and the grass would vanish the moment the
+      // camera looked away from that point. Y spans the field's whole height range
+      // because that is where `fieldHeight()` can put a blade. Centred on the
+      // camera as it is, this sphere always intersects; the saving comes from the
+      // per-bucket instance cull below, and this just stops the mesh lying about
+      // where it is.
+      mesh.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(0, (this.field.minHeight + this.field.maxHeight) * 0.5, 0),
+        Math.hypot(
+          spec.radius + BLADE_SLACK,
+          (this.field.maxHeight - this.field.minHeight) * 0.5 + BLADE_SLACK,
+        ),
+      );
 
       // Wire the ring's own fade band. (Previously computed and thrown away.)
       const fadeU = (mat.userData as { fade?: THREE.IUniform<THREE.Vector2> }).fade;
       if (fadeU) fadeU.value.set(spec.fade[0], spec.fade[1]);
 
+      // Backstop only. `update()` places the ring ahead of every pass, because
+      // three frustum-tests in `projectObject` — before any draw callback — so a
+      // ring that only positions itself from here is culled against, and repacked
+      // for, wherever the camera was last pass.
       mesh.onBeforeRender = (_r, _s, cam) => {
         const pc = cam as THREE.PerspectiveCamera;
         if (!pc.isPerspectiveCamera) return;
         if (!pc.userData.apxReflectionCam) this.camera = pc;
-        const snap = 1.0;
-        mesh.position.set(
-          Math.round(pc.position.x / snap) * snap, 0,
-          Math.round(pc.position.z / snap) * snap,
-        );
-        mesh.updateMatrix();
-        mesh.updateMatrixWorld(true);
+        this.placeRing(mesh, pc.position.x, pc.position.z);
       };
 
       this.group.add(mesh);
-      this.rings.push({ mesh, radius: spec.radius, snap: 1 });
+      this.rings.push({
+        mesh,
+        radius: spec.radius,
+        snap: 1,
+        chunks: new RingChunks(
+          mesh, bladeAttr, spec.radius,
+          this.field.minHeight - 1, this.field.maxHeight + BLADE_SLACK,
+        ),
+      });
       inner = spec.radius * 0.92;
     }
+  }
+
+  /** Snap a ring under the camera. One place, so cull and draw always agree. */
+  private placeRing(mesh: THREE.InstancedMesh, camX: number, camZ: number): void {
+    const x = Math.round(camX);
+    const z = Math.round(camZ);
+    if (mesh.position.x === x && mesh.position.z === z) return;
+    mesh.position.set(x, 0, z);
+    mesh.updateMatrix();
+    mesh.updateMatrixWorld(true);
   }
 
   // =========================================================================
@@ -791,7 +1057,6 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     for (const m of [trunkMesh, canopyMesh]) {
       m.name = `${kind}${variant}`;
       m.receiveShadow = true;
-      m.frustumCulled = false;
       m.renderOrder = RENDER_ORDER.PROPS;
     }
     // Canopies cast; trunks do not. A trunk's shadow lands inside its own
@@ -815,13 +1080,13 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     // the screen still throws a shadow across the road.
     if (hasTrunk) {
       trunkMesh.instanceMatrix.needsUpdate = true;
-      trunkMesh.computeBoundingSphere();
+      sealInstanceBounds(trunkMesh);
       this.group.add(trunkMesh);
       this.chunked.push(new InstanceChunks(trunkMesh, spots, TREE_CULL, 96, true));
     } else { trunkGeo.dispose(); trunkMat.dispose(); }
     if (hasCanopy) {
       canopyMesh.instanceMatrix.needsUpdate = true;
-      canopyMesh.computeBoundingSphere();
+      sealInstanceBounds(canopyMesh);
       this.group.add(canopyMesh);
       this.chunked.push(new InstanceChunks(canopyMesh, spots, TREE_CULL, 96, false));
     } else { canopyGeo.dispose(); canopyMat.dispose(); }
@@ -901,7 +1166,6 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     // shadow at all is the classic "pasted on" tell.
     mesh.castShadow = name === 'Bush' || name === 'ScorchedScrub';
     mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
     mesh.layers.enable(SHADOW_LAYER.NEAR_ONLY);
     mesh.renderOrder = RENDER_ORDER.PROPS - 1;
     for (let i = 0; i < spots.length; i++) {
@@ -913,7 +1177,7 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       mesh.setMatrixAt(i, _m4);
     }
     mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
+    sealInstanceBounds(mesh);
     this.group.add(mesh);
     this.scatterMeshes.push(mesh);
     this.chunked.push(new InstanceChunks(mesh, spots, cull, 48, true));
@@ -1066,19 +1330,53 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     this.uTime.value = ctx.elapsed;
     this.uPlayerPos.value.copy(this.playerPosition);
     const cam = this.camera;
-    if (cam) for (let i = 0; i < this.chunked.length; i++) this.chunked[i].cullTo(cam);
+    if (!cam) return;
+    for (let i = 0; i < this.chunked.length; i++) this.chunked[i].cullTo(cam);
+    // Position each ring and repack its live buckets, in that order, once per
+    // frame ahead of every pass. One frustum for both rings.
+    if (this.rings.length) {
+      _ringProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+      _ringFrustum.setFromProjectionMatrix(_ringProj);
+      for (let i = 0; i < this.rings.length; i++) {
+        const ring = this.rings[i];
+        this.placeRing(ring.mesh, cam.position.x, cam.position.z);
+        ring.chunks.cullTo(_ringFrustum, ring.mesh.position.x, ring.mesh.position.z);
+      }
+    }
+    if (!this.culling) {
+      this.culling = true;
+      for (let i = 0; i < this.rings.length; i++) this.rings[i].mesh.frustumCulled = true;
+    }
   }
 
-  /** Draw calls this module contributes, for the perf readout. */
+  /**
+   * Draw calls this module contributes, for the perf readout. Counts what is
+   * actually submitted: a chunked mesh whose visible set is empty has had its
+   * `count` driven to 0 and three skips it entirely.
+   */
   get drawCalls(): number {
-    return this.rings.length + this.scatterMeshes.length +
-      this.species.reduce((a, s) => a + (s.trunk.count > 0 ? 1 : 0) + (s.canopy.count > 0 ? 1 : 0), 0);
+    let n = 0;
+    for (const r of this.rings) if (r.mesh.count > 0) n++;
+    for (const m of this.scatterMeshes) if (m.count > 0) n++;
+    for (const s of this.species) {
+      if (s.trunk.count > 0) n++;
+      if (s.canopy.count > 0) n++;
+    }
+    return n;
   }
 
   /** Instances actually submitted this frame, across every chunked mesh. */
   get liveInstances(): number {
     let n = 0;
     for (const c of this.chunked) n += c.drawnInstances;
+    for (const r of this.rings) n += r.chunks.drawnInstances;
+    return n;
+  }
+
+  /** Blades in every ring, culled or not — `mesh.count` is not this. */
+  get grassInstances(): number {
+    let n = 0;
+    for (const r of this.rings) n += r.chunks.total;
     return n;
   }
 
@@ -1106,6 +1404,34 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
 // Local geometry utilities (no BufferGeometryUtils import — keeps this module
 // dependency-free and lets us guarantee attribute layout).
 // ---------------------------------------------------------------------------
+
+/**
+ * Freeze an `InstancedMesh`'s bounds over its FULL instance set and turn frustum
+ * culling back on.
+ *
+ * This is the correct answer to the bug `frustumCulled = false` was papering
+ * over. Three tests `object.boundingSphere` and, if it is null, computes it from
+ * `geometry.boundingSphere` unioned over the first `count` instance matrices —
+ * so once `InstanceChunks` starts rewriting `count` and repacking the matrices
+ * each frame, an on-demand sphere would describe only the currently visible
+ * subset, and would shrink and grow under the culler that is reading it.
+ * Computing it once here, while `count` is still the total, gives three a sphere
+ * that provably encloses every instance the mesh can ever submit: the repack is a
+ * permutation of a subset, so nothing can leave it.
+ *
+ * That sphere is circuit-wide, so it rarely culls the mesh outright — the real
+ * saving is `InstanceChunks` driving `count` down. What it buys is honesty: the
+ * bounds now describe the instances, so the flag no longer has to lie, and a pose
+ * that genuinely cannot see any of the circuit (camera pitched into the sky) does
+ * drop the whole draw.
+ */
+function sealInstanceBounds(mesh: THREE.InstancedMesh): void {
+  mesh.computeBoundingSphere();
+  // Both foliage shaders sway vertices in world space; ~0.25 m for a canopy, less
+  // for a shrub. Cheap insurance against culling a tree by its own wind.
+  if (mesh.boundingSphere) mesh.boundingSphere.radius += 1;
+  mesh.frustumCulled = true;
+}
 
 /** Merge indexed/non-indexed geometries that share position/normal/uv/color. */
 export function mergeGeometries(list: THREE.BufferGeometry[]): THREE.BufferGeometry {

@@ -99,9 +99,44 @@ const RES_FOR_TIER: Record<string, number> = { low: 129, medium: 161, high: 193,
 const WARP_LINEAR = 0.062;
 const HALF_EXTENT = 900;
 
+/**
+ * How the clipmap is cut into cullable pieces: radial band boundaries in metres
+ * from the camera, and how many angular sectors each band is divided into.
+ *
+ * The grid is a 1800 m square centred on the camera, so a 65° vertical FOV at
+ * 16:9 (97° horizontal) can only ever see about 27 % of its azimuth — the rest
+ * is behind and beside you. As ONE mesh none of that could be culled: three
+ * tests `geometry.boundingSphere`, and a sphere centred on the camera always
+ * intersects the frustum. Cut into wedges, each wedge gets a sphere that is
+ * genuinely somewhere, and the ones behind you fail the test.
+ *
+ * The innermost band is one disc rather than a fan: sectors that converge on the
+ * camera all touch the near plane, so splitting them buys nothing.
+ *
+ * These numbers are the measured knee of the trade curve, not a guess.
+ * `.probe-tmp/g5.ts` sweeps configurations against the real poses; on neon the
+ * marginal return collapses right here:
+ *
+ *      chunks   submitted calls   submitted tris (of 100 352)
+ *           1              1.0    100 %      <- one uncullable mesh, today
+ *           9              6.4     76 %      <- this config, 4.4k tris per call
+ *          13              8.6     73 %         1.4k tris per extra call
+ *          23             14.2     66 %         1.3k
+ *          43             20.5     54 %         1.7k
+ *
+ * Finer splits keep paying in triangles but the exchange rate falls by 3x, and a
+ * draw call is not free: three's per-object cost is real CPU, and terrain is in
+ * three passes a frame. If a browser `__QA__.benchmark(5)` ever shows the frame
+ * is vertex-bound rather than fill-bound, raise the sector count here — it is one
+ * constant and the probe re-proves the bounds.
+ */
+const GRID_BANDS: readonly number[] = [0, 150, Infinity];
+const GRID_SECTORS: readonly number[] = [1, 8];
+
 export class Terrain implements ISubsystem {
   readonly group = new THREE.Group();
-  mesh!: THREE.Mesh;
+  /** Cullable clipmap sectors. `chunks[0]` is the always-visible centre disc. */
+  readonly chunks: THREE.Mesh[] = [];
   mountains: THREE.Mesh | null = null;
   material!: THREE.MeshStandardMaterial;
 
@@ -117,6 +152,21 @@ export class Terrain implements ISubsystem {
   private surface: ThemeSurface;
   private uniforms: Record<string, THREE.IUniform> = {};
   private disposables: Array<{ dispose(): void }> = [];
+  /** The clipmap's follow pivot. Every sector is a child at local identity. */
+  private clipmap = new THREE.Group();
+  /** Master vertex buffer the sectors share; only their index buffers differ. */
+  private gridGeometry: THREE.BufferGeometry | null = null;
+  /**
+   * Sector culling is armed by the first `update()`, never at build time.
+   * The pivot is placed from the camera, and three culls against the pivot
+   * position established BEFORE the pass starts (`projectObject` runs before any
+   * `onBeforeRender`). If culling were live from frame zero and `update()` never
+   * ran, the pivot would sit at the world origin, every sector's bounds would be
+   * out of frustum, no sector would draw, no `onBeforeRender` would fire to
+   * re-centre it — and the ground would be permanently invisible. Latching here
+   * means the worst case is exactly today's behaviour: uncullable but correct.
+   */
+  private culling = false;
 
   constructor(
     scene: THREE.Scene,
@@ -477,28 +527,64 @@ float terrainSun = fieldShadowLod(
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), HALF_EXTENT * 1.5);
+    this.gridGeometry = geo;
 
-    const mesh = new THREE.Mesh(geo, this.material);
-    mesh.name = 'TerrainGrid';
-    mesh.frustumCulled = false;
-    mesh.castShadow = false;      // the field-march handles ground self-shadow
-    mesh.receiveShadow = true;
-    mesh.renderOrder = RENDER_ORDER.TERRAIN;
-    mesh.matrixAutoUpdate = true;
+    this.clipmap.name = 'TerrainClipmap';
+    this.group.add(this.clipmap);
+
+    // Vertical extent of a sector's bounds. The vertex shader overwrites
+    // `transformed.y` with `fieldHeight(worldXZ)` — an ABSOLUTE world height, and
+    // the pivot's y is 0, so a sector's local Y range is the field's own height
+    // range. The height texture is ClampToEdge, so sampling past the baked square
+    // still returns a value inside [minHeight, maxHeight]; there is nowhere the
+    // surface can go that this misses. Deliberately the field's *global* range
+    // rather than a per-sector one: a per-sector range would have to be recomputed
+    // every frame as the pivot moves, and getting it wrong punches a hole in the
+    // ground. Vertical slack costs almost nothing anyway — the azimuth is what
+    // does the culling, and a sector behind you is behind you at every height.
+    const yMin = this.field.minHeight - 2;
+    const yMax = this.field.maxHeight + 2;
+
+    const sectors = splitClipmapGrid(geo, GRID_BANDS, GRID_SECTORS, yMin, yMax);
+    for (let i = 0; i < sectors.length; i++) {
+      const mesh = new THREE.Mesh(sectors[i], this.material);
+      mesh.name = i === 0 ? 'TerrainGrid' : `TerrainGrid.s${i}`;
+      // Armed by `update()`; see the `culling` field.
+      mesh.frustumCulled = false;
+      mesh.castShadow = false;    // the field-march handles ground self-shadow
+      mesh.receiveShadow = true;
+      mesh.renderOrder = RENDER_ORDER.TERRAIN;
+      mesh.matrixAutoUpdate = false;
+      this.chunks.push(mesh);
+      this.clipmap.add(mesh);
+    }
 
     // Self-position: the terrain must be centred on whatever perspective camera
-    // is drawing it (main view, or a mirrored water-reflection camera).
-    mesh.onBeforeRender = (_r, _s, cam) => {
-      const pc = cam as THREE.PerspectiveCamera;
-      if (!pc.isPerspectiveCamera) return;
-      this.camera = pc;
-      mesh.position.set(pc.position.x, 0, pc.position.z);
-      mesh.updateMatrix();
-      mesh.updateMatrixWorld(true);
-    };
+    // is drawing it (main view, or a mirrored water-reflection camera). Only the
+    // centre disc carries this — it is the sector that can never be culled while
+    // the camera is anywhere near the ground, so it is the one that will always
+    // get the callback. Both cameras that draw terrain share the same x/z (the
+    // reflection camera is mirrored in Y only), so the pivot never moves
+    // mid-pass, which would otherwise draw sectors at a position they were not
+    // culled against.
+    const centre = this.chunks[0];
+    if (centre) {
+      centre.onBeforeRender = (_r, _s, cam) => {
+        const pc = cam as THREE.PerspectiveCamera;
+        if (!pc.isPerspectiveCamera) return;
+        if (!pc.userData.apxReflectionCam) this.camera = pc;
+        this.recentre(pc.position.x, pc.position.z);
+      };
+    }
+  }
 
-    this.mesh = mesh;
-    this.group.add(mesh);
+  /** Slide the clipmap pivot under a camera. Cheap and idempotent. */
+  private recentre(x: number, z: number): void {
+    const p = this.clipmap.position;
+    if (p.x === x && p.z === z) return;
+    p.set(x, 0, z);
+    this.clipmap.updateMatrix();
+    this.clipmap.updateMatrixWorld(true);
   }
 
   // -------------------------------------------------------------------------
@@ -699,17 +785,147 @@ normal = normalize( ( viewMatrix * vec4( mPert, 0.0 ) ).xyz );
   }
 
   update(_ctx: FrameContext): void {
-    // Positioning happens in onBeforeRender so the mesh is also correct for the
-    // water reflection pass. Nothing to do per frame.
+    // Placing the pivot HERE, not only in onBeforeRender, is what makes the
+    // sectors cullable: three frustum-tests in `projectObject`, which runs before
+    // any draw callback, so a clipmap that only re-centres from onBeforeRender is
+    // being culled against last pass's position. Once per frame ahead of every
+    // pass is both correct and cheaper than once per pass.
+    const cam = this.camera;
+    if (!cam) return;
+    this.recentre(cam.position.x, cam.position.z);
+    if (!this.culling) {
+      this.culling = true;
+      // The centre disc stays uncullable: it is the sector that owns the
+      // re-centre callback, and it is in frustum from any ground-level pose.
+      for (let i = 1; i < this.chunks.length; i++) this.chunks[i].frustumCulled = true;
+    }
   }
 
   dispose(): void {
-    this.mesh?.geometry.dispose();
+    for (const c of this.chunks) c.geometry.dispose();
+    this.chunks.length = 0;
+    // Disposed after the sectors: they share its vertex attributes, and three's
+    // attribute cache drops a shared buffer on the first dispose that names it.
+    this.gridGeometry?.dispose();
+    this.gridGeometry = null;
     this.material?.dispose();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
+    this.clipmap.clear();
+    this.group.clear();
     this.scene.remove(this.group);
   }
 }
 
 const _snow = new THREE.Color(0xf2f6ff);
+
+// ---------------------------------------------------------------------------
+// Clipmap partitioning
+// ---------------------------------------------------------------------------
+
+/**
+ * Cut a camera-following warped grid into radial-band × angular-sector pieces,
+ * each carrying a bounding sphere that describes where it actually is.
+ *
+ * The pieces SHARE `master`'s vertex attributes — same `BufferAttribute`
+ * objects, so one VBO on the GPU — and differ only in their index buffer. That
+ * makes the split free in memory and, more importantly, exactly
+ * pixel-equivalent: every triangle of the original is emitted into exactly one
+ * piece, with the same vertices, the same material and the same winding, so
+ * drawing all the pieces draws the original surface and nothing else. Only the
+ * *bounds* are new, which is the whole point — three can finally cull.
+ *
+ * `yMin`/`yMax` are the caller's honest bound on where the surface can end up
+ * after vertex displacement, in the grid's local frame. Both users of this
+ * displace Y in the vertex shader, so the geometry's own Y (0 everywhere) says
+ * nothing about it.
+ *
+ * Shared by Terrain and Water because their grids are the same topology; keeping
+ * one implementation means one place to be wrong about bounds.
+ */
+export function splitClipmapGrid(
+  master: THREE.BufferGeometry,
+  bands: readonly number[],
+  sectors: readonly number[],
+  yMin: number,
+  yMax: number,
+): THREE.BufferGeometry[] {
+  const index = master.getIndex();
+  const pos = master.getAttribute('position');
+  if (!index || !pos || sectors.length === 0) return [master];
+
+  const tris = Math.floor(index.count / 3);
+  const nBands = sectors.length;
+  const bandBase: number[] = [];
+  let slots = 0;
+  for (let b = 0; b < nBands; b++) { bandBase.push(slots); slots += Math.max(1, sectors[b]); }
+
+  const src = index.array as ArrayLike<number>;
+  const owner = new Int32Array(tris);
+  const counts = new Int32Array(slots);
+  const TAU = Math.PI * 2;
+
+  for (let t = 0; t < tris; t++) {
+    const a = src[t * 3], b = src[t * 3 + 1], c = src[t * 3 + 2];
+    const x = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+    const z = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+    const r = Math.sqrt(x * x + z * z);
+    let band = nBands - 1;
+    for (let i = 0; i < nBands; i++) {
+      if (r < (bands[i + 1] ?? Infinity)) { band = i; break; }
+    }
+    const s = Math.max(1, sectors[band]);
+    let sec = 0;
+    if (s > 1) {
+      sec = Math.floor(((Math.atan2(z, x) + Math.PI) / TAU) * s);
+      if (sec < 0) sec = 0; else if (sec >= s) sec = s - 1;
+    }
+    const id = bandBase[band] + sec;
+    owner[t] = id;
+    counts[id]++;
+  }
+
+  const buffers: Uint32Array[] = [];
+  for (let i = 0; i < slots; i++) buffers.push(new Uint32Array(counts[i] * 3));
+  const cursor = new Int32Array(slots);
+  for (let t = 0; t < tris; t++) {
+    const id = owner[t];
+    const w = cursor[id]++ * 3;
+    const dst = buffers[id];
+    dst[w] = src[t * 3];
+    dst[w + 1] = src[t * 3 + 1];
+    dst[w + 2] = src[t * 3 + 2];
+  }
+
+  const yc = (yMin + yMax) * 0.5;
+  const yh = Math.max(0.25, (yMax - yMin) * 0.5);
+  const out: THREE.BufferGeometry[] = [];
+  for (let id = 0; id < slots; id++) {
+    if (counts[id] === 0) continue;
+    const arr = buffers[id];
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      const x = pos.getX(v), z = pos.getZ(v);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const g = new THREE.BufferGeometry();
+    for (const name in master.attributes) g.setAttribute(name, master.attributes[name]);
+    g.setIndex(new THREE.BufferAttribute(arr, 1));
+    const hx = (maxX - minX) * 0.5;
+    const hz = (maxZ - minZ) * 0.5;
+    g.boundingBox = new THREE.Box3(
+      new THREE.Vector3(minX, yMin, minZ), new THREE.Vector3(maxX, yMax, maxZ),
+    );
+    // Circumscribes that box, so it can only ever over-report where the sector is.
+    g.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3((minX + maxX) * 0.5, yc, (minZ + maxZ) * 0.5),
+      Math.sqrt(hx * hx + yh * yh + hz * hz) + 0.01,
+    );
+    out.push(g);
+  }
+  return out;
+}
