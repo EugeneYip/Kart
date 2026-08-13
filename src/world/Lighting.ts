@@ -261,16 +261,131 @@ interface EmitterClass {
    * `Prop:authored:streetlamp:glow` — and an exact-name table matched neither on
    * the coastal circuit, whose scene actually carries 3 flood heads, 1
    * lighthouse lamp, 8 streetlamps and 26 lit shopfronts.
+   *
+   * The two `apx:` classes are the exception: nothing in `Props.ts` emits them.
+   * They are SYNTHESISED by `scanFixtures()` from the track's own tunnel and
+   * bridge geometry, because a bore and a soffit are structures, not fittings —
+   * see `FIXTURE` below. The patterns are kept honest anyway so a prop set could
+   * author real fixtures under those names later and be picked up for free.
    */
   readonly match: RegExp;
   readonly color: number;
   readonly intensity: number;
   readonly range: number;
+  /**
+   * three's `getDistanceAttenuation` exponent. 2 is physical inverse-square and
+   * is right for a lamp you can see. The structure classes use **1**, and that
+   * is the whole reason a 162 m bore can be lit by a 6-slot pool: inverse-square
+   * over a 40 m window spans 1600:1, so six lamps either blow out the metre
+   * under each one or leave the span between them black. 1/d spans 40:1, so a
+   * lamp every 16 m reads as an even run of tunnel lighting — which is also what
+   * a real tunnel looks like. `decay` is a per-light uniform in three, so this
+   * costs no extra light slots and no recompile.
+   */
+  readonly decay: number;
 }
 
+/**
+ * ---------------------------------------------------------------------------
+ *  STRUCTURE LIGHTING — bores and bridge soffits
+ * ---------------------------------------------------------------------------
+ *  A tunnel bore and the underside of a bridge are the two places in this game
+ *  where *no* authored light can reach, at any hour, and where the sky fill
+ *  cannot help either: the hemisphere term for a downward-facing normal is the
+ *  GROUND lobe, which is the darkest thing in every preset.
+ *
+ *  Measured (`.probe-tmp/borelight.ts`, analytic through AgX at the reference
+ *  exposure 1.5, real geometry, real normals, real vertex colours):
+ *
+ *    sunsetCoastline bore, 162 m   interior mean 24.9   sunlit rock outside 112.0
+ *    bostonHarbor    bore, 134 m   interior mean 18.8   (86.9 % pure black at ship grade)
+ *    neonMetropolis  soffit        mean 14.8            100 % pure black at ship grade
+ *    tokyoNeon       soffit, 352 m mean 14.5            100 % pure black at ship grade
+ *
+ *  and on coastal, taipei and boston the pool did not exist at all, because
+ *  `lampsWanted` was decided purely from the sky preset: 'sunset' and 'day' are
+ *  not night, so the tunnel-portal reveal lamps added in P0d were harvested by
+ *  nobody and lit nothing. A bore is dark at noon.
+ *
+ *  So Lighting harvests the *track geometry* as light sources, exactly as it
+ *  already harvests prop instances. Costs nothing to draw: these are pool
+ *  positions, not meshes — zero draw calls, zero triangles, zero new lights.
+ */
+const FIXTURE = {
+  /** Metres of arc between bore lamps. 6 pool slots then cover ~+-48 m. */
+  boreSpacing: 16,
+  /**
+   * Metres below the crown, i.e. ~3.5 m over the road on a 8.2 m bore.
+   *
+   * This is the evenness knob, and it is not a taste call. The lamp is a point
+   * source, so the lining nearest it is the brightest thing in the tunnel; at
+   * 2 m the crown directly above a lamp measured sRGB8 99 against a 29 mean, a
+   * visible bright blotch every 16 m. Dropping it into the middle of the bore
+   * volume equalises the distances — crown 4.0 m, haunch 9.7 m, springing
+   * 13.4 m — and with 1/d that is a 2.2:1 crown-to-haunch ratio, which is what
+   * a real tunnel luminaire run looks like.
+   */
+  boreDrop: 4.0,
+  /** Metres of arc between deck lamp pairs (one per fascia, so two per station). */
+  deckSpacing: 22,
+  /** Metres outboard of the fascia, so the wash rakes across it instead of down it. */
+  deckOut: 2.4,
+  /** Metres below the fascia top edge — about 4 m clear of the soffit. */
+  deckDrop: 5.4,
+  /**
+   * Metres of arc between SOFFIT lamps, and how far below the soffit they hang.
+   *
+   * The fascia lamps alone do not light a soffit, and the measurement is blunt
+   * about why: the flat span between the two fascias is 27 m wide, so its middle
+   * is ~17 m from the nearest edge lamp and picks up 0.21 irradiance against the
+   * 2.45 the edge gets. A separate lamp under the centreline fixes it, and the
+   * two rigs turn out to be complementary — with the centre lamp 6.5 m down the
+   * middle of the span reads 0.154*I and the edge 0.19*I, i.e. flat to within
+   * 25 % across a 27 m plane. Wider spacing than the fascia lamps because one
+   * lamp under an open span covers far more of it than one tucked against an edge.
+   */
+  soffitSpacing: 30,
+  soffitDrop: 6.5,
+} as const;
+
+/**
+ * Metres in front of the camera at which `updateLamps` also evaluates a source's
+ * relevance.
+ *
+ * The pool used to rank purely by the irradiance delivered AT THE CAMERA, and
+ * that is wrong in a way that exactly reproduced the critic's second finding: a
+ * lamp whose `range` window does not reach the camera scores **zero**, so from
+ * 52 m off the bridge not one of the deck's own uplights could win a slot and
+ * the soffit stayed at 100 % pure black even after the rig existed. Scoring at
+ * the camera OR at a focus point down the view axis, whichever is better, means
+ * the pool lights WHAT YOU ARE LOOKING AT — which is also strictly better in
+ * normal play, where the frame is mostly the road 30 m ahead rather than the
+ * kerb beside the wheels.
+ */
+const FOCUS_AHEAD = 34;
+
 const NIGHT_EMITTERS: readonly EmitterClass[] = [
-  { match: /floodhead|floodlight/i, color: 0xfff3d8, intensity: 1100, range: 90 },
-  { match: /lighthouselamp/i, color: 0xfff1cf, intensity: 500, range: 80 },
+  { match: /floodhead|floodlight/i, color: 0xfff3d8, intensity: 1100, range: 90, decay: 2 },
+  { match: /lighthouselamp/i, color: 0xfff1cf, intensity: 500, range: 80, decay: 2 },
+  // --- synthesised from track geometry; see FIXTURE. Ranked above the portal
+  //     reveal lamp and everything else because inside a bore, or under a deck,
+  //     these are the ONLY sources there are, and `collectEmitters` drops the
+  //     highest class index first when it hits EMITTER_MAX.
+  //
+  //     Warm and sodium-ish for the bore (tunnel service lighting), cool for the
+  //     deck (architectural uplighting reads as concealed cove lighting, and the
+  //     contrast against the warm streetlamps is what makes a night city bridge
+  //     look designed rather than merely visible).
+  //
+  //     `intensity` here is NOT candela — decay is 1, so irradiance is
+  //     intensity/d, not intensity/d^2, and the numbers are an order of
+  //     magnitude smaller than the candela figures above for the same delivered
+  //     light. Both were set from `.probe-tmp/borelight.ts`, not by eye: at 24 a
+  //     bore lamp puts ~6.9 irradiance on the road 3.5 m below it and ~3.1 on
+  //     the haunch 9.7 m away, and the several lamps in range stack, which is
+  //     what carries the span between them.
+  { match: /^apx:borelamp$/i, color: 0xffc98a, intensity: 24, range: 44, decay: 1 },
+  { match: /^apx:decklamp$/i, color: 0xbcd8ff, intensity: 15, range: 40, decay: 1 },
   // Tunnel-portal reveal lamps (P0d). Ranked third on purpose: inside a bore
   // this is the ONLY light source — the road there measured linear 0.0018,
   // sRGB 0 through the shipping grade — and the pool ranks by delivered
@@ -296,16 +411,84 @@ const NIGHT_EMITTERS: readonly EmitterClass[] = [
   // only source there is, and `collectEmitters` drops the highest class index
   // first when it hits EMITTER_MAX. (This table was never strictly monotonic in
   // candela — gantry lights at 120 already sit below neon at 90.)
-  { match: /portal.*glow|tunnelportalglow/i, color: 0xffb877, intensity: 40, range: 26 },
-  { match: /neon/i, color: 0xff62c8, intensity: 90, range: 26 },
-  { match: /gantrylights|gantry:glow/i, color: 0xffe6b0, intensity: 120, range: 32 },
-  { match: /streetlamp|streetlight/i, color: 0xffcf94, intensity: 70, range: 28 },
-  { match: /trafficlight/i, color: 0xffd06a, intensity: 30, range: 16 },
+  { match: /portal.*glow|tunnelportalglow/i, color: 0xffb877, intensity: 40, range: 26, decay: 2 },
+  { match: /neon/i, color: 0xff62c8, intensity: 90, range: 26, decay: 2 },
+  { match: /gantrylights|gantry:glow/i, color: 0xffe6b0, intensity: 120, range: 32, decay: 2 },
+  { match: /streetlamp|streetlight/i, color: 0xffcf94, intensity: 70, range: 28, decay: 2 },
+  { match: /trafficlight/i, color: 0xffd06a, intensity: 30, range: 16, decay: 2 },
   // Lit shopfronts and windows. Weak on purpose: there are 26 of them on one
   // circuit, and their job is to make the town read as inhabited rather than to
   // light the road.
-  { match: /townhouse:glow|building:glow|window/i, color: 0xffc98a, intensity: 34, range: 20 },
+  { match: /townhouse:glow|building:glow|window/i, color: 0xffc98a, intensity: 34, range: 20, decay: 2 },
 ] as const;
+
+/** Class indices the fixture scan synthesises. Kept next to the table. */
+const CLS_BORE = 2;
+const CLS_DECK = 3;
+
+/**
+ * three's `getDistanceAttenuation`, on the CPU. `updateLamps` must rank by the
+ * irradiance a source ACTUALLY delivers, and once the table carries mixed decay
+ * exponents the old `intensity / d^2` score is not merely imprecise, it is
+ * wrong by orders of magnitude — a decay-1 lamp two metres away would have
+ * scored below a shopfront across the street and never won a slot.
+ */
+function distanceFalloff(d: number, range: number, decay: number): number {
+  // Special-cased rather than `Math.pow`: this runs pool-slots x emitters x 2 per
+  // frame — 2700 calls on tokyoNeon — and `pow` is an order of magnitude dearer
+  // than a multiply. Only 1 and 2 are ever authored; the generic branch is there
+  // so a future class cannot silently get the wrong curve.
+  const dd = decay === 2 ? d * d : decay === 1 ? d : Math.pow(d, decay);
+  let f = 1 / (dd > 0.01 ? dd : 0.01);
+  if (range > 0) {
+    const r = d / range;
+    const r2 = r * r;
+    const w = clamp01(1 - r2 * r2);
+    f *= w * w;
+  }
+  return f;
+}
+
+/**
+ * Which structure a mesh is, from its name: 1 bore, 2 deck, 0 neither.
+ *
+ * `TrackBuilder` names these `trackTunnel` and `trackDeck`. Matched loosely and
+ * case-insensitively rather than by exact string, for the same reason the
+ * emitter table is: the last time this project matched geometry by exact name it
+ * silently found nothing on the circuit it mattered most on.
+ */
+const RE_BORE = /tunnel/i;
+const RE_PORTAL = /portal/i;
+const RE_DECK = /deck/i;
+
+function fixtureKind(name: string): 0 | 1 | 2 {
+  if (name.length === 0) return 0;
+  // `RegExp.test` rather than `toLowerCase().includes()`: this runs for every
+  // object in the scene on the periodic rescan, and `toLowerCase` allocates a
+  // string every time. `Prop:authored:tunnelportal:glow` is a real prop name that
+  // matches /tunnel/, hence the portal exclusion — though it is also an
+  // InstancedMesh and rejected before we get here.
+  if (RE_BORE.test(name)) return RE_PORTAL.test(name) ? 0 : 1;
+  return RE_DECK.test(name) ? 2 : 0;
+}
+
+/**
+ * Greedy spatial thinning. `kept` is a flat [x, y, z, dirX, dirZ] run. A
+ * candidate is rejected only by a kept lamp that is both within `spacing` and,
+ * when `dir` is given, facing the same way.
+ */
+function thinned(
+  kept: number[], p: THREE.Vector3, dir: THREE.Vector3 | null, spacing: number,
+): boolean {
+  const s2 = spacing * spacing;
+  for (let i = 0; i < kept.length; i += 5) {
+    const dx = kept[i] - p.x, dy = kept[i + 1] - p.y, dz = kept[i + 2] - p.z;
+    if (dx * dx + dy * dy + dz * dz >= s2) continue;
+    if (dir && dir.x * kept[i + 3] + dir.z * kept[i + 4] < 0.5) continue;
+    return false;
+  }
+  return true;
+}
 
 /** Beyond this the 1/d² contribution of even a mast is below a bit of output. */
 const EMITTER_CULL = 150;
@@ -366,6 +549,7 @@ const _camRight = new THREE.Vector3();
 const _tmpColor = new THREE.Color();
 const _m4 = new THREE.Matrix4();
 const _local = new THREE.Vector3();
+const _focus = new THREE.Vector3();
 
 export class Lighting implements ISubsystem {
   /** Cascade 0's light — the canonical "sun" for anything that needs it. */
@@ -411,6 +595,31 @@ export class Lighting implements ISubsystem {
   private lampPool: THREE.PointLight[] = [];
   private emitters: Emitter[] = [];
   private lampsWanted = false;
+  /** Preset half of `lampsWanted` — is this a mood that has artificial light? */
+  private presetWantsLamps = false;
+  /**
+   * Whether this mood gets bridge accent light. Narrower than `presetWantsLamps`
+   * on purpose: `volcanic` qualifies for lamps because of the lava tube, but a
+   * cool architectural wash under a basalt bridge at midday reads as a bug, and
+   * volcano's soffits already measure 26–38 at the reference exposure off the
+   * warm ground lobe alone. Accent uplighting is a night feature.
+   */
+  private presetWantsDeckLight = false;
+
+  // --- structure lighting (bores, bridge soffits) ---
+  /**
+   * Synthesised once per track load, then re-seeded into `emitters` on every
+   * rescan. Kept separate so the periodic prop rescan never has to re-walk
+   * 3078 deck vertices, and so the cap can never displace a bore lamp.
+   */
+  private fixtureEmitters: Emitter[] = [];
+  /** The fixture meshes the cache was built from, for change detection. */
+  private fixtureMeshes: THREE.Mesh[] = [];
+  /** Scratch for the discovery traverse. Reused so the 2 Hz path allocates nothing. */
+  private fixtureScratch: THREE.Mesh[] = [];
+  private fixtureBores = 0;
+  private fixtureDecks = 0;
+  private structureLighting = true;
 
   constructor(
     scene: THREE.Scene,
@@ -657,7 +866,31 @@ export class Lighting implements ISubsystem {
   private rescanShadowMask(): void {
     this.nearOnly.length = 0;
     this.midOnly.length = 0;
-    if (this.lampsWanted) this.emitters.length = 0;
+    // Structure lamps first: this also decides `lampsWanted` on a circuit whose
+    // sky preset has no artificial light but whose track has a 162 m hole in it.
+    // In the shipped boot order `setSky()` has already done this before anything
+    // compiled; this call is what keeps a bare harness (and a mid-session course
+    // change) correct.
+    this.refreshFixtures();
+    if (this.lampsWanted) {
+      this.emitters.length = 0;
+      // Seeded BEFORE the traversal so `collectEmitters`' displacement rule can
+      // never evict a bore lamp in favour of a shopfront window.
+      //
+      // These are the CACHE'S OWN objects, shared by reference rather than copied,
+      // and both mutators of `emitters` are safe on them by construction:
+      //  * `updateLamps` encodes "claimed" as `-1 - cls` and unconditionally
+      //    restores every negative entry before it returns, with nothing in
+      //    between that can throw.
+      //  * `collectEmitters` only overwrites an entry above EMITTER_MAX, it picks
+      //    the HIGHEST class index as the victim, and it bails on
+      //    `victim.cls <= incoming.cls` — so a structure lamp at class 2 or 3 can
+      //    only ever be displaced by class 0 or 1, i.e. a 1100 cd flood mast or a
+      //    lighthouse, which is the right answer anyway.
+      for (const f of this.fixtureEmitters) {
+        if (this.emitters.length < EMITTER_MAX) this.emitters.push(f);
+      }
+    }
     this.scene.traverse((o) => {
       if (o.layers.isEnabled(SHADOW_LAYER.NEAR_ONLY)) this.nearOnly.push(o);
       else if (o.layers.isEnabled(SHADOW_LAYER.MID_ONLY)) this.midOnly.push(o);
@@ -665,6 +898,209 @@ export class Lighting implements ISubsystem {
     });
     const total = this.nearOnly.length + this.midOnly.length;
     if (this.maskedWasVisible.length < total) this.maskedWasVisible.length = total;
+  }
+
+  // -------------------------------------------------------------------------
+  //  Structure lighting — the track's own geometry as light sources
+  // -------------------------------------------------------------------------
+
+  /**
+   * A/B switch for the structure rig, for the critic and for
+   * `.probe-tmp/borelight.ts`. Off, the bore and the deck revert to being lit by
+   * the sky fill alone, which is the state the build was rejected in — so the
+   * same frame can be captured both ways instead of being compared against a
+   * screenshot from a different session. Reachable on screen as
+   * `__GAME__.lighting.setStructureLighting(false)`.
+   *
+   * Does NOT revert the focus-point term in `updateLamps`, and does not revert
+   * the ground-bounce lobe in `Sky.ts`: the first is a fix to how the pool chooses
+   * ANY emitter, and keeping it on both sides is what makes "did the structure
+   * lamps steal slots from the road" a fair question; the second lives in the
+   * environment map and is switched with `__QA__.setSky()`.
+   */
+  setStructureLighting(on: boolean): void {
+    if (on === this.structureLighting) return;
+    this.structureLighting = on;
+    this.fixtureMeshes.length = 0;
+    this.refreshFixtures();
+  }
+
+  /**
+   * Re-derive the bore / deck lamp positions if the track geometry has changed,
+   * and (re)decide whether the pool is needed at all.
+   *
+   * Public so a harness or probe can force it; the shipped path reaches it from
+   * `setSky()` and from the periodic rescan. Idempotent and cheap when nothing
+   * moved — it hashes the fixture meshes' uuids and returns.
+   */
+  refreshFixtures(): void {
+    if (!this.structureLighting) {
+      if (this.fixtureEmitters.length > 0 || this.fixtureMeshes.length > 0) {
+        this.fixtureEmitters.length = 0;
+        this.fixtureMeshes.length = 0;
+        this.fixtureBores = 0;
+        this.fixtureDecks = 0;
+        this.lampsWanted = this.presetWantsLamps;
+        if (this.lampsWanted) this.ensureLampPool();
+        else for (const l of this.lampPool) l.intensity = 0;
+        this.markShadowMaskDirty();
+      }
+      return;
+    }
+    // Identity comparison, not a string signature: `TrackBuilder` builds fresh
+    // meshes on every load and disposes the old ones, so object identity is the
+    // exact test, and it allocates nothing on the 2 Hz path that finds no change.
+    const found = this.fixtureScratch;
+    found.length = 0;
+    let bores = 0;
+    let decks = 0;
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh) return;
+      const kind = fixtureKind(m.name);
+      if (kind === 0) return;
+      if (kind === 1) bores++; else decks++;
+      found.push(m);
+    });
+    let same = found.length === this.fixtureMeshes.length;
+    if (same) {
+      for (let i = 0; i < found.length; i++) {
+        if (found[i] !== this.fixtureMeshes[i]) { same = false; break; }
+      }
+    }
+    if (!same) {
+      this.fixtureMeshes.length = 0;
+      for (const m of found) this.fixtureMeshes.push(m);
+      this.fixtureBores = bores;
+      this.fixtureDecks = decks;
+      this.fixtureEmitters.length = 0;
+      // `rescanShadowMask` seeds `emitters` from this list, and when we are
+      // reached from `setSky()` or `setStructureLighting()` rather than from the
+      // rescan itself, that seeding has already happened for this frame. Without
+      // this the new lamps sit in the cache doing nothing until the next periodic
+      // rescan, up to 0.45 s later — which on a course change is a visible half
+      // second of unlit tunnel, and in a probe looks like the rig not working.
+      this.markShadowMaskDirty();
+      // Deck accent light is a NIGHT feature: an architectural wash under a
+      // bridge at noon reads as a bug, and by day the ground bounce is what
+      // lifts a soffit (see the `groundAmbient` note in Sky.ts). A bore is dark
+      // at every hour, so bore lamps are unconditional.
+      const wantDeck = this.presetWantsDeckLight;
+      for (const m of this.fixtureMeshes) {
+        if (fixtureKind(m.name) === 1) this.harvestBore(m);
+        else if (wantDeck) this.harvestDeck(m);
+      }
+    }
+    const want = this.presetWantsLamps || this.fixtureEmitters.length > 0;
+    if (want !== this.lampsWanted) {
+      this.lampsWanted = want;
+      if (want) this.ensureLampPool();
+      else for (const l of this.lampPool) l.intensity = 0;
+    }
+  }
+
+  /**
+   * Bore lamps: one every `FIXTURE.boreSpacing` metres, hung `boreDrop` below
+   * the crown, on the centreline.
+   *
+   * The crown is found WITHOUT knowing the arch's ring size — which is 9
+   * vertices at `low` and 14 above it, and is not Lighting's to know anyway. The
+   * lining sweep emits its rings in arc order and each ring runs springing ->
+   * crown -> springing, so the crown of every ring is a strict local minimum of
+   * `normal.y` in buffer order. That is one pass, no assumptions, and it
+   * survives a change to the arch tessellation.
+   */
+  private harvestBore(mesh: THREE.Mesh): void {
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position');
+    const nrm = geo.getAttribute('normal');
+    if (!pos || !nrm || pos.count < 3) return;
+    mesh.updateWorldMatrix(true, false);
+    const kept: number[] = [];
+    const n = nrm.count;
+    for (let i = 1; i < n - 1; i++) {
+      const y = nrm.getY(i);
+      // Within ~32 degrees of straight down, and lower than both neighbours.
+      if (y > -0.85) continue;
+      if (nrm.getY(i - 1) < y || nrm.getY(i + 1) < y) continue;
+      _local.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+      // The crown normal points INTO the bore (down), so this drops the lamp
+      // clear of the lining rather than burying it in the rock.
+      _v.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i)).normalize();
+      _local.addScaledVector(_v, FIXTURE.boreDrop);
+      if (!thinned(kept, _local, null, FIXTURE.boreSpacing)) continue;
+      kept.push(_local.x, _local.y, _local.z, 0, 0);
+      this.pushFixture(_local, CLS_BORE);
+    }
+  }
+
+  /**
+   * Deck lamps: a pair every `FIXTURE.deckSpacing` metres, one per fascia,
+   * `deckOut` outboard and `deckDrop` below the fascia's top edge — so the wash
+   * rakes ACROSS the fascia and up onto the soffit. A lamp hung straight below
+   * the soffit would light the soffit and leave the fascia at N.L = 0.
+   *
+   * The outboard direction is read off the geometry rather than guessed: the
+   * fascia's top-edge vertices are the only ones on the deck strip whose authored
+   * normal is horizontal, and that normal IS the outboard direction.
+   */
+  private harvestDeck(mesh: THREE.Mesh): void {
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position');
+    const nrm = geo.getAttribute('normal');
+    if (!pos || !nrm || pos.count < 3) return;
+    mesh.updateWorldMatrix(true, false);
+    const kept: number[] = [];
+    for (let i = 0; i < nrm.count; i++) {
+      const ny = nrm.getY(i);
+      if (ny > 0.3 || ny < -0.3) continue;
+      _v.set(nrm.getX(i), 0, nrm.getZ(i));
+      if (_v.lengthSq() < 1e-6) continue;
+      _v.normalize();
+      _local.set(pos.getX(i), pos.getY(i), pos.getZ(i))
+        .applyMatrix4(mesh.matrixWorld)
+        .addScaledVector(_v, FIXTURE.deckOut);
+      _local.y -= FIXTURE.deckDrop;
+      // Thinned per FASCIA, not per station: the two fascias of a narrow bridge
+      // are less than `deckSpacing` apart, and a position-only test would then
+      // light one edge of it and leave the other black.
+      if (!thinned(kept, _local, _v, FIXTURE.deckSpacing)) continue;
+      kept.push(_local.x, _local.y, _local.z, _v.x, _v.z);
+      this.pushFixture(_local, CLS_DECK);
+    }
+
+    // --- soffit lamps, under the centreline of the span ---------------------
+    // The soffit's own corners are the only vertices on the strip whose normal
+    // points straight down, and the builder emits them one per side per station,
+    // so consecutive pairs in buffer order are the two ends of one span. The
+    // 6..45 m gate is what makes that safe: two corners of the SAME station are a
+    // deck width apart, two corners of ADJACENT stations are ~1.2 m apart.
+    const mid: number[] = [];
+    let prev = -1;
+    for (let i = 0; i < nrm.count; i++) {
+      if (nrm.getY(i) > -0.8) continue;
+      if (prev >= 0) {
+        _v.set(pos.getX(prev), pos.getY(prev), pos.getZ(prev)).applyMatrix4(mesh.matrixWorld);
+        _local.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+        const span = _v.distanceTo(_local);
+        if (span >= 6 && span <= 45) {
+          _local.add(_v).multiplyScalar(0.5);
+          _local.y -= FIXTURE.soffitDrop;
+          if (thinned(mid, _local, null, FIXTURE.soffitSpacing)) {
+            mid.push(_local.x, _local.y, _local.z, 0, 0);
+            this.pushFixture(_local, CLS_DECK);
+          }
+          prev = -1;
+          continue;
+        }
+      }
+      prev = i;
+    }
+  }
+
+  private pushFixture(p: THREE.Vector3, cls: number): void {
+    if (this.fixtureEmitters.length >= EMITTER_MAX) return;
+    this.fixtureEmitters.push({ x: p.x, y: p.y, z: p.z, cls });
   }
 
   // -------------------------------------------------------------------------
@@ -721,17 +1157,41 @@ export class Lighting implements ISubsystem {
     }
   }
 
-  /** Build the pool on the first night preset. Never for `low`. */
+  /**
+   * Build the pool the first time anything needs it. Never for `low`.
+   *
+   * Adding a light changes NUM_POINT_LIGHTS, which recompiles every material in
+   * the scene, so the pool is built once and then *kept* — presets that have no
+   * artificial light zero its intensity rather than removing it.
+   *
+   * TIMING MATTERS AND IS WHY `setSky()` FORCES A FIXTURE SCAN. `Game.init()`
+   * runs `lighting.init()` (scene still empty) -> `track.init()` (the bore and
+   * the deck now exist) -> `environment.init()` (pushes the circuit's mood) ->
+   * `lighting.setSky(sky)` -> `engine.initAll()`, and it is `initAll` that
+   * reaches `VfxManager.init()` and `RenderPipeline.init()`, both of which call
+   * `renderer.compile()`. So `setSky` is the last hook before the first program
+   * is built: decide the pool size there and the shipped path never recompiles.
+   * A harness that never calls `setSky` falls back to the first `update()`,
+   * which is still before the first render.
+   */
   private ensureLampPool(): void {
     if (this.lampPool.length > 0) return;
-    const n = this.quality.tier === 'low' ? 0
+    let n = this.quality.tier === 'low' ? 0
       : this.quality.tier === 'medium' ? 3
         : this.quality.tier === 'high' ? 5 : 6;
+    // ONE SLOT ON `low`, BUT ONLY FOR A BORE. §7 asks subsystems to degrade on
+    // `low`, and zero is not degradation when the circuit contains a 162 m hole
+    // with no other light source in it — that is a black corridor the player has
+    // to drive down. A soffit on `low` is a cosmetic loss and stays unlit; a bore
+    // is not. One point light is the smallest thing that fixes it, and it is only
+    // ever added on the three circuits that have a bore.
+    //
+    // Reached twice: `setPreset` calls this before any harvest has run (so
+    // `fixtureBores` is 0 and `low` builds nothing), then `refreshFixtures` calls
+    // it again once the scan has found the arch. `lampPool.length > 0` is the only
+    // latch, so the second call is what actually builds it.
+    if (n === 0 && this.fixtureBores > 0) n = 1;
     if (n === 0) return;
-    // Adding a light changes NUM_POINT_LIGHTS, which recompiles every material
-    // in the scene. So the pool is built once, on the first night preset, and
-    // then *kept* — daylight presets zero its intensity rather than removing it,
-    // because a second recompile mid-session is a visible hitch.
     for (let i = 0; i < n; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 40, 2);
       l.name = `NightLamp${i}`;
@@ -754,6 +1214,9 @@ export class Lighting implements ISubsystem {
       return;
     }
     const cam = this.camera.position;
+    // Second evaluation point, down the view axis. See FOCUS_AHEAD.
+    this.camera.getWorldDirection(_fwd);
+    _focus.copy(cam).addScaledVector(_fwd, FOCUS_AHEAD);
     for (let k = 0; k < pool.length; k++) {
       let best = -1;
       let bestScore = 0;
@@ -766,11 +1229,29 @@ export class Lighting implements ISubsystem {
         const dz = em.z - cam.z;
         const d2 = dx * dx + dy * dy + dz * dz;
         if (d2 > EMITTER_CULL * EMITTER_CULL) continue;
+        const fx = em.x - _focus.x;
+        const fy = em.y - _focus.y;
+        const fz = em.z - _focus.z;
+        const f2 = fx * fx + fy * fy + fz * fz;
         // Rank by the irradiance the source actually delivers here, not by
         // distance: a mast at 60 m matters more than a shopfront at 20 m, and a
         // nearest-first pool would spend all six slots on the shopfronts.
-        const score = NIGHT_EMITTERS[em.cls].intensity / Math.max(d2, 1);
-        if (score > bestScore) { bestScore = score; bestD = d2; best = e; }
+        //
+        // Through the REAL falloff, including `decay` and the range window. The
+        // old `intensity / d^2` was an inlined copy of three's decay-2 branch,
+        // and with structure lamps on decay 1 it would have mis-ranked them by
+        // three orders of magnitude — a 7.5-unit bore lamp 6 m away scores 0.21
+        // on its own curve and 0.21/36 = 0.006 on the wrong one, which is below a
+        // shopfront window across the valley.
+        const cls = NIGHT_EMITTERS[em.cls];
+        const score = cls.intensity * Math.max(
+          distanceFalloff(Math.sqrt(d2), cls.range, cls.decay),
+          distanceFalloff(Math.sqrt(f2), cls.range, cls.decay),
+        );
+        // The cull fade below must use the distance that WON, or a lamp picked
+        // for the focus point but 140 m from the camera would fade to nothing.
+        const near = f2 < d2 ? f2 : d2;
+        if (score > bestScore) { bestScore = score; bestD = near; best = e; }
       }
       const l = pool[k];
       if (best < 0) { l.intensity = 0; continue; }
@@ -779,6 +1260,7 @@ export class Lighting implements ISubsystem {
       l.position.set(em.x, em.y, em.z);
       l.color.setHex(c.color);
       l.distance = c.range;
+      l.decay = c.decay;
       // Fade the last 30 m of the cull radius so a lamp entering the set does
       // not pop a pool of light into existence.
       const d = Math.sqrt(bestD);
@@ -816,6 +1298,15 @@ export class Lighting implements ISubsystem {
     // `keyDirection` is the Sky's to own, and until this moment `syncSunDirection`
     // was falling back to a hardcoded direction. Re-read it now that Sky exists.
     this.syncSunDirection();
+    // LAST HOOK BEFORE THE FIRST SHADER COMPILES. `Game.init()` calls this after
+    // `track.init()` and `environment.init()` and before `engine.initAll()`, so
+    // the bore and the deck exist, the circuit's mood has landed, and nothing has
+    // called `renderer.compile()` yet. Sizing the point-light pool here is what
+    // keeps the shipped path free of a mid-session recompile hitch — see
+    // `ensureLampPool`. Unlike `setPreset`, this is called unconditionally, which
+    // matters for a circuit whose mood happens to equal the boot default
+    // ('day' — bostonHarbor, which has a 134 m bore).
+    this.refreshFixtures();
   }
 
   // -------------------------------------------------------------------------
@@ -870,8 +1361,7 @@ export class Lighting implements ISubsystem {
     // term straight rather than the 0.62 fudge the old fat ambient needed.
     worldSunUniforms.uAmbientIntensity.value = p.ambientIntensity;
 
-    // Which presets have artificial light. Build the pool the first time one is
-    // selected; other presets just zero it (see ensureLampPool).
+    // Which presets have artificial light of their own.
     //
     // `embers` is in the test as of P0d. It is set only by `volcanic`, and the
     // reason it belongs here is the tunnel-portal work: the lava tube's road was
@@ -881,13 +1371,28 @@ export class Lighting implements ISubsystem {
     // (`Prop:authored:tunnelportal:glow`), and without a pool those lamps glow
     // without lighting anything. A volcanic day is not "night", but a lava tube
     // at midday still needs its own lighting, which is exactly what this pool is.
-    this.lampsWanted = p.night > 0.5 || p.cityGlow >= 0.5 || p.embers > 0.5;
+    //
+    // THIS IS NO LONGER THE WHOLE TEST, and that was the P0h bore defect. It said
+    // "does this MOOD have lamps", and answered no for 'sunset' (cityGlow 0.1)
+    // and 'day' (0) — so on sunsetCoastline, taipeiCircuit and bostonHarbor the
+    // pool was never built, the emitter harvest never ran, and the portal reveal
+    // lamps P0d had just added were harvested by nobody. Measured: sunsetCoastline
+    // ran the whole 162 m bore with 0 point lights in the scene. The structural
+    // half of the answer — "does this TRACK have a hole in it" — is
+    // `refreshFixtures`, which ORs into `lampsWanted`.
+    this.presetWantsLamps = p.night > 0.5 || p.cityGlow >= 0.5 || p.embers > 0.5;
+    this.presetWantsDeckLight = p.night > 0.5 || p.cityGlow >= 0.5;
+    this.lampsWanted = this.presetWantsLamps || this.fixtureEmitters.length > 0;
     if (this.lampsWanted) {
       this.ensureLampPool();
       this.markShadowMaskDirty();
     } else {
       for (const l of this.lampPool) l.intensity = 0;
     }
+    // The deck rig is night-only, so a mood change can add or remove it. Force a
+    // re-harvest by dropping the cached mesh list rather than by comparing flags —
+    // one line, and it cannot go stale.
+    this.fixtureMeshes.length = 0;
 
     if (this.sky && this.sky.presetName !== key) this.sky.setPreset(key);
     this.syncSunDirection();
@@ -1068,6 +1573,42 @@ export class Lighting implements ISubsystem {
     }));
   }
 
+  /**
+   * The live point-light pool, for QA. Read-only in spirit: probes measure the
+   * irradiance these actually deliver rather than re-deriving `updateLamps`.
+   */
+  lampPoolForQA(): readonly THREE.PointLight[] {
+    return this.lampPool;
+  }
+
+  /**
+   * Emitter harvest state, for QA. `byClass` indexes `NIGHT_EMITTERS`, so a
+   * class that silently drops to zero on a circuit is visible in one line.
+   */
+  emitterDebug(): {
+    total: number; cap: number; pool: number; byClass: number[]; classNames: string[];
+    fixtures: number; bores: number; decks: number; wanted: boolean;
+  } {
+    const byClass = NIGHT_EMITTERS.map(() => 0);
+    for (const e of this.emitters) {
+      // `updateLamps` encodes "claimed" as -1-cls; decode so a mid-frame read
+      // still bins correctly.
+      const c = e.cls < 0 ? -1 - e.cls : e.cls;
+      if (c >= 0 && c < byClass.length) byClass[c]++;
+    }
+    return {
+      total: this.emitters.length,
+      cap: EMITTER_MAX,
+      pool: this.lampPool.length,
+      byClass,
+      classNames: NIGHT_EMITTERS.map((e) => e.match.source.split('|')[0]),
+      fixtures: this.fixtureEmitters.length,
+      bores: this.fixtureBores,
+      decks: this.fixtureDecks,
+      wanted: this.lampsWanted,
+    };
+  }
+
   /** Nudge the shadow distance at runtime (e.g. an in-race quality drop). */
   setShadowFar(distance: number): void {
     this.shadowFar = distance;
@@ -1116,6 +1657,9 @@ export class Lighting implements ISubsystem {
     for (const l of this.lampPool) { this.group.remove(l); l.dispose(); }
     this.lampPool.length = 0;
     this.emitters.length = 0;
+    this.fixtureEmitters.length = 0;
+    this.fixtureMeshes.length = 0;
+    this.fixtureScratch.length = 0;
     this.hemi?.dispose();
     this.rim?.dispose();
     this.scene.remove(this.group);

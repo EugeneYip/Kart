@@ -85,6 +85,33 @@ export interface SkyPreset {
   fogFalloff: number;
   /** `scene.environmentIntensity` for this mood — the IBL half of the fill. */
   envIntensity: number;
+  /**
+   * Hue of the IBL's LOWER hemisphere — the ground-bounce lobe. Applied only to
+   * the cube capture, never to the visible dome; see the `uEnvCapture` block in
+   * the sky shader for why this is the missing half of the IBL rather than a
+   * cheat, and `groundBounceLum` for the numbers.
+   */
+  groundBounceColor: number;
+  /**
+   * Linear radiance of that lobe, in the same units as `skyScale`, so the two are
+   * directly comparable: `groundBounceLum / skyScale` is the ground-to-sky
+   * radiance ratio the IBL will present.
+   *
+   * Authored from `E_down * albedo_ground / PI`, which for a sunlit day
+   * (E ~ 3.5, albedo ~ 0.25) is 0.28, then cross-checked against what the dome
+   * was supplying by accident. That old value is
+   * `mix(atmosphere_below_horizon, haze * hazeLum, hazeStrength)`. The haze half is
+   * exact from the preset — day 0.44, sunset 0.33, storm 0.094, volcanic 0.064,
+   * **night 0.005** — but the atmosphere half cannot be read outside a GL context,
+   * so `.probe-tmp/borelight.ts` brackets it at 35 % of `skyScale`. On that
+   * bracket the old lower hemisphere was day 0.31, sunset 0.30, storm 0.099,
+   * volcanic 0.088, night 0.033: the daylight moods were roughly right by
+   * accident, and night sat somewhere between 1.3x and 8x too dark depending on
+   * where in the bracket the truth lies. The probe's modelled soffit at the
+   * pessimistic end of the bracket is 4.0–4.7 sRGB8 against the critic's measured
+   * 4.9 on a real frame, which is the reason to believe the pessimistic end.
+   */
+  groundBounceLum: number;
   godRays: number;
   godRayColor: number;
   shadowIntensity: number;
@@ -148,6 +175,13 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     rimColor: 0xbcd8ff, rimIntensity: 0.22,
     fogColor: 0x5c80b0, fogSunColor: 0xffe3ae, fogDensity: 0.00085, fogHeight: 3, fogFalloff: 0.020,
     envIntensity: 0.40,
+    // Warm dry ground rather than the pale blue the haze band was supplying:
+    // bounce off tarmac, sand and grass is never sky-coloured. 0.42 is a 1.34x
+    // lift on the modelled old value (0.31) and sits just under the haze half of
+    // it (0.44), so no daylight soffit gets darker and it is authored rather than
+    // incidental. Measured: bostonHarbor's 220 m bridge soffit 28.0 -> 34.0 sRGB8
+    // at the reference exposure, and its 134 m bore crown lifts with it.
+    groundBounceColor: 0xa89778, groundBounceLum: 0.42,
     // NOT 1.0. A shadow map knows about occlusion but nothing about the bounce
     // that fills a real shadow, so a fully-opaque shadow term is the darkest
     // possible answer — the reported 8:1 split inside one frame (a kart in the
@@ -173,6 +207,7 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     rimColor: 0x8fb4ff, rimIntensity: 0.36,
     fogColor: 0x8a5a4a, fogSunColor: 0xffbe80, fogDensity: 0.00105, fogHeight: 2, fogFalloff: 0.017,
     envIntensity: 0.45,
+    groundBounceColor: 0xb0703c, groundBounceLum: 0.34,
     // See the note on `day.shadowIntensity` — same reasoning, and a low sun
     // makes the shadows long enough that an opaque shadow term covers a large
     // fraction of the frame.
@@ -226,6 +261,21 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     rimColor: 0x7fd0ff, rimIntensity: 0.65,
     fogColor: 0x141d33, fogSunColor: 0x2c3a5e, fogDensity: 0.00100, fogHeight: 2, fogFalloff: 0.021,
     envIntensity: 1.08,
+    // THE ONE THAT MATTERED. The haze band was handing the IBL a lower hemisphere
+    // at 0.005 radiance — 1.6 % of this sky — so a bridge soffit, whose shading
+    // normal points straight down, had nothing to reflect. A night city's lower
+    // hemisphere is not black: it is a field of lit windows, signage and wet
+    // tarmac throwing light back up, and `cityGlow` is 1.0 here. 0.042 is 14 % of
+    // skyScale and still the darkest lower hemisphere of any preset. Warm-violet
+    // rather than the cool blue of `bounceColor`, which was authored for
+    // moonlight, not for sodium and neon.
+    //
+    // Deliberately conservative. The deck rig in `Lighting.ts` is what takes the
+    // neonMetropolis soffit from 4.7 to 49.4; this lobe is what keeps every OTHER
+    // underside in the two night cities — canopies, overhangs, gantry bellies,
+    // kart floors, the bore crown — off the floor of the histogram, which is
+    // where a 13.8 %-pure-black frame measurement comes from.
+    groundBounceColor: 0x4a3646, groundBounceLum: 0.042,
     godRays: 0.0, godRayColor: 0x9fb6ff, shadowIntensity: 0.78,
   }),
   storm: P({
@@ -242,6 +292,10 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     rimColor: 0xd6e6ff, rimIntensity: 0.34,
     fogColor: 0x4b545e, fogSunColor: 0x717b86, fogDensity: 0.0030, fogHeight: 1, fogFalloff: 0.016,
     envIntensity: 0.65,
+    // Wet, overcast ground. A 1.5x lift on the modelled 0.099: under a storm the
+    // sky is the only source, so bounce is the only thing stopping undersides from
+    // reading as holes. No shipping circuit authors this preset — `Weather` does.
+    groundBounceColor: 0x5a5e63, groundBounceLum: 0.15,
     godRays: 0.25, godRayColor: 0xc8d4e2, shadowIntensity: 0.70,
   }),
   /**
@@ -307,9 +361,65 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     rimColor: 0xff9a5c, rimIntensity: 0.50,
     fogColor: 0x6b2a1d, fogSunColor: 0xff8a44, fogDensity: 0.00145, fogHeight: 2, fogFalloff: 0.018,
     envIntensity: 0.90,
+    // A lava field IS a light source, and volcano's bridges are 340 m, 54 m and
+    // 54 m long with nothing under them but glowing rock. 2.5x on the modelled
+    // 0.088. Measured: the 340 m span's soffit 34.8 -> 55.3 sRGB8. This preset
+    // gets no deck lamps (a cool architectural wash at midday is a bug), so the
+    // lobe is the whole fix there.
+    groundBounceColor: 0x9c3c18, groundBounceLum: 0.22,
     godRays: 0.8, godRayColor: 0xff8038, shadowIntensity: 0.62,
   }),
 };
+
+// ---------------------------------------------------------------------------
+//  Preset-derived values other subsystems are welcome to read
+// ---------------------------------------------------------------------------
+
+const _bounce = new THREE.Color();
+
+/**
+ * The ground-bounce lobe as a linear radiance triple: `groundBounceColor`
+ * renormalised so its luminance is exactly `groundBounceLum`. Authoring a hue and
+ * a radiance separately is what keeps the two independent — retinting the lobe
+ * cannot accidentally change how bright the world's undersides are.
+ *
+ * Returns a shared instance; copy it if you need to keep it.
+ */
+export function groundBounceRadiance(p: SkyPreset): THREE.Color {
+  _bounce.setHex(p.groundBounceColor, THREE.SRGBColorSpace);
+  const y = 0.2126 * _bounce.r + 0.7152 * _bounce.g + 0.0722 * _bounce.b;
+  return _bounce.multiplyScalar(p.groundBounceLum / Math.max(y, 1e-4));
+}
+
+/**
+ * How night-time this mood is, 0..1. **This is the hook for gating lit windows.**
+ *
+ * `bostonHarbor` is authored `skyPreset: 'day'` and its towers emit lit windows
+ * anyway, which is a night city under a midday sky. The emissive is authored in
+ * `Props.ts` / `CityDefs.ts` and not Sky's to change, but the decision needs a
+ * value, and the value already existed in two places (`night` and `cityGlow`)
+ * with no single accessor. So:
+ *
+ *     import { skyNightFactor } from '@/world/Sky';
+ *     import { worldRegistry } from '@/world/WorldTextures';
+ *
+ *     const lit = skyNightFactor(worldRegistry.sky?.presetName);
+ *     mat.emissiveIntensity = base * lit;          // or fade the window atlas
+ *
+ * `worldRegistry.sky` is populated by the time any prop is built, and
+ * `presetName` is on its published interface, so this needs nothing new wired
+ * through a constructor. Unknown or missing names answer 0 — i.e. "broad
+ * daylight, do not light the windows" — which is the safe default.
+ *
+ * The curve is deliberately not a step: `cityGlow` is 0.1 at sunset, so shopfronts
+ * come up to a tenth of their night brightness at golden hour, which is when a
+ * real city starts switching its lights on.
+ */
+export function skyNightFactor(name: string | undefined | null): number {
+  if (!name || !(name in SKY_PRESETS)) return 0;
+  const p = SKY_PRESETS[name as SkyPresetName];
+  return clamp01(Math.max(p.night, p.cityGlow));
+}
 
 // ---------------------------------------------------------------------------
 
@@ -358,6 +468,8 @@ uniform float uNight;
 uniform float uCityGlow;
 uniform float uEmbers;
 uniform float uLightning;
+uniform vec3  uEnvBounce;
+uniform float uEnvCapture;
 
 #define PI 3.141592653589793
 
@@ -750,6 +862,39 @@ void main(){
     col = creamify(col, crossoverAmount(col) * uChromaDip * hb * 0.80);
   }
 
+  // -------------------------------------------------------------------------
+  //  GROUND-BOUNCE LOBE — IBL CAPTURE ONLY
+  // -------------------------------------------------------------------------
+  //  uEnvCapture is 1 for exactly the six faces of the cube render in
+  //  refreshEnvironment() and 0 for the dome the player looks at, so this
+  //  changes the environment map WITHOUT changing a single visible pixel of sky.
+  //
+  //  Why it has to exist. captureScene holds nothing but this dome — no
+  //  terrain, no city, no water — so the lower hemisphere of the PMREM is
+  //  whatever the dome shader happens to draw below the horizon, which is the
+  //  horizon haze band. That is a fiction, and at night it is a very dark one:
+  //  measured off the preset values, the below-horizon radiance is
+  //
+  //      day 0.44   sunset 0.33   storm 0.094   volcanic 0.064   night 0.005
+  //
+  //  against sky radiances of 0.30-0.50. So at night the IBL told every
+  //  downward-facing surface in the game that the world below it was 60x darker
+  //  than the sky. getIBLIrradiance samples the env along the shading normal,
+  //  and for a soffit that normal points straight down — which is exactly the
+  //  critic's finding: neonMetropolis' bridge soffit at 100 % pure black, and
+  //  tokyoNeon's 352 m deck with it.
+  //
+  //  In the real world the lower hemisphere at any point in a scene is the
+  //  GROUND: sunlit tarmac, a lava field, a city full of lit windows. Replacing
+  //  the fiction with that is not a cheat, it is the missing half of the IBL, and
+  //  it is free — the cube is already rendered and PMREM'd every time the mood
+  //  changes. Undersides, soffits, bore crowns, gantry bellies, kart floors and
+  //  canopy underhangs all pick it up; nothing pointing at the sky changes,
+  //  because a cosine lobe about +Y integrates to zero over the lower hemisphere.
+  if (uEnvCapture > 0.5) {
+    col = mix(col, uEnvBounce, smoothstep(0.02, -0.12, rd.y));
+  }
+
   gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
 }
 `;
@@ -876,6 +1021,8 @@ export class Sky implements ISubsystem {
       uCityGlow: { value: 0 },
       uEmbers: { value: 0 },
       uLightning: { value: 0 },
+      uEnvBounce: { value: new THREE.Color(0, 0, 0) },
+      uEnvCapture: { value: 0 },
     };
 
     this.material = new THREE.ShaderMaterial({
@@ -1001,6 +1148,7 @@ export class Sky implements ISubsystem {
     u.uNight.value = p.night;
     u.uCityGlow.value = p.cityGlow;
     u.uEmbers.value = p.embers;
+    (u.uEnvBounce.value as THREE.Color).copy(groundBounceRadiance(p));
 
     (this.rayMat.uniforms.uColor.value as THREE.Color).setHex(p.godRayColor);
     this.rayMesh.visible = p.godRays > 0.01;
@@ -1014,8 +1162,21 @@ export class Sky implements ISubsystem {
     if (!this.cubeCam) return;
     const prevAutoClear = this.renderer.autoClear;
     this.renderer.autoClear = true;
-    this.cubeCam.update(this.renderer, this.captureScene);
-    this.renderer.autoClear = prevAutoClear;
+    // The capture mesh SHARES `this.material` with the visible dome, so the
+    // ground-bounce lobe is switched on for the duration of the cube render and
+    // off again immediately. This is the whole mechanism: one uniform, six
+    // faces, no second material, no second program, and the sky the player looks
+    // at is byte-identical to before. `try/finally` because a throw inside
+    // `cubeCam.update` would otherwise leave the visible dome with a bright band
+    // under the horizon for the rest of the session.
+    const u = this.material.uniforms;
+    u.uEnvCapture.value = 1;
+    try {
+      this.cubeCam.update(this.renderer, this.captureScene);
+    } finally {
+      u.uEnvCapture.value = 0;
+      this.renderer.autoClear = prevAutoClear;
+    }
 
     const next = this.pmrem.fromCubemap(this.cubeRT.texture);
     if (this.envRT) this.envRT.dispose();

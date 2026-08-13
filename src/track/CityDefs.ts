@@ -475,6 +475,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     defaults: { wallL: 'concrete', wallR: 'concrete', shoulderSurface: S.OffRoad },
     nodes: BOSTON_NODES,
     props: [
+      // ---- WHICH CITY THIS IS ---------------------------------------------
+      // Not a prop: a DECLARATION. `theme: 'city'` routes to `Props.buildCity()`,
+      // and until this existed that meant one kit — the same 46 m grey setback
+      // tower, the same ring-and-bars neon mast, the same parked cars and the same
+      // three cable trams — on Boston, Taipei, Tokyo and Neon Metropolis alike.
+      // The critic's verdict was that Boston was *"indistinguishable from Neon
+      // Metropolis"*, and the counts agreed: 68 generic towers and 30 neon signs
+      // against 18 Boston-specific instances.
+      //
+      // `districtBrick` selects brick, granite and glass: masonry commercial
+      // blocks with limestone quoins and cornices, a minority of dark glass slabs,
+      // NO neon signage anywhere and no trams. `Props.buildCity` claims this
+      // marker with `takeAuthored` before it emits anything, so it produces no
+      // geometry — see CITY_KITS in `Props.ts`, and `.probe-tmp/props.ts` for why
+      // the probe treats it as a declaration rather than a missing builder.
+      { type: 'districtBrick', t: 0.0, lat: 0 },
       // ---- start / finish -------------------------------------------------
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.006, lat: -29, scale: 1.15 },
@@ -606,6 +622,14 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     defaults: { wallL: 'concrete', wallR: 'concrete', shoulderSurface: S.OffRoad },
     nodes: TAIPEI_NODES,
     props: [
+      // ---- WHICH CITY THIS IS ---------------------------------------------
+      // See the note on Boston's `districtBrick`. `districtMidRise` selects dense
+      // tiled mid-rise: narrow towers with continuous balcony slabs, roof water
+      // tanks and glazed wall tile, plus STACKED SHOPHOUSE SIGNAGE — a column of
+      // lit boards bracketed off a mast — instead of the ring-and-bars neon. The
+      // authored `neonSign` runs below are claimed by that recipe, so the signage
+      // is Taipei's and not Neon Metropolis's. No trams.
+      { type: 'districtMidRise', t: 0.0, lat: 0 },
       // ---- start / finish -------------------------------------------------
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.008, lat: -29, scale: 1.15 },
@@ -714,6 +738,20 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     defaults: { wallL: 'concrete', wallR: 'concrete', shoulderSurface: S.OffRoad },
     nodes: TOKYO_NODES,
     props: [
+      // ---- WHICH CITY THIS IS ---------------------------------------------
+      // See the note on Boston's `districtBrick`. `districtNeon` selects dark
+      // curtain wall carrying full-height SCREEN PANELS and a lit signage crown,
+      // plus both signage recipes: the ring masts and the stacked boards.
+      //
+      // It is also the answer to the critic's darkness finding. Settled
+      // `chase-straight` measured mean luminance 28/255 with 13.8 % of the frame
+      // pure black, and hiding the 78 tower bodies made the frame BRIGHTER by
+      // 1.28 L — the skyline was a net light sink. Props cannot add real lights,
+      // so this kit adds emissive AREA at the scale that matters: two 6 x 17 m
+      // screens and a 4-sided signage crown per tower, a 2.6 m shopfront band
+      // round every tower base at eye level, and a window-lit fraction driven off
+      // the sky preset (0.28 threshold at night against the old fixed 0.42).
+      { type: 'districtNeon', t: 0.0, lat: 0 },
       // ---- start / finish, under the expressway ---------------------------
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.007, lat: -29, scale: 1.15 },

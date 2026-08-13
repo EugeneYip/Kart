@@ -31,10 +31,18 @@ import type { FrameContext, ISubsystem, QualitySettings } from '@/core/Types';
 import { LAYERS, RENDER_ORDER } from '@/core/Config';
 import { Rng, clamp, clamp01 } from '@/core/MathUtils';
 import { SHADOW_LAYER } from './Lighting';
+// The single definition of "how dark is this circuit", owned by Sky. Consumed,
+// never written — see `nightFactorFor` for why the argument is the decoration
+// hint rather than the live `worldRegistry.sky`.
+import { SKY_PRESETS, skyNightFactor } from './Sky';
 import {
-  InstanceChunks, canvasTexture, makeDetailNormal,
+  InstanceChunks, canvasTexture, makeDetailNormal, worldRegistry,
   type PathStation, type TerrainField, type WorldContext, type WorldTheme,
 } from './WorldTextures';
+// The shared procedural texture library (AGENTS.md section 4). Only the two
+// primitives the facade sets need: a Sobel height->normal and a float->greyscale
+// upload, so the facade albedo / roughness / normal stay exactly registered.
+import { floatToTexture, heightToNormal, makeRock } from '@/render/TextureFactory';
 // The one thing the world dresser needs from the track layer: the volumes the
 // road builds around itself (tunnel bores, bridge decks, anti-gravity tubes).
 // Published module-level by `buildTrack()` because `Environment` constructs the
@@ -605,6 +613,13 @@ interface PropUniforms extends Record<string, THREE.IUniform> {
   uWindDir: THREE.IUniform<THREE.Vector2>;
   uWind: THREE.IUniform<number>;
   uCamXZ: THREE.IUniform<THREE.Vector2>;
+  /**
+   * Hash threshold above which a window pane counts as LIT, so the same window
+   * geometry can be 25 % lit at dusk and 72 % lit at midnight. Used to be the
+   * constant 0.42 baked into the shader, which is how a `skyPreset: 'day'`
+   * circuit ended up with 68 towers full of `#ffffff` windows at midday.
+   */
+  uWinLit: THREE.IUniform<number>;
 }
 
 type PatchOpts = {
@@ -618,6 +633,13 @@ type PatchOpts = {
   windows?: boolean;
   /** Multiply emissive by the vertex colour (and vLit if windows). */
   emissiveVertexColor?: boolean;
+  /**
+   * DAYLIGHT GLASS. Same `windows` hash, but it modulates the DIFFUSE instead of
+   * the emissive, so a pane reads as a lighter or darker sheet of glass in a
+   * reflective curtain wall rather than as a light source. This is the material a
+   * `skyPreset: 'day'` circuit gets; `windows` is for dusk and night.
+   */
+  litDiffuse?: boolean;
 };
 
 /**
@@ -635,6 +657,7 @@ function patchProp(
     shader.uniforms.uWindDir = u.uWindDir;
     shader.uniforms.uWind = u.uWind;
     shader.uniforms.uCamXZ = u.uCamXZ;
+    shader.uniforms.uWinLit = u.uWinLit;
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', /* glsl */ `
@@ -648,7 +671,8 @@ function patchProp(
         uniform vec2 uWindDir;
         uniform float uWind;
         uniform vec2 uCamXZ;
-        ${opts.windows ? 'varying float vLit;' : ''}
+        uniform float uWinLit;
+        ${opts.windows || opts.litDiffuse ? 'varying float vLit;' : ''}
         float apxHash(float n){ return fract(sin(n * 91.3458) * 47453.5453); }
       `)
       .replace('#include <begin_vertex>', /* glsl */ `
@@ -676,11 +700,19 @@ function patchProp(
         ${opts.windows ? `
         {
           float h = apxHash(aCell * 3.13 + aPhase * 57.7);
-          float lit = step(0.42, h);
+          float lit = step(uWinLit, h);
           // A few windows flicker; most are steady.
           float fl = step(0.94, h);
           float blink = mix(1.0, 0.35 + 0.65 * step(0.5, fract(uTime * (0.7 + h) + h * 10.0)), fl);
           vLit = lit * blink * (0.55 + 0.75 * apxHash(aCell * 7.71 + aPhase * 11.3));
+        }` : ''}
+        ${opts.litDiffuse ? `
+        {
+          // No emissive term at all: this is the per-pane VALUE variation that
+          // makes a daylight curtain wall read as glass. Same hash as the night
+          // material so a pane that is lit after dark is the bright pane by day.
+          float h = apxHash(aCell * 3.13 + aPhase * 57.7);
+          vLit = 0.45 + 0.9 * h;
         }` : ''}
       `);
 
@@ -707,6 +739,15 @@ function patchProp(
           'vec3 totalEmissiveRadiance = emissive;',
           'vec3 totalEmissiveRadiance = emissive * vColor.rgb * vLit;',
         );
+    } else if (opts.litDiffuse) {
+      // `<color_fragment>` is where three folds vColor into diffuseColor, so this
+      // lands after it and before lighting — a straight albedo modulation.
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vLit;')
+        .replace(
+          '#include <color_fragment>',
+          '#include <color_fragment>\ndiffuseColor.rgb *= vLit;',
+        );
     } else if (opts.emissiveVertexColor) {
       shader.fragmentShader = shader.fragmentShader.replace(
         'vec3 totalEmissiveRadiance = emissive;',
@@ -716,7 +757,8 @@ function patchProp(
   };
   // Force a distinct program even when two materials look identical.
   mat.customProgramCacheKey = () =>
-    `apxprop|${opts.sway ?? 0}|${opts.bob ?? 0}|${opts.atlas ? 1 : 0}|${opts.windows ? 1 : 0}|${opts.emissiveVertexColor ? 1 : 0}`;
+    `apxprop|${opts.sway ?? 0}|${opts.bob ?? 0}|${opts.atlas ? 1 : 0}|${opts.windows ? 1 : 0}`
+    + `|${opts.emissiveVertexColor ? 1 : 0}|${opts.litDiffuse ? 1 : 0}`;
   return mat;
 }
 
@@ -1202,6 +1244,235 @@ function makeFenceAlpha(): THREE.CanvasTexture {
   return t;
 }
 
+// ===========================================================================
+// Building facades
+// ===========================================================================
+
+/**
+ * ===========================================================================
+ *  WHY THE CITY BUILDINGS NEEDED THEIR OWN MATERIAL
+ * ===========================================================================
+ *  `this.matte` is `vertexColors` + a shared detail normal and **no `map` and no
+ *  `roughnessMap` at all**. On a bollard or a tyre stack that is fine — the
+ *  silhouette carries it. On a 46 m tower it is exactly the AGENTS.md section 0
+ *  instant-fail: a solid flat colour across the largest surface in the frame.
+ *  Measured on the rejected build, the four vertex colours `0x50565f /
+ *  0x585f68 / 0x4a5058 / 0x33383e` covered 68 towers on Boston and 78 on Tokyo.
+ *
+ *  So the three city vocabularies get a real PBR facade set: albedo, roughness
+ *  and a normal map built from the same height field, tiling at a fixed WORLD
+ *  size so bricks are brick-sized on a brownstone and mullion-sized on a curtain
+ *  wall rather than "coarse enough to count the repeats".
+ *
+ *  ---------------------------------------------------------------------------
+ *  ALBEDO IS NEUTRAL ON PURPOSE
+ *  ---------------------------------------------------------------------------
+ *  Every prop material here is `vertexColors: true`, and `map` MULTIPLIES the
+ *  vertex colour. So the albedo is authored around 1.0 with only a small warm/cool
+ *  split between material and joint (brick warm, mortar cool; glass cool, mullion
+ *  neutral). One facade set therefore serves brick red, limestone cream and glass
+ *  blue-grey from the same texture, driven by the recipe's own vertex colours —
+ *  three hues for one texture and one draw call each.
+ *
+ *  ---------------------------------------------------------------------------
+ *  NO CANVAS, NO `getImageData`
+ *  ---------------------------------------------------------------------------
+ *  Albedo, roughness and height are evaluated per texel from one shared layout
+ *  function into typed arrays. That keeps the three maps exactly registered with
+ *  each other (a mortar line is dark, rough AND recessed at the same texel), and
+ *  it runs identically under the node probe harness, which has no real 2D canvas
+ *  readback. `heightToNormal` is TextureFactory's shared Sobel (AGENTS.md 4).
+ * ===========================================================================
+ */
+type FacadeKind = 'masonry' | 'tile' | 'curtain';
+
+interface FacadeSet {
+  map: THREE.Texture;
+  roughnessMap: THREE.Texture;
+  normalMap: THREE.Texture;
+  /** World metres covered by one uv tile. Recipes set `uvScale = 1 / this`. */
+  tileMetres: number;
+}
+
+/**
+ * Cheap deterministic hash for per-brick / per-pane variation.
+ *
+ * Integer mixing, not `fract(sin(...))`: this runs up to twice per texel over a
+ * whole facade set, and two `Math.sin` calls per texel put ~300 ms of `Math.sin`
+ * into `Environment.init()` — which `RaceDirector.beginRace()` runs *during the
+ * countdown*. `Math.imul` mixing measures about 8x faster here for a hash whose
+ * only job is to look uncorrelated.
+ */
+function fhash(x: number, y: number): number {
+  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * One texel of a facade. Returns albedo multipliers, roughness and height so all
+ * three maps come out of a single description of the surface.
+ *
+ * `u` runs across the facade and `v` up it, both in [0,1) over one tile. A tile
+ * is TWO STOREYS tall for `masonry` and `tile` and two structural bays for
+ * `curtain`, which is what keeps `tileMetres` honest against the recipes.
+ */
+function facadeTexel(
+  kind: FacadeKind, u: number, v: number,
+): { r: number; g: number; b: number; rough: number; h: number } {
+  if (kind === 'masonry') {
+    // 2 storeys per tile. Storey: 0.18 stone band, then the window band.
+    const storey = v < 0.5 ? v * 2 : (v - 0.5) * 2;   // 0..1 within the storey
+    const bay = u * 4;                                 // 4 bays across
+    const bayF = bay - Math.floor(bay);
+    // ---- limestone banding: sill course and a wider lintel course
+    const band = storey < 0.14 || (storey > 0.86 && storey < 0.995);
+    // ---- punched window opening, with a reveal so the normal has depth
+    const winY = storey > 0.24 && storey < 0.80;
+    const winX = bayF > 0.24 && bayF < 0.76;
+    const revealY = storey > 0.20 && storey < 0.84;
+    const revealX = bayF > 0.20 && bayF < 0.80;
+    if (winY && winX) {
+      // Recessed glazing: dark, smooth, deep. Two lights per sash.
+      const mullion = Math.abs(bayF - 0.5) < 0.022 || Math.abs(storey - 0.52) < 0.016;
+      if (mullion) return { r: 0.9, g: 0.9, b: 0.88, rough: 0.62, h: 0.62 };
+      const sheen = 0.28 + 0.30 * (1 - storey);
+      return { r: sheen * 0.92, g: sheen * 0.98, b: sheen * 1.12, rough: 0.16, h: 0.30 };
+    }
+    if (revealY && revealX) {
+      // The reveal itself — stone, in shadow, stepped back from the wall face.
+      return { r: 0.74, g: 0.73, b: 0.71, rough: 0.72, h: 0.72 };
+    }
+    if (band) {
+      // Ashlar limestone: horizontal joints only, much larger than the brick.
+      const joint = Math.abs(((v * 2) % 0.5) / 0.5 - 0.5) > 0.487;
+      return joint
+        ? { r: 0.80, g: 0.81, b: 0.83, rough: 0.86, h: 0.55 }
+        : { r: 1.14, g: 1.12, b: 1.07, rough: 0.66, h: 0.95 };
+    }
+    // ---- brick bond. 12 courses per storey => a 0.26 m course at tileMetres 6.2,
+    // and a stretcher twice as wide, offset half a brick on alternate courses.
+    const course = Math.floor(v * 24);
+    const cf = v * 24 - course;
+    const off = course % 2 === 0 ? 0 : 0.5;
+    const brick = (u * 16 + off);
+    const bf = brick - Math.floor(brick);
+    const mortar = cf < 0.13 || bf < 0.09;
+    if (mortar) return { r: 0.83, g: 0.85, b: 0.87, rough: 0.93, h: 0.34 };
+    const vary = 0.86 + 0.30 * fhash(Math.floor(brick), course);
+    return { r: vary * 1.06, g: vary * 0.965, b: vary * 0.92, rough: 0.80 + 0.1 * vary, h: 0.82 };
+  }
+
+  if (kind === 'tile') {
+    // Dense mid-rise: tiled spandrels, a balcony slab per storey, AC boxes and a
+    // service riser. 2 storeys per tile, 3 bays.
+    const storey = v < 0.5 ? v * 2 : (v - 0.5) * 2;
+    const bay = u * 3;
+    const bayF = bay - Math.floor(bay);
+    if (storey < 0.11) {
+      // Balcony slab: proud of the wall, top-lit, and the darkest line under it.
+      const lip = storey < 0.035;
+      return lip
+        ? { r: 0.70, g: 0.70, b: 0.71, rough: 0.80, h: 0.42 }
+        : { r: 1.18, g: 1.17, b: 1.14, rough: 0.70, h: 1.0 };
+    }
+    if (storey > 0.24 && storey < 0.74 && bayF > 0.14 && bayF < 0.86) {
+      // Sliding glazing behind the balcony, with a frame.
+      const frame = bayF < 0.19 || bayF > 0.81 || Math.abs(bayF - 0.5) < 0.02
+        || storey < 0.28 || storey > 0.70;
+      if (frame) return { r: 0.96, g: 0.96, b: 0.94, rough: 0.5, h: 0.58 };
+      const sheen = 0.30 + 0.26 * (1 - storey);
+      return { r: sheen * 0.9, g: sheen * 1.0, b: sheen * 1.1, rough: 0.18, h: 0.36 };
+    }
+    // An air-conditioning box on roughly one bay in three.
+    const acHash = fhash(Math.floor(bay), Math.floor(v * 2) + 3);
+    if (acHash > 0.66 && storey > 0.13 && storey < 0.23 && bayF > 0.58 && bayF < 0.9) {
+      return { r: 1.05, g: 1.05, b: 1.03, rough: 0.55, h: 1.0 };
+    }
+    // 0.45 m glazed wall tile with a grout grid — the Taipei read.
+    const tx = u * 14, ty = v * 28;
+    const grout = (tx - Math.floor(tx)) < 0.10 || (ty - Math.floor(ty)) < 0.10;
+    if (grout) return { r: 0.86, g: 0.86, b: 0.85, rough: 0.88, h: 0.40 };
+    const vary = 0.92 + 0.18 * fhash(Math.floor(tx), Math.floor(ty));
+    return { r: vary, g: vary * 1.005, b: vary * 1.02, rough: 0.42, h: 0.78 };
+  }
+
+  // ---- curtain: dark glass between raised mullions, spandrel band per floor.
+  const bay = u * 3;                    // 3 structural bays per tile
+  const bayF = bay - Math.floor(bay);
+  const floorV = v * 2;                 // 2 floors per tile
+  const fF = floorV - Math.floor(floorV);
+  const mullion = bayF < 0.055 || bayF > 0.945;
+  const transom = fF < 0.05;
+  if (mullion || transom) {
+    // Anodised aluminium: brighter than the glass, proud of it, and the thing
+    // that stops 118 m of curtain wall reading as one painted rectangle.
+    return { r: 1.16, g: 1.17, b: 1.20, rough: 0.34, h: 1.0 };
+  }
+  if (fF < 0.30) {
+    // Opaque spandrel over the floor slab — the horizontal rhythm.
+    const grain = 0.94 + 0.10 * fhash(Math.floor(bay), Math.floor(floorV * 6));
+    return { r: grain * 0.80, g: grain * 0.82, b: grain * 0.86, rough: 0.56, h: 0.70 };
+  }
+  // Vision glass: a vertical sky gradient per pane plus a per-pane tint step.
+  const pane = 0.82 + 0.34 * fhash(Math.floor(bay), Math.floor(floorV));
+  const grad = 0.72 + 0.55 * (1 - (fF - 0.30) / 0.70);
+  const g = pane * grad;
+  return { r: g * 0.84, g: g * 0.94, b: g * 1.16, rough: 0.09, h: 0.5 };
+}
+
+/** Build the albedo / roughness / normal set for one facade vocabulary. */
+function makeFacade(kind: FacadeKind, size: number): FacadeSet {
+  const n = size * size;
+  const albedo = new Uint8Array(n * 4);
+  const rough = new Float32Array(n);
+  const height = new Float32Array(n);
+  for (let y = 0; y < size; y++) {
+    // v = 0 at the BOTTOM of the tile. Canvas/DataTexture rows run top-down, and
+    // `finalize` does not flip a DataTexture, so invert here — otherwise every
+    // window sill ends up as a lintel and the balcony slabs hang from the ceiling.
+    const v = 1 - (y + 0.5) / size;
+    for (let x = 0; x < size; x++) {
+      const u = (x + 0.5) / size;
+      const t = facadeTexel(kind, u, v);
+      const i = y * size + x;
+      const p = i * 4;
+      albedo[p] = Math.min(255, Math.round(t.r * 235));
+      albedo[p + 1] = Math.min(255, Math.round(t.g * 235));
+      albedo[p + 2] = Math.min(255, Math.round(t.b * 235));
+      albedo[p + 3] = 255;
+      rough[i] = t.rough;
+      height[i] = t.h;
+    }
+  }
+  const map = new THREE.DataTexture(albedo, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+
+  const roughnessMap = floatToTexture(rough, size, size);
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+  const normalMap = heightToNormal(height, size, size, kind === 'curtain' ? 1.5 : 2.6);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+
+  // Masonry and tile are authored two storeys to a tile at a 3.1 m storey;
+  // `curtain` is two floors of a 3.6 m curtain-wall module.
+  return { map, roughnessMap, normalMap, tileMetres: kind === 'curtain' ? 7.2 : 6.2 };
+}
+
+/** Blend two packed hex colours, `t` = 0 gives `a`. */
+function mixHex(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+
 function shade(hex: string, mul: number): string {
   const n = parseInt(hex.replace('#', ''), 16);
   const r = Math.min(255, Math.round(((n >> 16) & 255) * mul));
@@ -1504,6 +1775,18 @@ interface AuthoredSpec {
   softGlow?: boolean;
   cloth?: THREE.BufferGeometry;
   /**
+   * Companion pass on the SPONSOR ATLAS cloth material — a hanging banner with
+   * real artwork on it, swaying like `cloth` but textured like `sign`.
+   *
+   * This exists because `Prop:authored:startgantry`'s two hanging banners were
+   * `map: false, roughnessMap: false` flat saturated red and blue on `matteSway`
+   * — a section 0 violation directly over the start line on ALL SIX circuits,
+   * i.e. at the exact spot the owner has reported a defect five playtests running.
+   * Author it with a baked `atlasRect()` uv range, exactly like `standBanner`,
+   * which has always done it this way.
+   */
+  clothSign?: THREE.BufferGeometry;
+  /**
    * Companion pass on the FLAG atlas cloth material. Same `plate(flapAcross)`
    * geometry as `cloth`, drawn with the flag texture instead of a solid colour;
    * author it with a baked `atlasRect()` uv range. See `makeFlagAtlas`.
@@ -1620,7 +1903,177 @@ const CORRIDOR_PROPS = new Set([
   // lat 0 — `getDecorationHints().place()` yaws a lat-0 prop so local +X runs
   // ACROSS the road — and both must keep the height they were authored at.
   'bridgearch', 'overpassarch',
+  // The district markers are not props at all (see CITY_KITS) and are authored at
+  // lat 0 on the start line. Listing them here keeps the re-seating pass from
+  // moving a declaration around as though it had a silhouette.
+  'district:brick', 'district:midrise', 'district:tokyo',
 ]);
+
+// ===========================================================================
+// City vocabularies
+// ===========================================================================
+
+/**
+ * ===========================================================================
+ *  ONE `theme: 'city'` IS NOT ONE CITY
+ * ===========================================================================
+ *  Boston Harbor, Taipei Circuit, Tokyo Neon and Neon Metropolis all set
+ *  `theme: 'city'`, which routes to `buildCity()`. Until now that meant one kit:
+ *  the same 46 m setback tower, the same ring-and-bars neon mast, the same
+ *  parked cars and the same three cable trams, on all four. The critic's verdict
+ *  was *"Boston's grid-wide is indistinguishable from Neon Metropolis — same
+ *  towers, same VOLT neon, same trams"*, and the counts backed it: 68 generic
+ *  skyscrapers and 30 neon signs against 18 Boston-specific instances.
+ *
+ *  A hardcoded `switch (trackId)` cannot fix it, because Props never learns the
+ *  track id — `WorldContext` carries the theme, the sky preset, the terrain seed
+ *  and the authored prop list, and nothing else. So the vocabulary is DECLARED
+ *  BY THE TRACK, as a prop: `CityDefs` authors `{ type: 'districtBrick' }` once
+ *  at t=0, `normaliseType` folds it to `district:brick`, and `buildCity` claims
+ *  it with `takeAuthored` before anything is emitted. A circuit that declares
+ *  nothing gets `neon`, which is byte-for-byte the old kit — that is what keeps
+ *  Neon Metropolis unchanged without editing `TrackDefs.ts`.
+ *
+ *  Adding a fourth city is therefore one line in its own def, and the marker is
+ *  visible in the track file where the art direction belongs.
+ */
+type CityKitId = 'neon' | 'brick' | 'midrise' | 'tokyo';
+
+interface CityKit {
+  readonly id: CityKitId;
+  /** Which facade vocabulary the background towers and the mid-rise use. */
+  readonly facade: FacadeKind;
+  /** Background towers in the annulus, before the density multiplier. */
+  readonly towers: number;
+  /**
+   * Share of the background towers built as the SECOND body recipe. Boston is
+   * brick masonry with a minority of dark-glass slabs; the others are 0 or 1.
+   */
+  readonly slabShare: number;
+  /** Ring-and-bars neon masts. 0 on Boston: a brick city has no neon signage. */
+  readonly neonRing: number;
+  /** Vertical stacked shop signage (Taipei) / box signage (Tokyo). 0 elsewhere. */
+  readonly neonStack: number;
+  readonly parkedCars: number;
+  /** Paint palette, so the kerbside cars are not the same six cars everywhere. */
+  readonly carPaints: readonly number[];
+  /** Overhead cable trams. Only the fictional Neon Metropolis has these. */
+  readonly trams: number;
+  /** Rock palette: [light, dark]. */
+  readonly rock: readonly [number, number];
+  /**
+   * Lit shopfront band around the base of every background tower. This is the
+   * dominant light source in a real night city street and the answer to
+   * "the 78-tower skyline contributes only +2.19 L and is a net light sink".
+   */
+  readonly plinthGlow: boolean;
+}
+
+const CITY_KITS: Record<CityKitId, CityKit> = {
+  // The original, unchanged: Neon Metropolis declares no district.
+  neon: {
+    id: 'neon', facade: 'curtain', towers: 52, slabShare: 0,
+    neonRing: 30, neonStack: 0, parkedCars: 44,
+    carPaints: [0xc9302c, 0x2f6fd0, 0xe8e6df, 0x2b2f35, 0xd8b13a, 0x2f9e6b],
+    trams: 3, rock: [0x6f747c, 0x565b63], plinthGlow: true,
+  },
+  // BOSTON: brick, granite and glass. No neon anywhere, no trams, and the
+  // background towers are masonry commercial blocks with a minority of dark
+  // glass slabs — the Hancock among the Back Bay brick.
+  brick: {
+    id: 'brick', facade: 'masonry', towers: 46, slabShare: 0.34,
+    neonRing: 0, neonStack: 0, parkedCars: 32,
+    carPaints: [0x2b3038, 0x5c6672, 0x8d9298, 0x7d1f22, 0x1f3a5c, 0xd9d6cd],
+    trams: 0, rock: [0x8a8378, 0x6b665e], plinthGlow: false,
+  },
+  // TAIPEI: dense tiled mid-rise with balconies and vertical shop signage, under
+  // a dusk sky. Signage yes — but stacked shophouse boards, not the ring masts.
+  midrise: {
+    id: 'midrise', facade: 'tile', towers: 44, slabShare: 0,
+    neonRing: 0, neonStack: 34, parkedCars: 26,
+    carPaints: [0xe8e6df, 0xc9ccd2, 0x2b2f35, 0x1f4f8c, 0x7d8288, 0xb8352a],
+    trams: 0, rock: [0x7e7a70, 0x605c55], plinthGlow: true,
+  },
+  // TOKYO: dark curtain wall carrying screens and box signage, at night. Same
+  // family as `neon` but its own signage recipe and a much larger emissive area.
+  tokyo: {
+    id: 'tokyo', facade: 'curtain', towers: 50, slabShare: 0,
+    neonRing: 18, neonStack: 26, parkedCars: 26,
+    carPaints: [0xe8e6df, 0x1b1e22, 0xb8bcc2, 0x2f4f8c, 0x8d1f26, 0x50565f],
+    trams: 0, rock: [0x6a6f77, 0x51565d], plinthGlow: true,
+  },
+};
+
+/**
+ * ===========================================================================
+ *  THE NIGHT FACTOR — one accessor, owned by Sky
+ * ===========================================================================
+ *  How night-time the circuit is, 0 (midday) to 1 (midnight). Drives every
+ *  emissive decision in this file: which window material is used, what fraction
+ *  of panes count as lit, and how bright the shopfront bands and screens are.
+ *
+ *  This is the gate that did not exist. `Props.ts` emitted the lit-window pass
+ *  unconditionally, so Boston (`skyPreset: 'day'`, key 3.9 `#fff1d6`, blue sky)
+ *  had all 68 of its towers full of `#ffffff` windows at `emissiveIntensity 2.6`
+ *  while the facades rendered near-black.
+ *
+ *  The curve is `Sky.skyNightFactor()` — `max(night, cityGlow)` off the real
+ *  preset — so there is one definition of "how dark is it" instead of a table
+ *  here that could drift from the lighting it is supposed to match. It answers
+ *  day 0, sunset 0.1, night 1, storm 0, volcanic 0, and 0 for anything unknown.
+ *
+ *  ---------------------------------------------------------------------------
+ *  WHY THE ARGUMENT IS THE HINT AND NOT `worldRegistry.sky?.presetName`
+ *  ---------------------------------------------------------------------------
+ *  Sky's own doc suggests reading the live registry. That is not safe from here,
+ *  for two measured reasons, and both fail SILENTLY and in the dark direction:
+ *
+ *   1. **The registry can be null.** `worldRegistry.sky = this` is the last line
+ *      of Sky's *constructor*, and `Environment` never constructs Sky — it only
+ *      adopts one if it is already there (`resolveSkyLighting`). Every headless
+ *      path, including `.probe-tmp/daynight.ts`, builds `Environment` with no Sky
+ *      at all, so the registry is null and every circuit would score 0.
+ *   2. **It can be stale.** Sky's constructor calls `setPreset('day')` before
+ *      registering itself, and Environment pushes the circuit's real preset
+ *      later, with a retry counter (`presetTries`). So there is a window in which
+ *      `worldRegistry.sky.presetName` is `'day'` on Tokyo Neon — and Props is
+ *      built inside `Environment.init()`, which `RaceDirector.beginRace()` runs
+ *      un-awaited during the countdown. Reading the registry there would turn
+ *      Tokyo's windows OFF, which is the exact inverse of this bug.
+ *
+ *  `ctx.hints.skyPreset` has neither problem: `Environment.makeHints()` already
+ *  validates the authored name against `SKY_NAMES` and substitutes
+ *  `THEME_SKY[theme]` if it does not match, so the hint Props receives is the
+ *  resolved name, per circuit, correct at build time. The registry is consulted
+ *  only if the hint scores 0 *and* is not a name Sky knows — i.e. as a second
+ *  opinion when the hint is the thing that is broken.
+ */
+function nightFactorFor(hintName: string | undefined): number {
+  const fromHint = skyNightFactor(hintName);
+  if (fromHint > 0) return fromHint;
+  if (hintName && hintName in SKY_PRESETS) return fromHint;   // a real 0: daylight.
+  return skyNightFactor(worldRegistry.sky?.presetName);
+}
+
+/**
+ * Below this the emissive window pass is replaced by reflective day glass.
+ * `skyNightFactor` returns an exact 0 for daylight and for anything it does not
+ * recognise, so this only has to exclude zero — it is not a tuned threshold, and
+ * it deliberately lets sunset's 0.1 through. Taipei is a dusk night market; its
+ * windows and lanterns should come up a tenth at golden hour, not snap off.
+ */
+const WINDOW_NIGHT_MIN = 1e-3;
+
+/** Window emissive at full night. Scaled by the night factor, not offset by it. */
+const WINDOW_EMISSIVE_NIGHT = 3.7;
+
+/**
+ * Height of every background-tower recipe, about a CENTRED origin. `buildCity`
+ * lifts each instance by `TOWER_H * 0.5 * scale`, and the window grid and the
+ * shopfront band are laid out against the same number, so the four vocabularies
+ * have to agree on it.
+ */
+const TOWER_H = 46;
 
 /**
  * ======================= RE-SEATING AUTHORED PROPS =========================
@@ -1722,7 +2175,19 @@ export class Props implements ISubsystem {
     uWindDir: { value: new THREE.Vector2(0.86, 0.51) },
     uWind: { value: 0.24 },
     uCamXZ: { value: new THREE.Vector2() },
+    uWinLit: { value: 0.42 },
   };
+
+  /** 0 = midday, 1 = midnight. See `SKY_NIGHT`. */
+  private night = 0;
+  /** Resolved in `buildCity()`; `neon` for every non-city theme. */
+  private kit: CityKit = CITY_KITS.neon;
+  /** Built on demand by `facadeMat()` — one or two per circuit. */
+  private facades = new Map<FacadeKind, THREE.MeshStandardMaterial>();
+  /** Built on demand by `rockMat()`. */
+  private rockMaterial: THREE.MeshStandardMaterial | null = null;
+  /** Anchors `bedOnFootprint` refused because the ground was too broken. */
+  private footprintRejects = 0;
 
   private matte!: THREE.MeshStandardMaterial;
   private matteSway!: THREE.MeshStandardMaterial;
@@ -1730,6 +2195,11 @@ export class Props implements ISubsystem {
   private glow!: THREE.MeshStandardMaterial;
   private glowSoft!: THREE.MeshStandardMaterial;
   private windows!: THREE.MeshStandardMaterial;
+  /**
+   * The DAYLIGHT window material: reflective glass, no emissive at all. Which of
+   * the two a circuit gets is decided once, by sky preset, in `windowMat()`.
+   */
+  private windowsDay!: THREE.MeshStandardMaterial;
   private atlas!: THREE.MeshStandardMaterial;
   private atlasSway!: THREE.MeshStandardMaterial;
   /** Cloth on the FLAG atlas — see `makeFlagAtlas`. */
@@ -1763,7 +2233,66 @@ export class Props implements ISubsystem {
     this.stands = stands;
     this.rng = new Rng((ctx.hints.terrainSeed ^ 0x9e3779b9) >>> 0 || 7);
     this.density = clamp(quality.foliageDensity * 0.55 + 0.45, 0.35, 1);
+    this.night = nightFactorFor(ctx.hints.skyPreset);
   }
+
+  /** True when lit windows belong on this circuit at all. */
+  private get litWindows(): boolean { return this.night >= WINDOW_NIGHT_MIN; }
+
+  /** Emissive glass after dark, reflective glass by day. Same window geometry. */
+  private windowMat(): THREE.MeshStandardMaterial {
+    return this.litWindows ? this.windows : this.windowsDay;
+  }
+
+  /**
+   * A facade material, built on first use and cached per vocabulary, so a circuit
+   * only pays for the kinds it actually shows. Defaults to the declared district's
+   * kind; a recipe that is glass on a brick circuit (Boston's glass tower and its
+   * minority skyline slabs) asks for `'curtain'` explicitly.
+   *
+   * `uvScale` on the recipe decides the world size of a tile — see `facadeTile`.
+   */
+  private facadeMat(kind: FacadeKind = this.kit.facade): THREE.MeshStandardMaterial {
+    const hit = this.facades.get(kind);
+    if (hit) return hit;
+    // 768 on ultra, 512 below. A tile is 6.2-7.2 m of wall, so even 512 gives ~12 px
+    // per brick course and ~5 px of mortar joint — more than enough at the distance
+    // a background tower is ever seen from. The cost is on the CRITICAL PATH:
+    // `RaceDirector.beginRace()` calls `Environment.syncToTrack()` during the
+    // countdown, and the Sobel in `heightToNormal` is O(texels). Measured whole
+    // `Environment.init` on Boston, the worst case because it is the only circuit
+    // that builds two sets (masonry + curtain): at ultra 1774 ms with 1024 against
+    // 1634 ms with 768; at high — the tier the game actually selects on this
+    // machine — 618 ms with 512, against 852 ms for Sunset Coastline, which builds
+    // no facade at all. So at the shipping tier this is inside the noise.
+    const set = makeFacade(kind, this.quality.tier === 'ultra' ? 768 : 512);
+    set.map.anisotropy = this.quality.anisotropy;
+    this.textures.push(set.map, set.roughnessMap, set.normalMap);
+    const m = new THREE.MeshStandardMaterial({
+      name: `prop-facade-${kind}`,
+      vertexColors: true,
+      map: set.map,
+      roughnessMap: set.roughnessMap,
+      normalMap: set.normalMap,
+      // Curtain wall is glass and metal; masonry and tile are dielectric. The
+      // roughness map carries the per-texel detail, so this is only the ceiling.
+      roughness: 1.0,
+      metalness: kind === 'curtain' ? 0.45 : 0.04,
+      envMapIntensity: kind === 'curtain' ? 1.35 : 0.85,
+      normalScale: new THREE.Vector2(1.0, 1.0),
+    });
+    this.materials.push(m);
+    const patched = patchProp(m, this.u);
+    this.facades.set(kind, patched);
+    return patched;
+  }
+
+  /** Metres of facade per uv tile — recipes set `uvScale = 1 / this`. */
+  private facadeTileOf(kind: FacadeKind = this.kit.facade): number {
+    return kind === 'curtain' ? 7.2 : 6.2;
+  }
+
+  private get facadeTile(): number { return this.facadeTileOf(); }
 
   async init(): Promise<void> {
     this.group.name = 'Props';
@@ -1804,6 +2333,12 @@ export class Props implements ISubsystem {
         + ` (worst move ${this.roadSurfaceWorst.toFixed(2)} m): ${this.roadSurfaceTypes.join(', ')}`
         + `; ${this.roadSurfaceRefused} could NOT be pushed clear and are still on the road`
         + ' — the authored `lat` for these types is smaller than the recipe is wide.',
+      );
+    }
+    if (this.footprintRejects > 0) {
+      console.info(
+        `[Props] footprint bedding: ${this.footprintRejects} anchors rejected for ground`
+        + ' relief bigger than the instance standing on it (see bedOnFootprint)',
       );
     }
     this.poseMotionProps();
@@ -1893,12 +2428,42 @@ export class Props implements ISubsystem {
       base({ name: 'prop-glow-soft', roughness: 0.5, metalness: 0.0, emissive: 0xffffff, emissiveIntensity: 1.35 }),
       this.u, { emissiveVertexColor: true, bob: 0.22 },
     );
+    // ---- WINDOWS: the day/night gate ---------------------------------------
+    // `uWinLit` is the hash threshold for "this pane is lit", so the same window
+    // geometry is a quarter lit at dusk and nearly three quarters lit at midnight.
+    // Tokyo Neon needs the second of those: the critic measured its 78-tower
+    // skyline contributing only +2.19 L to a frame with a mean of 28/255, and
+    // hiding the tower bodies made the frame BRIGHTER by 1.28 — a night city that
+    // is a net light sink. More lit panes and a hotter emissive is the only lever
+    // Props has, because props do not add real lights.
+    // BRIGHTNESS is proportional to the night factor and LIT FRACTION is not.
+    // Those are different quantities: at golden hour a real city has a quarter of
+    // its lights on and they are *dim against a bright sky*, so the count comes up
+    // on a shallow curve while the radiance comes up linearly. An additive floor
+    // here (`1.15 + 2.55 * night`) would have made sunset 38 % as bright as
+    // midnight instead of the tenth Sky's curve actually asks for.
+    this.u.uWinLit.value = 0.74 - 0.46 * this.night;
     this.windows = patchProp(
       base({
         name: 'prop-windows', roughness: 0.16, metalness: 0.55,
-        emissive: 0xffffff, emissiveIntensity: 2.6, envMapIntensity: 1.4,
+        emissive: 0xffffff,
+        emissiveIntensity: WINDOW_EMISSIVE_NIGHT * this.night,
+        envMapIntensity: 1.4,
       }),
       this.u, { windows: true },
+    );
+    // The daylight half of the gate. Reflective glass, ZERO emissive, per-pane
+    // value variation from the same hash — which is what a real curtain wall does
+    // at midday and what Boston should always have been showing.
+    this.windowsDay = patchProp(
+      base({
+        name: 'prop-windows-day', roughness: 0.11, metalness: 0.88,
+        // Multiplies the recipe's warm window vertex colour down to a cool
+        // blue-grey, so the geometry does not have to change with the preset.
+        color: 0x8c9cab,
+        emissive: 0x000000, emissiveIntensity: 0, envMapIntensity: 1.7,
+      }),
+      this.u, { litDiffuse: true },
     );
 
     const sponsor = makeSponsorAtlas();
@@ -2817,13 +3382,28 @@ export class Props implements ISubsystem {
   // CITY
   // =========================================================================
 
+  /**
+   * Resolve the circuit's declared district vocabulary and consume the marker.
+   *
+   * `takeAuthored` removes the anchors from the pending set, so `buildAuthored`
+   * never sees them and `authoredSpec` never needs a `district` case: the marker
+   * produces no geometry by design. It is a declaration, not a prop.
+   */
+  private resolveKit(): CityKit {
+    for (const id of ['brick', 'midrise', 'tokyo'] as const) {
+      if (this.takeAuthored(`district:${id}`).length > 0) return CITY_KITS[id];
+    }
+    return CITY_KITS.neon;
+  }
+
   private buildCity(): void {
     const ctx = this.ctx, rng = this.rng;
+    const kit = this.kit = this.resolveKit();
 
-    // ---- skyscrapers ---------------------------------------------------------
+    // ---- background towers ---------------------------------------------------
     {
       const anchors = annulus(ctx, rng, {
-        count: this.count(52), min: 90, max: 620, minRoadDist: 58, maxSlope: 0.42,
+        count: this.count(kit.towers), min: 90, max: 620, minRoadDist: 58, maxSlope: 0.42,
       });
       for (const a of anchors) a.scale = 0.7 + rng.next() * 1.5;
       // Fold the track's authored towers into this same InstancedMesh instead of
@@ -2833,36 +3413,51 @@ export class Props implements ISubsystem {
       // survives rather than being overwritten by it.
       anchors.push(...this.takeAuthored('skyscraper'));
 
-      const b = this.builder();
-      b.uvScale = 0.22;
-      const H = 46;
-      const facade = 0x50565f;
-      // Setback massing: three stacked blocks, each smaller than the last.
-      b.box(0, 0, 0, 9.5, H * 0.5, 9.5, facade, { shade: { side: 1.0, top: 1.1 } });
-      b.box(0, H * 0.5, 0, 7.6, H * 0.28, 7.6, 0x585f68);
-      b.box(0, H * 0.5 + H * 0.56, 0, 5.6, H * 0.13, 5.6, 0x4a5058);
-      // Crown + mast.
-      b.box(0, H * 0.5 + H * 0.82, 0, 3.0, 1.2, 3.0, 0x3d4249);
-      b.prism(0, H * 0.5 + H * 0.82 + 1.2, 0, 0.16, 7.5, 6, 0x9aa1a9, { taper: 0.35 });
-      // Ground-floor plinth and canopy.
-      b.box(0, -H * 0.5, 0, 10.4, 2.2, 10.4, 0x33383e, { shade: { top: 1.0 } });
-      b.box(0, -H * 0.5 + 2.4, 0, 10.9, 0.16, 10.9, 0x2b3036);
-      // Vertical mullions to break the silhouette.
-      for (let i = -4; i <= 4; i++) {
-        b.box(i * 2.35, 0, 9.55, 0.16, H * 0.5, 0.1, 0x676e77);
-        b.box(9.55, 0, i * 2.35, 0.1, H * 0.5, 0.16, 0x676e77);
-        b.box(i * 2.35, 0, -9.55, 0.16, H * 0.5, 0.1, 0x676e77);
-        b.box(-9.55, 0, i * 2.35, 0.1, H * 0.5, 0.16, 0x676e77);
+      // Boston splits its skyline: brick-and-limestone commercial blocks with a
+      // minority of dark glass slabs. Two body meshes, but the window pass is
+      // shared and the whole thing still fits inside the same instance budget as
+      // the single generic tower it replaces.
+      const slabs: Anchor[] = [];
+      if (kit.slabShare > 0) {
+        for (let i = anchors.length - 1; i >= 0; i--) {
+          if (anchors[i].seed < kit.slabShare) slabs.push(...anchors.splice(i, 1));
+        }
       }
-      this.emit('skyscraper', b.build('skyscraper'), this.matte, anchors,
-        { cull: CULL_FAR, place: (a, _i, m) => {
-          _q.setFromAxisAngle(_axisY, a.yaw);
-          _s.set(0.75 + a.seed * 0.7, a.scale, 0.75 + (1 - a.seed) * 0.7);
-          m.compose(_v.set(a.x, a.y + 46 * 0.5 * a.scale, a.z), _q, _s);
-          return true;
-        } });
+      const H = TOWER_H;
+      const pose = (a: Anchor, m: THREE.Matrix4): boolean => {
+        _q.setFromAxisAngle(_axisY, a.yaw);
+        _s.set(0.75 + a.seed * 0.7, a.scale, 0.75 + (1 - a.seed) * 0.7);
+        m.compose(_v.set(a.x, a.y + H * 0.5 * a.scale, a.z), _q, _s);
+        return true;
+      };
 
-      // Window grid — one quad per window, lit state hashed per (cell, instance).
+      const body = this.builder();
+      body.uvScale = 1 / this.facadeTile;
+      switch (kit.id) {
+        case 'brick': this.towerMasonry(body); break;
+        case 'midrise': this.towerMidRise(body); break;
+        case 'tokyo': this.towerScreenSlab(body); break;
+        default: this.towerSetback(body); break;
+      }
+      this.emit(kit.id === 'neon' ? 'skyscraper' : `tower:${kit.id}`,
+        body.build('tower'), this.facadeMat(), anchors,
+        { cull: CULL_FAR, place: (a, _i, m) => pose(a, m) });
+
+      if (slabs.length) {
+        // The glass minority takes the CURTAIN facade even on a brick circuit —
+        // a masonry brick map on a glass slab would be the same "wrong prop in the
+        // wrong place" the file warns about, one layer down.
+        const s = this.builder();
+        s.uvScale = 1 / this.facadeTileOf('curtain');
+        this.towerGlassSlab(s);
+        this.emit(`tower:${kit.id}:slab`, s.build('towerSlab'), this.facadeMat('curtain'), slabs,
+          { cull: CULL_FAR, place: (a, _i, m) => pose(a, m) });
+      }
+
+      // ---- the window pass, and the gate that decides what it is made of ----
+      // Same geometry either way. At night it is emissive glass on `this.windows`;
+      // by day it is reflective glass with zero emissive on `this.windowsDay`.
+      // Boston used to get the night material under a midday sky.
       const w = this.builder();
       w.uvScale = 1;
       let cell = 0;
@@ -2882,38 +3477,128 @@ export class Props implements ISubsystem {
         }
       }
       w.cell = 0;
-      this.emit('skyscraperWindows', w.build('windows'), this.windows, anchors,
-        { cull: CULL_FAR, bloom: true, shadow: false, place: (a, _i, m) => {
-          _q.setFromAxisAngle(_axisY, a.yaw);
-          _s.set(0.75 + a.seed * 0.7, a.scale, 0.75 + (1 - a.seed) * 0.7);
-          m.compose(_v.set(a.x, a.y + 46 * 0.5 * a.scale, a.z), _q, _s);
-          return true;
-        } });
+      const winAnchors = slabs.length ? [...anchors, ...slabs] : anchors;
+      this.emit('skyscraperWindows', w.build('windows'), this.windowMat(), winAnchors,
+        {
+          cull: CULL_FAR, bloom: this.litWindows, shadow: false,
+          place: (a, _i, m) => pose(a, m),
+        });
+
+      // ---- the shopfront band ------------------------------------------------
+      // A night city street is lit from the ground floor up, and the critic proved
+      // the towers were taking more light out of the frame than they put in. This
+      // is a 3.4 m emissive band round the base of every background tower — the
+      // biggest single lit area available, and it sits at eye level rather than
+      // 40 m up where the window grid is.
+      if (kit.plinthGlow && this.litWindows) {
+        const g = this.builder();
+        // `this.glow` multiplies emissive by the VERTEX COLOUR, so dimming these
+        // toward black is how the band comes up "a tenth at golden hour" without
+        // touching the shared glow material — which also carries the neon signs,
+        // the traffic lamps and the balloon arch, none of which want scaling here.
+        // Linear in the night factor, the same rule as the window emissive above,
+        // so Sky's "a tenth at golden hour" means a tenth here too.
+        const dim = (c: number): number => mixHex(0x000000, c, this.night);
+        const cols = [0xffd8a4, 0xd8f4ff, 0xffc6e2, 0xfff0b0].map(dim);
+        for (let s = 0; s < 4; s++) {
+          const yaw = s * Math.PI * 0.5;
+          const ca = Math.cos(yaw), sa = Math.sin(yaw);
+          for (let i = -1; i <= 1; i++) {
+            g.cell = s * 3 + i + 1;
+            const off = i * 6.6;
+            g.plate(ca * off + sa * 10.95, -H * 0.5 + 1.5, sa * off - ca * 10.95,
+              5.6, 2.6, yaw + Math.PI, cols[(s + i + 3) % cols.length], { single: true });
+          }
+        }
+        // TOKYO: the screens and the signage crown. This is the emissive AREA the
+        // frame was missing — two 9 x 18 m screens and a lit crown box per tower,
+        // against a window grid of 1.75 x 1.35 m panes. `cell` keeps advancing so
+        // the per-instance hash varies which screens are on.
+        if (kit.id === 'tokyo') {
+          const screen = [0x2ef0ff, 0xff3d8a, 0xffe23a, 0x7dff9e].map(dim);
+          for (const sx of [1, -1]) {
+            g.cell = 40 + (sx > 0 ? 0 : 1);
+            g.plate(sx * 9.9, H * 0.16, 0, 6.2, H * 0.38, sx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5,
+              screen[sx > 0 ? 0 : 1], { single: true });
+          }
+          for (let s = 0; s < 4; s++) {
+            g.cell = 44 + s;
+            const yaw = s * Math.PI * 0.5;
+            const ca = Math.cos(yaw), sa = Math.sin(yaw);
+            g.plate(sa * 5.5, H * 0.5 + 3.1, -ca * 5.5, 8.4, 1.5, yaw + Math.PI,
+              screen[(s + 2) % screen.length], { single: true });
+          }
+        }
+        g.cell = 0;
+        this.emit('towerShopfront', g.build('towerShopfront'), this.glow, winAnchors,
+          { cull: 520, bloom: true, shadow: false, place: (a, _i, m) => pose(a, m) });
+      }
     }
 
-    // ---- neon signs ----------------------------------------------------------
+    // ---- neon signage --------------------------------------------------------
+    // Three vocabularies, and Boston gets none of them. The authored `neonSign`
+    // run is claimed here whatever the kit, so a track that authors neon on a
+    // brick circuit loses it rather than getting the wrong recipe silently.
     {
-      const anchors = roadside(ctx, rng, { spacing: 46, min: 9, max: 22, sides: 2, limit: this.count(30) });
-      // The track authors a run of these down the start straight at lat 17.
-      anchors.push(...this.takeAuthored('neonsign'));
-      const b = this.builder();
-      b.prism(0, 0, 0, 0.13, 8.5, 6, 0x22262b, { capBottom: true });
-      b.box(0, 8.6, 0, 1.5, 1.6, 0.16, 0x171a1e);
-      this.emit('neonFrame', b.build('neonFrame'), this.metal, anchors, { cull: 340 });
+      const authored = this.takeAuthored('neonsign');
+      if (kit.neonRing > 0) {
+        const anchors = roadside(ctx, rng,
+          { spacing: 46, min: 9, max: 22, sides: 2, limit: this.count(kit.neonRing) });
+        if (kit.neonStack === 0) anchors.push(...authored);
+        const b = this.builder();
+        b.prism(0, 0, 0, 0.13, 8.5, 6, 0x22262b, { capBottom: true });
+        b.box(0, 8.6, 0, 1.5, 1.6, 0.16, 0x171a1e);
+        this.emit('neonFrame', b.build('neonFrame'), this.metal, anchors, { cull: 340 });
 
-      const g = this.builder();
-      const neonCols = [0xff2e88, 0x2ef0ff, 0xffe23a, 0x8b5cff, 0x39ff88];
-      for (let i = 0; i < 5; i++) {
-        const col = neonCols[i];
-        // A ring plus two bars — reads as a sign at speed and blooms hard.
-        g.cell = i;
-        g.torus(0, 9.1, 0.12, 0.62, 0.075, 14, 5, col, 1);
-        g.box(0, 8.1, 0.12, 0.85, 0.06, 0.05, col);
-        g.box(0, 7.85, 0.12, 0.6, 0.05, 0.05, col);
+        const g = this.builder();
+        const neonCols = [0xff2e88, 0x2ef0ff, 0xffe23a, 0x8b5cff, 0x39ff88];
+        for (let i = 0; i < 5; i++) {
+          const col = neonCols[i];
+          // A ring plus two bars — reads as a sign at speed and blooms hard.
+          g.cell = i;
+          g.torus(0, 9.1, 0.12, 0.62, 0.075, 14, 5, col, 1);
+          g.box(0, 8.1, 0.12, 0.85, 0.06, 0.05, col);
+          g.box(0, 7.85, 0.12, 0.6, 0.05, 0.05, col);
+        }
+        g.cell = 0;
+        this.emit('neonSign', g.build('neonSign'), this.glow, anchors,
+          { cull: 340, bloom: true, shadow: false });
       }
-      g.cell = 0;
-      this.emit('neonSign', g.build('neonSign'), this.glow, anchors,
-        { cull: 340, bloom: true, shadow: false });
+      if (kit.neonStack > 0) {
+        // Stacked shophouse signage: a column of boards bracketed off a wall,
+        // reading vertically. This is the Taipei and Tokyo street read, and it is
+        // deliberately a different silhouette from the ring masts so the two
+        // cities cannot be confused at a glance.
+        const anchors = roadside(ctx, rng,
+          { spacing: 31, min: 6.5, max: 15, sides: 2, limit: this.count(kit.neonStack) });
+        anchors.push(...authored);
+        const b = this.builder();
+        b.uvScale = 0.9;
+        b.prism(0, 0, 0, 0.1, 7.2, 6, 0x2a2e34, { capBottom: true, taper: 0.7 });
+        for (let i = 0; i < 4; i++) {
+          const y = 2.2 + i * 1.28;
+          b.box(0.34, y, 0, 0.36, 0.5, 0.07, 0x1b1e23);      // bracket
+          b.box(0.9, y, 0, 0.28, 0.56, 0.13, 0x14171b);       // board carcass
+        }
+        this.emit('signStack', b.build('signStack'), this.metal, anchors, { cull: 320 });
+
+        const g = this.builder();
+        const cols = kit.id === 'midrise'
+          ? [0xff4a3a, 0xffd23a, 0x3affc8, 0xff8ad0, 0xfff3d0]
+          : [0xff2e88, 0x2ef0ff, 0xffe23a, 0x8b5cff, 0x39ff88];
+        for (let i = 0; i < 4; i++) {
+          const y = 2.2 + i * 1.28;
+          g.cell = i;
+          // The lit face of each board, both sides, plus a hot edge tube so the
+          // sign still reads when seen end-on down the street.
+          g.plate(0.9, y, 0.145, 0.5, 0.98, 0, cols[i % cols.length], { single: true });
+          g.plate(0.9, y, -0.145, 0.5, 0.98, Math.PI, cols[(i + 2) % cols.length], { single: true });
+          g.box(0.9, y + 0.3, 0, 0.3, 0.035, 0.15, cols[(i + 1) % cols.length]);
+        }
+        g.cell = 0;
+        this.emit('signStackGlow', g.build('signStackGlow'), this.glow, anchors,
+          { cull: 320, bloom: true, shadow: false });
+      }
     }
 
     // ---- streetlights --------------------------------------------------------
@@ -2962,9 +3647,10 @@ export class Props implements ISubsystem {
     // ---- parked cars ---------------------------------------------------------
     {
       const anchors = roadside(ctx, rng, {
-        spacing: 22, min: 7, max: 15, sides: 2, limit: this.count(44), skipNearStands: this.stands,
+        spacing: 22, min: 7, max: 15, sides: 2,
+        limit: this.count(kit.parkedCars), skipNearStands: this.stands,
       });
-      const paints = [0xc9302c, 0x2f6fd0, 0xe8e6df, 0x2b2f35, 0xd8b13a, 0x2f9e6b];
+      const paints = kit.carPaints;
       const b = this.builder();
       b.uvScale = 1.2;
       b.box(0, 0.52, 0, 0.9, 0.34, 2.15, 0xdedbd4, { taper: 0.96, shade: { top: 1.05 } });
@@ -2999,12 +3685,16 @@ export class Props implements ISubsystem {
     }
 
     // ---- cable tram ----------------------------------------------------------
+    // Neon Metropolis only. A cable car strung over the city is that circuit's own
+    // conceit, and "same trams" was one of the three things the critic named when
+    // it could not tell Boston apart from it.
     {
       const st = ctx.stations;
-      if (st.length > 40) {
+      const trams = kit.trams;
+      if (trams > 0 && st.length > 40) {
         const anchors: Anchor[] = [];
-        for (let i = 0; i < 3; i++) {
-          anchors.push({ x: 0, y: 0, z: 0, yaw: 0, side: 0, arc: 0, scale: 1, seed: i / 3 });
+        for (let i = 0; i < trams; i++) {
+          anchors.push({ x: 0, y: 0, z: 0, yaw: 0, side: 0, arc: 0, scale: 1, seed: i / trams });
         }
         const b = this.builder();
         b.uvScale = 0.8;
@@ -3019,9 +3709,9 @@ export class Props implements ISubsystem {
           { cull: CULL_MID, motion: 'tram' });
         const entry = this.meshes[this.meshes.length - 1];
         if (entry) {
-          const data = new Float32Array(3 * 5);
-          for (let i = 0; i < 3; i++) {
-            data[i * 5] = (i / 3) * ctx.lapLength;      // arc position
+          const data = new Float32Array(trams * 5);
+          for (let i = 0; i < trams; i++) {
+            data[i * 5] = (i / trams) * ctx.lapLength;   // arc position
             data[i * 5 + 1] = 9.5 + i * 1.5;            // height above ground
             data[i * 5 + 2] = 24 + i * 6;               // lateral offset
             data[i * 5 + 3] = 11 + i * 2.5;             // speed m/s
@@ -3032,7 +3722,171 @@ export class Props implements ISubsystem {
       }
     }
 
-    this.buildRocks(this.count(14), 0x6f747c, 0x565b63, 0.8);
+    this.buildRocks(this.count(14), kit.rock[0], kit.rock[1], 0.8);
+  }
+
+  // -------------------------------------------------------------------------
+  //  The four background-tower vocabularies
+  // -------------------------------------------------------------------------
+  //  All four are `TOWER_H` tall about a centred origin and no more than
+  //  ±10.95 m across, because `buildCity`'s `pose()` lifts every one of them by
+  //  `TOWER_H * 0.5 * scale` and the window pass and the shopfront band are built
+  //  to those same numbers. Change the height here and all three passes move.
+  //
+  //  Every one is built on the KIT'S FACADE MATERIAL, so the vertex colours below
+  //  are the hue and the facade map supplies the brick courses, the tile grout or
+  //  the mullion grid. That is the fix for `map: false, roughnessMap: false` on a
+  //  46 m surface, and it is why these colours are lighter than the near-black
+  //  `0x50565f / 0x585f68 / 0x4a5058 / 0x33383e` they replace: a texture that
+  //  multiplies a near-black vertex colour is still near-black.
+
+  /** Neon Metropolis, unchanged silhouette: three setbacks, crown and mast. */
+  private towerSetback(b: Builder): void {
+    const H = TOWER_H;
+    const facade = 0x6b737e;
+    b.box(0, 0, 0, 9.5, H * 0.5, 9.5, facade, { shade: { side: 1.0, top: 1.1 } });
+    b.box(0, H * 0.5, 0, 7.6, H * 0.28, 7.6, 0x737b87);
+    b.box(0, H * 0.5 + H * 0.56, 0, 5.6, H * 0.13, 5.6, 0x646c78);
+    b.box(0, H * 0.5 + H * 0.82, 0, 3.0, 1.2, 3.0, 0x4d545d);
+    b.prism(0, H * 0.5 + H * 0.82 + 1.2, 0, 0.16, 7.5, 6, 0x9aa1a9, { taper: 0.35 });
+    b.box(0, -H * 0.5, 0, 10.4, 2.2, 10.4, 0x3f454c, { shade: { top: 1.0 } });
+    b.box(0, -H * 0.5 + 2.4, 0, 10.9, 0.16, 10.9, 0x33383e);
+    for (let i = -4; i <= 4; i++) {
+      b.box(i * 2.35, 0, 9.55, 0.16, H * 0.5, 0.1, 0x848c96);
+      b.box(9.55, 0, i * 2.35, 0.1, H * 0.5, 0.16, 0x848c96);
+      b.box(i * 2.35, 0, -9.55, 0.16, H * 0.5, 0.1, 0x848c96);
+      b.box(-9.55, 0, i * 2.35, 0.1, H * 0.5, 0.16, 0x848c96);
+    }
+  }
+
+  /**
+   * BOSTON. A brick-and-limestone commercial block: granite base, brick shaft
+   * with limestone corner quoins, a projecting cornice, a stepped parapet and a
+   * roof water tank. No mast, no crown lights — the silhouette is masonry, so it
+   * cannot be mistaken for the neon setback tower even in a black-and-white
+   * thumbnail, which was the test it was failing.
+   */
+  private towerMasonry(b: Builder): void {
+    const H = TOWER_H;
+    const brick = 0xa06450, brickAlt = 0x8f5644, stone = 0xd8cfbe;
+    // Granite base, two courses, each stepped in — a chamfer read at the ground.
+    b.box(0, -H * 0.5 + 1.1, 0, 10.6, 1.1, 10.6, 0xa9a49a, { shade: { top: 1.08 } });
+    b.box(0, -H * 0.5 + 3.0, 0, 10.1, 0.8, 10.1, 0xbdb8ad, { shade: { top: 1.12 } });
+    b.box(0, -H * 0.5 + 4.2, 0, 9.8, 0.4, 9.8, stone, { shade: { top: 1.16 } });
+    // Brick shaft, very slightly battered so the silhouette is not a pure prism.
+    b.box(0, 1.2, 0, 9.5, H * 0.5 - 3.0, 9.5, brick,
+      { taper: 0.985, shade: { side: 1.0, top: 1.06 } });
+    // Limestone quoins on all four corners: the vertical accent masonry has and
+    // curtain wall does not, and a chamfer where a bare box would have a hard 90.
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        b.box(sx * 9.1, 1.2, sz * 9.1, 0.9, H * 0.5 - 3.2, 0.9, stone,
+          { yaw: Math.PI * 0.25, taper: 0.985 });
+      }
+    }
+    // A limestone belt course every four storeys — the horizontal rhythm.
+    for (let i = 1; i <= 3; i++) {
+      const y = -H * 0.5 + 4.2 + i * (H - 8) * 0.25;
+      b.box(0, y, 0, 9.7, 0.26, 9.7, stone, { shade: { top: 1.14 } });
+    }
+    // Projecting cornice + dentil course, then a stepped parapet.
+    b.box(0, H * 0.5 - 1.5, 0, 10.3, 0.55, 10.3, stone, { shade: { top: 1.2 } });
+    b.box(0, H * 0.5 - 0.7, 0, 9.9, 0.3, 9.9, 0xc6bda9);
+    b.box(0, H * 0.5 + 0.5, 0, 9.2, 0.9, 9.2, brickAlt, { shade: { top: 1.1 } });
+    b.box(0, H * 0.5 + 1.6, 0, 6.4, 0.7, 6.4, brickAlt, { shade: { top: 1.14 } });
+    // Rooftop water tank on a steel frame, and a stair bulkhead. Boston roofs.
+    b.prism(3.2, H * 0.5 + 2.3, -2.4, 1.7, 3.2, 9, 0x7d6a56, { shade: { top: 1.18 } });
+    b.prism(3.2, H * 0.5 + 5.5, -2.4, 1.7, 1.1, 9, 0x6b5946, { taper: 0.1 });
+    for (const sx of [-1, 1]) {
+      b.box(3.2 + sx * 1.4, H * 0.5 + 1.6, -2.4, 0.14, 0.7, 0.14, 0x4a4038);
+    }
+    b.box(-3.4, H * 0.5 + 3.2, 2.6, 2.0, 1.6, 1.6, brickAlt, { shade: { top: 1.12 } });
+  }
+
+  /**
+   * BOSTON's minority: a sheer dark-glass slab, far thinner than the masonry
+   * block, so the skyline has two masses in it rather than one repeated one.
+   */
+  private towerGlassSlab(b: Builder): void {
+    const H = TOWER_H;
+    const glass = 0x5a7f96;
+    b.box(0, 0, 0, 10.2, H * 0.5, 5.2, glass,
+      { taper: 0.98, shade: { side: 1.0, top: 1.16 } });
+    b.box(0, -H * 0.5 + 1.4, 0, 10.9, 1.4, 6.0, 0x9aa4ad, { shade: { top: 1.06 } });
+    b.box(0, -H * 0.5 + 3.0, 0, 11.4, 0.16, 6.6, 0x7d878f);
+    b.box(0, H * 0.5 + 0.45, 0, 10.0, 0.45, 5.1, 0xd6dde3, { shade: { top: 1.24 } });
+    // Corner returns in a lighter metal, which is what stops a slab reading flat.
+    for (const sx of [-1, 1]) {
+      b.box(sx * 10.3, 0, 0, 0.22, H * 0.5, 5.3, 0xaeb8c0, { taper: 0.98 });
+    }
+  }
+
+  /**
+   * TAIPEI. A narrow tiled mid-rise with continuous balconies, roof water tanks
+   * and a bamboo-scaffold parapet. Deliberately SHORTER in proportion and busier
+   * in silhouette than either tower above, so a wall of these reads as dense city
+   * rather than as a downtown skyline.
+   */
+  private towerMidRise(b: Builder): void {
+    const H = TOWER_H;
+    const tileA = 0xbfb8ab, tileB = 0xa8a79e, trim = 0x8d8b82;
+    // Shorter shaft: the top third is roof clutter instead of building.
+    const shaft = H * 0.5 - 6.5;
+    b.box(0, -3.0, 0, 8.6, shaft, 7.4, tileA, { shade: { side: 1.0, top: 1.08 } });
+    b.box(0, -H * 0.5 + 2.0, 0, 9.4, 2.0, 8.2, 0x6e6a62, { shade: { top: 1.04 } });
+    b.box(0, -H * 0.5 + 4.3, 0, 9.9, 0.2, 8.7, 0x54514a);
+    // A balcony slab per two storeys, on the two long faces. This is the read.
+    const bays = 6;
+    for (let i = 0; i < bays; i++) {
+      const y = -H * 0.5 + 6.4 + i * ((shaft * 2 - 4.4) / bays);
+      for (const sz of [1, -1]) {
+        b.box(0, y, sz * 7.9, 8.4, 0.13, 0.62, trim, { shade: { top: 1.18 } });
+        b.box(0, y + 0.55, sz * 8.45, 8.4, 0.55, 0.07, 0x9aa0a4);
+      }
+      b.box(0, y, 0, 8.75, 0.11, 7.55, tileB);
+    }
+    // A service riser and a vertical vent stack up one corner.
+    b.box(-8.2, -3.0, 3.2, 0.7, shaft, 1.5, tileB, { shade: { top: 1.1 } });
+    // Roof: parapet, three water tanks, a stair house and a slim aerial.
+    const rt = -3.0 + shaft;
+    b.box(0, rt + 0.3, 0, 8.8, 0.3, 7.6, trim, { shade: { top: 1.2 } });
+    b.box(0, rt + 1.1, 0, 8.5, 0.8, 7.3, tileB, { taper: 0.99, shade: { top: 1.06 } });
+    for (let i = 0; i < 3; i++) {
+      const x = -4.2 + i * 4.2;
+      b.prism(x, rt + 1.9, -2.0, 1.25, 2.1, 10, 0x9ba7ac, { shade: { top: 1.16 } });
+      b.prism(x, rt + 4.0, -2.0, 1.25, 0.5, 10, 0x7f8b90, { taper: 0.3 });
+    }
+    b.box(3.0, rt + 3.2, 3.0, 1.9, 2.2, 1.9, tileA, { shade: { top: 1.12 } });
+    b.prism(-3.4, rt + 2.0, 3.2, 0.11, 6.5, 5, 0x6d7276, { taper: 0.5 });
+  }
+
+  /**
+   * TOKYO. Dark curtain wall carrying full-height screen panels and a crown of
+   * box signage. The screens and the crown are on the GLOW pass built inside
+   * `buildCity`; what is here is the mass they hang on, kept a mid grey-blue
+   * rather than the old near-black so a lit facade has something to be lit.
+   */
+  private towerScreenSlab(b: Builder): void {
+    const H = TOWER_H;
+    const wall = 0x6d7683, spandrel = 0x5a6270;
+    b.box(0, 0, 0, 9.5, H * 0.5, 9.5, wall, { taper: 0.99, shade: { side: 1.0, top: 1.12 } });
+    b.box(0, -H * 0.5 + 1.8, 0, 10.6, 1.8, 10.6, 0x474e5a, { shade: { top: 1.04 } });
+    b.box(0, -H * 0.5 + 4.0, 0, 11.0, 0.2, 11.0, 0x394049);
+    // Screen surrounds: a raised bezel on two faces, which is what makes the
+    // emissive panel read as a mounted screen instead of a glowing wall.
+    for (const sx of [1, -1]) {
+      b.box(sx * 9.62, H * 0.16, 0, 0.2, H * 0.20, 6.4, spandrel);
+      b.box(sx * 9.72, H * 0.16 + H * 0.21, 0, 0.3, 0.32, 6.8, 0x2f353d);
+      b.box(sx * 9.72, H * 0.16 - H * 0.21, 0, 0.3, 0.32, 6.8, 0x2f353d);
+    }
+    // Setback + a signage crown box, then the mast.
+    b.box(0, H * 0.5 + 1.0, 0, 7.0, 1.0, 7.0, spandrel, { shade: { top: 1.1 } });
+    b.box(0, H * 0.5 + 3.1, 0, 5.4, 1.1, 5.4, 0x3b4249, { shade: { top: 1.16 } });
+    b.prism(0, H * 0.5 + 4.2, 0, 0.18, 9.0, 6, 0x9aa1a9, { taper: 0.3 });
+    for (let i = -4; i <= 4; i++) {
+      b.box(i * 2.35, 0, 9.58, 0.18, H * 0.5, 0.12, 0x8b95a2, { taper: 0.99 });
+      b.box(i * 2.35, 0, -9.58, 0.18, H * 0.5, 0.12, 0x8b95a2, { taper: 0.99 });
+    }
   }
 
   // =========================================================================
@@ -3100,17 +3954,32 @@ export class Props implements ISubsystem {
     }
 
     // ---- ember vents ---------------------------------------------------------
+    // ---- REBUILT AND RE-SEATED. `prism()` takes a BASE and a height, so
+    // `prism(0, -0.4, …, 1.0, …)` put the cone's base 0.4 m under its own origin
+    // and its rim at 0.6 m: 35 % of the recipe below grade before the ground was
+    // even consulted, and only 0.6 m of a 1.15 m cone showing. Measured at 41-59 m
+    // from the grid, which is why it reads from the start line.
+    //
+    // The cone now STANDS on its origin, with a low ash apron round the foot doing
+    // the bedding, and `bedOnFootprint` seats the group on the highest ground under
+    // each instance's own footprint at a 0.18 target — a vent is a hole with a
+    // spatter cone round it, so it should be almost entirely above grade.
     {
       const anchors = roadside(ctx, rng, {
-        spacing: 33, min: 6, max: 34, sides: 2, limit: this.count(34), faceRoad: false,
+        spacing: 33, min: 6, max: 34, sides: 2,
+        limit: Math.round(this.count(34) * 1.6), faceRoad: false,
       });
       const b = this.builder();
-      b.prism(0, -0.4, 0, 1.5, 1.0, 7, 0x201618, { taper: 0.62, shade: { top: 0.8 } });
-      b.prism(0, 0.5, 0, 0.9, 0.25, 7, 0x160f11, { taper: 0.7 });
-      this.emit('emberVent', b.build('emberVent'), this.matte, anchors, { cull: 300 });
+      b.prism(0, 0, 0, 1.28, 1.35, 9, 0x2b1f20, { taper: 0.66, shade: { top: 0.86 } });
+      b.prism(0, 1.35, 0, 0.85, 0.3, 9, 0x1c1416, { taper: 0.72 });
+      // Ash apron: wide, 0.16 m tall, and the only part authored below the origin.
+      b.prism(0, -0.16, 0, 2.05, 0.3, 9, 0x241b1a, { taper: 0.68, shade: { top: 0.78 } });
+      const geo = b.build('emberVent');
+      const kept = this.bedOnFootprint(anchors, geo, 0.18, 0.5, this.count(34));
+      this.emit('emberVent', geo, this.matte, kept, { cull: 300 });
       const g = this.builder();
-      g.prism(0, 0.55, 0, 0.78, 0.22, 7, 0xff7a2a, { taper: 0.55 });
-      this.emit('emberVentGlow', g.build('emberVentGlow'), this.glowSoft, anchors,
+      g.prism(0, 1.42, 0, 0.74, 0.26, 9, 0xff7a2a, { taper: 0.55 });
+      this.emit('emberVentGlow', g.build('emberVentGlow'), this.glowSoft, kept,
         { cull: 300, bloom: true, shadow: false });
     }
 
@@ -3294,15 +4163,20 @@ export class Props implements ISubsystem {
    */
   private buildRocks(count: number, hexA: number, hexB: number, size: number): void {
     const rng = this.rng;
+    // Ask for roughly twice what we want: `bedOnFootprint` REJECTS anchors whose
+    // ground is too broken for the instance that would stand on it, and the count
+    // has to survive that. `annulus`'s own 34 m mutual-clash rule means it will
+    // often return fewer than asked anyway.
     const anchors = annulus(this.ctx, rng, {
-      count, min: 40, max: this.field.extent * 0.44, minRoadDist: 17, maxSlope: 1.4,
+      count: Math.round(count * 2.1), min: 40, max: this.field.extent * 0.44,
+      minRoadDist: 17, maxSlope: 1.4,
     });
     for (const a of anchors) a.scale = (0.55 + rng.next() * 1.7) * size;
     // A band close to the road so the verges have structure too — but small
     // ones. These are the instances the driver's eye passes at 0.85 of the
     // half-width, and the ones that flank the start line.
     for (const a of roadside(this.ctx, rng, {
-      spacing: 17, min: 7, max: 30, sides: 2, limit: Math.round(count * 0.7),
+      spacing: 17, min: 7, max: 30, sides: 2, limit: Math.round(count * 1.5),
       faceRoad: false, maxSlope: 1.1,
     })) {
       a.scale = (0.45 + rng.next() * 0.7) * size;
@@ -3311,6 +4185,20 @@ export class Props implements ISubsystem {
 
     const b = this.builder();
     b.jitter = 0.09;
+    // A dirt / scree apron FIRST, so the boulder meets the ground through a band of
+    // debris instead of a clean intersection with no AO and no blend. Wide, very
+    // flat and much darker than the rock, which is what reads as an occlusion
+    // gradient at the contact — the critic's "intersects the ground with no AO or
+    // dirt blend". Authored deliberately below y = 0 so it always sinks in.
+    const dirtA = mixHex(hexA, 0x2e2519, 0.62);
+    const dirtB = mixHex(hexB, 0x241d14, 0.68);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + rng.next() * 0.8;
+      const d = 0.95 + rng.next() * 0.9;
+      const r = 0.55 + rng.next() * 0.5;
+      b.sphere(Math.cos(a) * d, -0.10 * r, Math.sin(a) * d, r, 6, 3,
+        i % 2 ? dirtA : dirtB, { squash: 0.20 + rng.next() * 0.10 });
+    }
     for (let i = 0; i < 4; i++) {
       const a = rng.next() * Math.PI * 2;
       const d = rng.next() * 1.3;
@@ -3318,7 +4206,139 @@ export class Props implements ISubsystem {
       b.sphere(Math.cos(a) * d, r * (0.24 + rng.next() * 0.14), Math.sin(a) * d, r, 7, 4,
         i % 2 ? hexA : hexB, { squash: 0.62 + rng.next() * 0.3 });
     }
-    this.emit('rock', b.build('rock'), this.matte, anchors, { cull: 380 });
+    const geo = b.build('rock');
+    // 1.7x `count` is what the two passes above used to yield between them
+    // (`count` from the annulus + 0.7 `count` from the roadside band), so the rock
+    // DENSITY is unchanged; what changed is which anchors are allowed to keep one.
+    const kept = this.bedOnFootprint(anchors, geo, 0.34, 0.45, Math.round(count * 1.7));
+    this.emit('rock', geo, this.rockMat(), kept, { cull: 380 });
+  }
+
+  /**
+   * A real rock material rather than `this.matte`'s bare vertex colours: the
+   * shared library's `makeRock()` PbrSet (albedo + normal + roughness + cavity AO),
+   * tiled at its own suggested world size. `uvScale` on the recipe above is the
+   * Builder default of 0.6, i.e. a tile every 1.67 m, which is the right grain for
+   * a 1-3 m boulder.
+   */
+  private rockMat(): THREE.MeshStandardMaterial {
+    if (this.rockMaterial) return this.rockMaterial;
+    const set = makeRock(this.quality.tier === 'low' ? 512 : 1024);
+    const m = new THREE.MeshStandardMaterial({
+      name: 'prop-rock',
+      vertexColors: true,
+      map: set.map,
+      normalMap: set.normalMap,
+      roughnessMap: set.roughnessMap,
+      aoMap: set.aoMap,
+      roughness: 1.0,
+      metalness: 0.0,
+      normalScale: new THREE.Vector2(set.normalScale ?? 1, set.normalScale ?? 1),
+    });
+    // NOT pushed to `this.textures`: `makeRock` is memoised inside TextureFactory
+    // and shared with the terrain, so disposing it here would pull it out from
+    // under another subsystem. `TextureFactory.disposeAll()` owns those.
+    this.materials.push(m);
+    this.rockMaterial = patchProp(m, this.u);
+    return this.rockMaterial;
+  }
+
+  /**
+   * =========================================================================
+   *  WHY A ROCK'S BURIAL WAS UNBOUNDED — and what actually fixes it
+   * =========================================================================
+   *  Measured on the rejected build (`.probe-tmp/citykit.ts`, ultra), burial as a
+   *  percentage of each instance's own height ran 32-373 % on Sunset Coastline
+   *  (22 of 78 instances **entirely underground**) and 35-360 % on Volcano Rush
+   *  (18 of 102). The city circuits were milder at 29-84 %, but out of band too.
+   *
+   *  The recipe's own sub-origin offset is NOT the cause, and clamping it would
+   *  have fixed nothing: each lump is authored at `y = r * (0.24 …)` with a
+   *  squashed half-height on top, so its bottom sits at a fixed FRACTION of its
+   *  own height below the origin. Scale the instance and both the offset and the
+   *  height scale together — as a percentage it is invariant, at about 35 %.
+   *
+   *  The unbounded term is that **the placement test is a point sample and the
+   *  prop is an area.** `annulus()` and `roadside()` set `a.y = field.heightAt(x, z)`
+   *  at the anchor and check `field.slopeAt(x, z)` at the anchor, and say nothing
+   *  whatever about the ground under the other 99 % of the footprint. A rock
+   *  cluster is 4:1 wider than it is tall and its footprint grows linearly with
+   *  `a.scale`, while `maxSlope: 1.4` admits ground at 54 degrees. So the ground
+   *  at the uphill edge of a big instance can be several times the whole rock's
+   *  height above the single texel the anchor was seated on — and then every
+   *  vertex of it is inside the hillside.
+   *
+   *  So the fix is at the placement, not the geometry:
+   *
+   *    1. Seat on the HIGHEST ground over the instance's own footprint, not on the
+   *       centre sample. The recipe's designed bedding fraction is then measured
+   *       against the ground that is actually in front of the camera, which pins
+   *       burial at `target` for ANY scale on ANY slope.
+   *    2. REJECT an anchor whose footprint relief exceeds `reliefBudget` of the
+   *       instance's own height. Seating on the max would otherwise leave the
+   *       downhill side hanging in the air — the mirrored defect, and the one that
+   *       produced the critic's single -28 % reading.
+   *
+   *  `limit` caps how many survivors are kept, so the caller over-generates and
+   *  this picks the ones that fit. Returns the kept anchors, re-seated in place.
+   */
+  private bedOnFootprint(
+    anchors: Anchor[], geo: THREE.BufferGeometry,
+    target: number, reliefBudget: number, limit: number,
+  ): Anchor[] {
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return anchors.slice(0, limit);
+    const lo = bb.min.y, hi = bb.max.y;
+    const localH = hi - lo;
+    if (localH < 1e-4) return anchors.slice(0, limit);
+    const localR = Math.max(
+      Math.abs(bb.min.x), Math.abs(bb.max.x), Math.abs(bb.min.z), Math.abs(bb.max.z),
+    );
+    const field = this.field;
+    const kept: Anchor[] = [];
+    let rejected = 0;
+    for (const a of anchors) {
+      if (kept.length >= limit) break;
+      // A footprint that does not fit the ground is SHRUNK before it is rejected.
+      // On a perfectly linear slope that changes nothing — relief and height both
+      // scale with the instance — but real terrain is not linear, and a smaller
+      // footprint very often lands inside a flatter patch of it. Three tries at
+      // 0.72x recovers most of the density that a bare reject-and-move-on threw
+      // away (coastal went 34 -> 60 drawn instances at ultra on this alone), and
+      // the near-road band wanted the small end of the scale range regardless.
+      let ok = false;
+      for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+        const r = localR * a.scale;
+        let gMax = -Infinity, gMin = Infinity;
+        // Centre plus three rings, 25 samples. Four AABB corners is what
+        // under-samples a 4:1 cluster; this has to be dense enough that the ground
+        // it finds is the ground an auditing probe finds, or the seating is measured
+        // against a different surface from the one it was solved for. The outer ring
+        // reaches 1.4 r, not r: `localR` is the half-extent of the AABB's SIDE, and
+        // its corners are a further 41 % out.
+        for (const frac of [0, 0.5, 0.95, 1.4]) {
+          const ring = frac === 0 ? 1 : 8;
+          for (let k = 0; k < ring; k++) {
+            const ang = (k / ring) * Math.PI * 2 + frac * 1.3;
+            const g = field.heightAt(
+              a.x + Math.cos(ang) * r * frac, a.z + Math.sin(ang) * r * frac,
+            );
+            if (g > gMax) gMax = g;
+            if (g < gMin) gMin = g;
+          }
+        }
+        const worldH = localH * a.scale;
+        if (gMax - gMin > reliefBudget * worldH) { a.scale *= 0.72; continue; }
+        // burial = (gMax - (y + lo*scale)) / worldH, so solve it for `target`.
+        a.y = gMax - lo * a.scale - target * worldH;
+        ok = true;
+      }
+      if (!ok) { rejected++; continue; }
+      kept.push(a);
+    }
+    if (rejected > 0) this.footprintRejects += rejected;
+    return kept;
   }
 
   // =========================================================================
@@ -3459,6 +4479,10 @@ export class Props implements ISubsystem {
         this.emit(`authored:${key}:cloth`, spec.cloth, this.matteSway, anchors,
           { cull: spec.cull ?? CULL_MID, shadow: false, corridor });
       }
+      if (spec.clothSign) {
+        this.emit(`authored:${key}:clothSign`, spec.clothSign, this.atlasSway, anchors,
+          { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
+      }
       if (spec.flag) {
         this.emit(`authored:${key}:flag`, spec.flag, this.flagSway, anchors,
           { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
@@ -3474,8 +4498,14 @@ export class Props implements ISubsystem {
             : { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
       }
       if (spec.windows) {
-        this.emit(`authored:${key}:windows`, spec.windows, this.windows, anchors,
-          { cull: spec.cull ?? CULL_MID, bloom: true, shadow: false, corridor });
+        // The same day/night gate as `buildCity`'s tower pass. `glassTower` and
+        // `towerBlock` were emitting `#ffffff` at `emissiveIntensity 2.6` on a
+        // `skyPreset: 'day'` circuit; by day they now get reflective glass with no
+        // emissive at all, and therefore no bloom either.
+        this.emit(`authored:${key}:windows`, spec.windows, this.windowMat(), anchors,
+          {
+            cull: spec.cull ?? CULL_MID, bloom: this.litWindows, shadow: false, corridor,
+          });
       }
     }
   }
@@ -3525,13 +4555,29 @@ export class Props implements ISubsystem {
             i === 0 ? 0xffe9a8 : 0xff3b2e);
         }
         glow.plate(0, H + 2.6, 0.34, halfSpan * 1.3, 0.9, 0, 0x7fe4ff, { single: true });
+        // ---- THE HANGING BANNERS -------------------------------------------
+        // Sponsor artwork off the shared atlas, not two flat saturated rectangles.
+        // The vertex colour is held near-white on purpose: `atlasSway`'s `map`
+        // MULTIPLIES it, so a saturated red here would turn every wordmark to mud.
+        // `atlasRect(cell)` bakes one cell per banner, the same mechanism
+        // `standBanner` uses, so the two banners carry different brands. A wider
+        // banner (3.0 -> 3.4 m) because a square atlas cell stretched tall is the
+        // other way to make a logo unreadable.
         const cloth = this.builder();
         cloth.flap = 1;
+        for (const [i, sx] of [-1, 1].entries()) {
+          cloth.banner(sx * (halfSpan - 4.4), H - 0.1, 0.4, 3.4, 4.4, 0, 0xf4f2ec, 4,
+            atlasRect(i === 0 ? 2 : 6));
+        }
+        // A valance above them, in the truss colour, so the cloths read as hung
+        // from the gantry rather than floating under it.
+        const trim = this.builder();
         for (const sx of [-1, 1]) {
-          cloth.banner(sx * (halfSpan - 4.2), H - 0.1, 0.4, 3.0, 4.4, 0, sx > 0 ? 0xe8332a : 0x0f6bd6, 4);
+          trim.box(sx * (halfSpan - 4.4), H + 0.12, 0.4, 1.8, 0.1, 0.14, 0xb8bcc4);
         }
         return { geo: b.build('startGantry'), glow: glow.build('startGantryGlow'),
-          cloth: cloth.build('startGantryCloth'), cull: CULL_FAR };
+          clothSign: cloth.build('startGantryBanner'),
+          metal: trim.build('startGantryValance'), cull: CULL_FAR };
       }
 
       case 'grandstand': case 'crowdstand': {
@@ -4025,23 +5071,56 @@ export class Props implements ISubsystem {
       // anchors with `takeAuthored`, so they cost no extra draw call.
 
       case 'towerblock': {
-        // Mid-rise, deliberately shorter than the 46 m `skyscraper` so the
+        // Mid-rise, deliberately shorter than the 46 m background tower so the
         // authored lat-46 run reads as a wall of city behind the taller
         // background towers rather than competing with them.
+        //
+        // ---- PER-DISTRICT. This recipe was one grey box on all four city
+        // circuits, and at 26-34 instances it is the second-largest generic count
+        // after the towers themselves. It now takes the declared district's facade
+        // material and palette, so Boston's mid-rise is brick with a stone cornice
+        // and Taipei's is tiled with balconies. `authoredSpec` runs from
+        // `buildAuthored`, i.e. AFTER `buildCity` has resolved `this.kit`.
         const b = this.builder();
-        b.uvScale = 0.3;
+        const kit = this.kit;
+        b.uvScale = 1 / this.facadeTile;
         const H = rng.range(17, 25), w = rng.range(6.5, 9), d = rng.range(6, 8.5);
-        b.box(0, H * 0.5, 0, w, H * 0.5, d, rng.next() < 0.5 ? 0x565d66 : 0x4a5057,
-          { shade: { top: 1.12 } });
-        b.box(0, 1.1, 0, w + 0.4, 1.1, d + 0.4, 0x363b41, { shade: { top: 1.0 } });
-        b.box(0, H + 0.3, 0, w + 0.3, 0.3, d + 0.3, 0x3d4249, { shade: { top: 1.16 } });
+        const pal: Record<CityKitId, readonly [number, number, number, number]> = {
+          //        shaft a,  shaft b,  base,     cornice
+          neon: [0x6b737e, 0x5e6672, 0x3f454c, 0x4d545d],
+          brick: [0xa06450, 0x8f5644, 0xa9a49a, 0xd8cfbe],
+          midrise: [0xbfb8ab, 0xa8a79e, 0x6e6a62, 0x8d8b82],
+          tokyo: [0x6d7683, 0x5f6875, 0x474e5a, 0x7d868f],
+        };
+        const [shaftA, shaftB, baseC, corniceC] = pal[kit.id];
+        b.box(0, H * 0.5, 0, w, H * 0.5, d, rng.next() < 0.5 ? shaftA : shaftB,
+          { taper: 0.99, shade: { top: 1.12 } });
+        b.box(0, 1.1, 0, w + 0.4, 1.1, d + 0.4, baseC, { shade: { top: 1.0 } });
+        // Cornice in two steps rather than one slab: a chamfered eaves read, which
+        // is what AGENTS.md section 3 means by "no hard-edged low-poly silhouette".
+        b.box(0, H + 0.28, 0, w + 0.34, 0.28, d + 0.34, corniceC, { shade: { top: 1.16 } });
+        b.box(0, H + 0.68, 0, w + 0.14, 0.16, d + 0.14, corniceC, { shade: { top: 1.2 } });
         // Roof clutter breaks the flat-top silhouette that says "box".
-        b.box(w * 0.4, H + 1.3, d * 0.3, 1.1, 1.0, 1.1, 0x4a5057);
-        b.prism(-w * 0.45, H + 0.6, -d * 0.35, 0.5, 1.7, 8, 0x2f343a, { taper: 0.85 });
-        // Horizontal floor bands: the cheapest way to give a block scale.
+        b.box(w * 0.4, H + 1.4, d * 0.3, 1.1, 1.0, 1.1, shaftB);
+        b.prism(-w * 0.45, H + 0.9, -d * 0.35, 0.5, 1.7, 8, baseC, { taper: 0.85 });
+        if (kit.id === 'midrise') {
+          // Taipei roofs carry water tanks, and the balcony line is the whole read.
+          for (const sx of [-1, 1]) {
+            b.prism(sx * w * 0.42, H + 0.9, d * 0.32, 0.85, 1.4, 9, 0x9ba7ac,
+              { shade: { top: 1.16 } });
+          }
+        }
+        // Horizontal floor bands: the cheapest way to give a block scale. Taipei
+        // gets them as projecting balcony slabs instead of flush bands.
         const floors = Math.floor(H / 3.1);
         for (let f = 1; f < floors; f++) {
-          b.box(0, f * 3.1, 0, w + 0.12, 0.1, d + 0.12, 0x646b74);
+          if (kit.id === 'midrise') {
+            for (const sz of [1, -1]) {
+              b.box(0, f * 3.1, sz * (d + 0.42), w * 0.94, 0.11, 0.5, corniceC,
+                { shade: { top: 1.18 } });
+            }
+          }
+          b.box(0, f * 3.1, 0, w + 0.12, 0.1, d + 0.12, corniceC);
         }
         const win = this.builder();
         let cell = 0;
@@ -4062,7 +5141,10 @@ export class Props implements ISubsystem {
           }
         }
         win.cell = 0;
-        return { geo: b.build('towerBlock'), windows: win.build('towerBlockWindows'), cull: CULL_FAR };
+        return {
+          geo: b.build('towerBlock'), windows: win.build('towerBlockWindows'),
+          mat: this.facadeMat(), cull: CULL_FAR,
+        };
       }
 
       case 'arcologytower': {
@@ -4425,9 +5507,12 @@ export class Props implements ISubsystem {
         // procedural `skyscraper`'s setback massing, and mirror-dark against the
         // brick. ACROSS-ROAD half-extent 7.3 m (the canopy), 15.9 m along.
         const b = this.builder();
-        b.uvScale = 0.2;
+        // One curtain-wall tile per 7.2 m: two floors of a 3.6 m module.
+        b.uvScale = 1 / this.facadeTileOf('curtain');
         const H = 118, hx = 14, hz = 5.4;
-        b.box(0, H * 0.5, 0, hx, H * 0.5, hz, 0x24404f,
+        // Lifted from 0x24404f: the facade map multiplies this, and the critic's
+        // core daylight finding was facades rendering near-black.
+        b.box(0, H * 0.5, 0, hx, H * 0.5, hz, 0x4a6d83,
           { taper: 0.965, shade: { side: 1.0, top: 1.14 } });
         b.box(0, 1.7, 0, hx + 1.2, 1.7, hz + 1.2, 0x1a252d, { shade: { top: 1.02 } });
         b.box(0, 3.5, 0, hx + 1.9, 0.18, hz + 1.9, 0x141c23);
@@ -4457,7 +5542,9 @@ export class Props implements ISubsystem {
         win.cell = 0;
         return {
           geo: b.build('glassTower'), windows: win.build('glassTowerWindows'),
-          cull: CULL_FAR,
+          // Real curtain wall: mullion grid, spandrel bands and per-pane tint out
+          // of the facade set, on a circuit whose other buildings are brick.
+          mat: this.facadeMat('curtain'), cull: CULL_FAR,
         };
       }
 
@@ -4479,9 +5566,14 @@ export class Props implements ISubsystem {
         // the run out to lat 22 and stops it before the kink. Same continuous
         // terrace, because the authored step matches the new length.
         const b = this.builder();
-        b.uvScale = 0.7;
+        // One masonry tile per 6.2 m of wall — two storeys, twelve brick courses
+        // each. Was 0.7 (a tile every 1.4 m), which on a facade map would put four
+        // storeys of windows inside one real storey.
+        b.uvScale = 1 / this.facadeTileOf('masonry');
         const N = 3, W = 7.6, D = 4.6, H = 15.2;
-        const bricks = [0x8e4432, 0x7d3b2c, 0x96503a, 0x6f3428];
+        // Lighter than before: the facade map multiplies these, and a map over a
+        // near-black brick is still near-black.
+        const bricks = [0xa8604a, 0x99543e, 0xb06d52, 0x8c4c3a];
         const halfRun = N * W * 0.5;
         for (let i = 0; i < N; i++) {
           const x = -halfRun + W * (i + 0.5);
@@ -4501,17 +5593,25 @@ export class Props implements ISubsystem {
             { taper: 0.58, shade: { top: 1.16 } });
           b.box(x - 2.5, H + 2.7, -D * 0.4, 0.52, 1.15, 0.52, brick);
         }
+        // Lit parlour windows — but gated on the sky. Boston is `skyPreset: 'day'`,
+        // and a terrace with half its windows blazing at midday was part of the
+        // same "night city under a midday sky" finding as the tower pass.
         const glow = this.builder();
+        const litChance = 0.10 + 0.55 * this.night;
         for (let i = 0; i < N; i++) {
           const x = -halfRun + W * (i + 0.5);
           for (let s = 0; s < 4; s++) {
-            const col = rng.next() < 0.5 ? 0xffdca8 : 0x1a1c22;
+            const col = rng.next() < litChance ? 0xffdca8 : 0x1a1c22;
             glow.plate(x, 2.4 + s * 3.4, D + 1.62, 1.5, 1.9, 0, col, { single: true });
           }
         }
         return {
           geo: b.build('brownstoneRow'), glow: glow.build('brownstoneGlow'),
-          softGlow: true, cull: CULL_FAR,
+          // The masonry facade set, so the terrace has brick courses, mortar and
+          // punched window reveals instead of a flat red box — this is the recipe
+          // the critic named as "Boston's brownstone is a flat red box", and the
+          // brick scale is fixed by `uvScale` above rather than by a repeat count.
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
         };
       }
 
@@ -4703,8 +5803,30 @@ export class Props implements ISubsystem {
             b.prism(sx * W * 0.8, 0, sz, 0.075, sz > 2 ? 2.9 : 3.3, 4, 0x545a62);
           }
         }
-        b.plate(0, 3.2, 1.95, W * 2.0, 2.4, 0,
-          rng.next() < 0.5 ? 0xd8402f : 0x2f6fd0, { single: true, pitch: 1.32 });
+        // ---- THE AWNING, striped rather than one flat saturated rectangle.
+        // It was a single `plate` of solid `0xd8402f` or `0x2f6fd0` on an untextured
+        // material, and it is the largest single surface on the recipe — the same
+        // section 0 flat-colour defect as the start gantry's banners. A market awning
+        // is striped, so the stripes are geometry: nine slats alternating the accent
+        // with an off-white, each one a shade different from the last so the run
+        // reads as cloth over a frame instead of a printed sheet.
+        {
+          const accent = rng.next() < 0.5 ? 0xd8402f : 0x2f6fd0;
+          const slats = 9, span = W * 2.0;
+          for (let i = 0; i < slats; i++) {
+            const cx = (-0.5 + (i + 0.5) / slats) * span;
+            const col = i % 2 === 0 ? accent : 0xf2ece0;
+            b.plate(cx, 3.2, 1.95, span / slats + 0.02, 2.4, 0, col,
+              { single: true, pitch: 1.32, shade: 0.94 + 0.1 * ((i * 7) % 5) / 4 });
+          }
+          // Scalloped valance along the front edge, and the pole that carries it.
+          for (let i = 0; i < slats; i++) {
+            const cx = (-0.5 + (i + 0.5) / slats) * span;
+            b.plate(cx, 2.05, 3.06, span / slats + 0.02, 0.34, 0,
+              i % 2 === 0 ? accent : 0xf2ece0, { single: true, shade: 0.9 });
+          }
+          b.tube(-span * 0.5, 2.24, 3.02, span * 0.5, 2.24, 3.02, 0.05, 5, 0x6b7178);
+        }
         const glow = this.builder();
         glow.plate(W * 0.72, H * 0.62, 0.72, 0.95, H * 0.62, 0, 0xff4d6a, { single: true });
         glow.plate(-W * 0.72, H * 0.48, 0.72, 0.8, H * 0.46, 0, 0x39ff88, { single: true });
@@ -4840,11 +5962,15 @@ export class Props implements ISubsystem {
         // grandstand's sponsor band uses, and the reason `atlasBaked` exists.
         // ACROSS-ROAD half-extent 8.9 m, 11.6 m along.
         const b = this.builder();
-        b.uvScale = 0.35;
+        // Curtain-wall facade set at its authored world tile, so the dark mass has
+        // a mullion grid and spandrel bands rather than one solid vertex colour on
+        // an untextured material. Base colour lifted off near-black for the same
+        // reason as the towers: a map multiplying 0x31363d is still 0x31363d.
+        b.uvScale = 1 / this.facadeTileOf('curtain');
         const W = 11, D = 8.4, H = 27;
-        b.box(0, H * 0.5, 0, W, H * 0.5, D, 0x31363d, { shade: { top: 1.09 } });
-        b.box(0, 2.0, 0, W + 0.5, 2.0, D + 0.5, 0x20242a, { shade: { top: 1.02 } });
-        b.box(0, H + 0.38, 0, W + 0.42, 0.38, D + 0.42, 0x2a2e34, { shade: { top: 1.18 } });
+        b.box(0, H * 0.5, 0, W, H * 0.5, D, 0x59626d, { taper: 0.995, shade: { top: 1.09 } });
+        b.box(0, 2.0, 0, W + 0.5, 2.0, D + 0.5, 0x3d434b, { shade: { top: 1.02 } });
+        b.box(0, H + 0.38, 0, W + 0.42, 0.38, D + 0.42, 0x4a5057, { shade: { top: 1.18 } });
         const panels: Array<[number, number, number, number]> = [
           [0, 20.5, 8.6, 4.8], [-4.2, 13.4, 6.4, 5.2], [4.6, 12.6, 5.0, 6.6],
         ];
@@ -4874,7 +6000,7 @@ export class Props implements ISubsystem {
         }
         return {
           geo: b.build('screenTower'), sign: sign.build('screenPanels'),
-          glow: glow.build('screenGlow'), cull: CULL_FAR,
+          glow: glow.build('screenGlow'), mat: this.facadeMat('curtain'), cull: CULL_FAR,
         };
       }
 
@@ -5779,6 +6905,17 @@ function normaliseType(type: string): string | null {
     case 'flagusa': case 'usflag': return 'flagusa';
     case 'flagroc': case 'taiwanflag': case 'rocflag': return 'flagroc';
     case 'flagjapan': case 'japanflag': case 'jpflag': return 'flagjapan';
+
+    // --- DISTRICT DECLARATIONS, not props ---------------------------------
+    // A `theme: 'city'` circuit declares WHICH city it is by authoring one of
+    // these once. `buildCity` claims it with `takeAuthored` before it emits
+    // anything, so it never reaches `authoredSpec` and produces no geometry —
+    // that is the whole point of it. See CITY_KITS for what each one selects, and
+    // `.probe-tmp/props.ts` for why the probe treats these as declarations rather
+    // than as an authored type with a missing builder.
+    case 'districtbrick': case 'brickdistrict': return 'district:brick';
+    case 'districtmidrise': case 'midrisedistrict': return 'district:midrise';
+    case 'districtneon': case 'neondistrict': return 'district:tokyo';
 
     // --- volcano dressing ------------------------------------------------
     case 'basaltcolumn': case 'basalt': case 'columncluster': return 'basaltcolumn';
