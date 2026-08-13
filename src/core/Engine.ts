@@ -4,6 +4,33 @@ import { FIXED_DT, MAX_FRAME_DT, MAX_SUBSTEPS, QUALITY_PRESETS } from './Config'
 import { bus } from './EventBus';
 import { clamp } from './MathUtils';
 
+// ---------------------------------------------------------------------------
+//  Adaptive resolution tuning. See `trackPerformance` for why each exists.
+// ---------------------------------------------------------------------------
+
+/**
+ * Step DOWN above this median frame time, sustained for `SLOW_HOLD`.
+ *
+ * 16.6 ms is the real 60 fps budget. The old value was 15.5, which shed
+ * resolution while the frame was still inside budget.
+ */
+const SLOW_MS = 16.6;
+/** Step UP below this median, sustained for `FAST_HOLD`. */
+const FAST_MS = 10.5;
+/**
+ * The dead band is therefore 10.5-16.6 ms, replacing 11.5-15.5. Widened at both
+ * ends: a frame near 13 ms used to cross the old band on noise alone, and each
+ * crossing reallocated every render target in the post chain.
+ */
+const SLOW_HOLD = 1.0;
+/** Asymmetric on purpose: drop quickly, recover reluctantly. */
+const FAST_HOLD = 4.0;
+/** Must stay under RenderPipeline's 2.5 s effect settle. */
+const SCALE_COOLDOWN = 2.0;
+const SCALE_FLOOR = 0.65;
+/** Direction changes tolerated before the ceiling is nailed for the session. */
+const MAX_REVERSALS = 3;
+
 /**
  * Engine owns the renderer, the scene, the camera and the frame loop.
  *
@@ -41,6 +68,26 @@ export class Engine {
   private currentScale = 1;
   private targetScale = 1;
   private lastScaleChange = 0;
+  /**
+   * The pixel ratio that lands on the fill budget at this CSS size, BEFORE the
+   * adaptive scale multiplies it. The adaptive path used to recompute the ratio as
+   * `min(devicePixelRatio, 2) * currentScale`, which silently discarded the `fit`
+   * term the constructor had worked out — see `trackPerformance`.
+   */
+  private baseRatio = 1;
+  /** Ratio actually handed to the renderer, so a sub-visible change can be skipped. */
+  private appliedRatio = 1;
+  /**
+   * When each verdict first became true, or -1. A verdict has to HOLD for its own
+   * window before it moves anything; a single slow frame is noise, not a trend.
+   */
+  private slowSince = -1;
+  private fastSince = -1;
+  /** Sign of the last scale change, and how many times the controller has reversed. */
+  private lastDir = 0;
+  private reversals = 0;
+  /** Upper bound on `targetScale`. Ratchets DOWN when the controller oscillates. */
+  private maxScale = 1;
   adaptiveResolution = true;
 
   /** Rolling average frame time in ms, for the debug HUD. */
@@ -85,9 +132,9 @@ export class Engine {
     const cssW = container.clientWidth || window.innerWidth || 1920;
     const cssH = container.clientHeight || window.innerHeight || 1080;
     const fit = Math.sqrt((1920 * 1080) / Math.max(1, cssW * cssH));
-    this.renderer.setPixelRatio(
-      Math.max(1, Math.min(Math.min(window.devicePixelRatio, 2), fit)),
-    );
+    this.baseRatio = Math.max(1, Math.min(Math.min(window.devicePixelRatio, 2), fit));
+    this.appliedRatio = this.baseRatio;
+    this.renderer.setPixelRatio(this.baseRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Tone mapping lives in the post chain (RenderPipeline's GradeEffect), which
@@ -117,6 +164,7 @@ export class Engine {
 
     this.currentScale = this.quality.renderScale;
     this.targetScale = this.quality.renderScale;
+    this.maxScale = this.quality.renderScale;
 
     window.addEventListener('resize', this.handleResize);
 
@@ -177,6 +225,13 @@ export class Engine {
   setQuality(tier: QualityTier): void {
     this.quality = { ...QUALITY_PRESETS[tier] };
     this.targetScale = this.quality.renderScale;
+    // A deliberate quality change re-opens the ceiling: the reversal ratchet is a
+    // response to THIS tier's cost, so it must not outlive the tier that earned it.
+    this.maxScale = this.quality.renderScale;
+    this.reversals = 0;
+    this.lastDir = 0;
+    this.slowSince = -1;
+    this.fastSince = -1;
     this.renderer.shadowMap.needsUpdate = true;
     bus.emit('quality:change', { tier });
     this.handleResize();
@@ -250,10 +305,54 @@ export class Engine {
   };
 
   /**
-   * Adaptive resolution: if we spend more than ~15 ms/frame for a sustained
-   * window, drop internal resolution in 10 % steps down to 65 %; recover when
-   * we're comfortably under 12 ms. Hysteresis + a 1.5 s cooldown stops it
-   * oscillating visibly.
+   * Adaptive resolution.
+   *
+   * ==========================================================================
+   *  THE BUG THIS USED TO HAVE: the first "we're slow" step made the frame
+   *  2.3x MORE EXPENSIVE, and the controller could never get back.
+   * ==========================================================================
+   *  The constructor works out `fit`, the ratio that lands on a 1920x1080
+   *  equivalent fill for whatever CSS size we got, and applies it. This method
+   *  then recomputed the ratio from scratch as
+   *
+   *      min(devicePixelRatio, 2) * currentScale
+   *
+   *  which DROPS `fit` entirely. On a Retina 16" (1512x982 CSS, dpr 2):
+   *
+   *      boot           ratio 1.181  ->  2.07 Mpx   (exactly the budget)
+   *      step to 0.90   ratio 1.800  ->  4.81 Mpx   (2.3x WORSE)
+   *      step to 0.80   ratio 1.600  ->  3.80 Mpx
+   *      step to 0.70   ratio 1.400  ->  2.91 Mpx
+   *      step to 0.65   ratio 1.300  ->  2.51 Mpx   floor, still 1.21x budget
+   *
+   *  So detecting slowness made things worse for four consecutive steps and then
+   *  settled permanently above budget, unable to return to the boot value. And
+   *  recovery walked toward `renderScale = 1`, i.e. ratio 2.0 and 5.94 Mpx — the
+   *  original oversized-backbuffer bug, reintroduced by the fix for it. The old
+   *  comment in the constructor claiming adaptive resolution "does claw it back"
+   *  was simply wrong.
+   *
+   *  The scale is now a multiplier on `baseRatio`, never on the raw display ratio.
+   *
+   * ==========================================================================
+   *  AND IT LIMIT-CYCLED, which is worse than sitting at a lower resolution
+   * ==========================================================================
+   *  Observed: 1280x720 -> 1600x900 -> 1440x810 with SSAO, reflections and DOF
+   *  toggling as it went. Two causes, both addressed:
+   *
+   *   - The old thresholds (11.5 / 15.5 ms) leave a 4 ms band that a frame
+   *     sitting near 13 ms crosses on noise alone, and a single median reading
+   *     was enough to act on. A verdict must now HOLD for its own window.
+   *   - Every transition calls `handleResize` -> `composer.setSize`, which
+   *     reallocates every render target in the chain (composer double buffer,
+   *     7 bloom mips, SMAA edges + weights, SSAO, NormalPass, DoF, SubjectMask).
+   *     The correction was itself a hitch, so correcting twice as often made the
+   *     stutter worse rather than better.
+   *
+   *  Asymmetric on purpose: drop quickly when we are over budget, recover
+   *  reluctantly. The reversal ratchet then caps the ceiling for the session
+   *  after three direction changes, so a machine that genuinely sits on the
+   *  boundary converges instead of hunting forever.
    */
   private trackPerformance(rawDt: number): void {
     const ms = rawDt * 1000;
@@ -266,23 +365,51 @@ export class Engine {
     this.fpsAverage = 1000 / Math.max(0.001, median);
 
     if (!this.adaptiveResolution) return;
-    if (this.ctx.elapsed - this.lastScaleChange < 1.5) return;
 
-    if (median > 15.5 && this.targetScale > 0.65) {
-      this.targetScale = Math.max(0.65, this.targetScale - 0.1);
-      this.lastScaleChange = this.ctx.elapsed;
-    } else if (median < 11.5 && this.targetScale < this.quality.renderScale) {
-      this.targetScale = Math.min(this.quality.renderScale, this.targetScale + 0.05);
-      this.lastScaleChange = this.ctx.elapsed;
-    }
+    const now = this.ctx.elapsed;
 
-    if (Math.abs(this.currentScale - this.targetScale) > 0.001) {
-      this.currentScale = this.targetScale;
-      this.renderer.setPixelRatio(
-        Math.min(window.devicePixelRatio, 2) * this.currentScale,
-      );
-      this.handleResize();
+    // Sustained-window bookkeeping. Cleared the moment the verdict stops holding,
+    // so a 1.0 s window means one continuous second, not one second in total.
+    if (median > SLOW_MS) { if (this.slowSince < 0) this.slowSince = now; } else this.slowSince = -1;
+    if (median < FAST_MS) { if (this.fastSince < 0) this.fastSince = now; } else this.fastSince = -1;
+
+    // Must stay BELOW RenderPipeline's own 2.5 s effect-settle, so the effect
+    // ladder never moves while the resolution is still hunting.
+    if (now - this.lastScaleChange < SCALE_COOLDOWN) return;
+
+    let dir = 0;
+    if (this.slowSince >= 0 && now - this.slowSince >= SLOW_HOLD && this.targetScale > SCALE_FLOOR) {
+      dir = -1;
+    } else if (this.fastSince >= 0 && now - this.fastSince >= FAST_HOLD && this.targetScale < this.maxScale) {
+      dir = 1;
     }
+    if (dir === 0) return;
+
+    if (this.lastDir !== 0 && dir !== this.lastDir) {
+      this.reversals++;
+      // Third reversal: this machine is on the boundary. Nail the ceiling to
+      // where we are so it stops oscillating for the rest of the session.
+      if (this.reversals >= MAX_REVERSALS) this.maxScale = this.currentScale;
+    }
+    this.lastDir = dir;
+
+    this.targetScale = dir < 0
+      ? Math.max(SCALE_FLOOR, this.targetScale - 0.10)
+      : Math.min(this.maxScale, this.targetScale + 0.05);
+    this.lastScaleChange = now;
+    this.slowSince = -1;
+    this.fastSince = -1;
+
+    if (Math.abs(this.currentScale - this.targetScale) <= 0.001) return;
+    this.currentScale = this.targetScale;
+
+    const ratio = this.baseRatio * this.currentScale;
+    // A change too small to see is not worth reallocating the whole chain for.
+    if (Math.abs(ratio - this.appliedRatio) < 0.05) return;
+    this.appliedRatio = ratio;
+    // No `max(1, ...)` here: dropping below 1 is the entire point of the scale.
+    this.renderer.setPixelRatio(ratio);
+    this.handleResize();
   }
 
   get frameContext(): FrameContext { return this.ctx as FrameContext; }
