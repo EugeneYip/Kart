@@ -415,15 +415,16 @@ export const ALL_ITEM_TYPES: readonly ItemType[] = Object.keys(MODEL_FOR_ITEM)
  * reading order.
  *
  * ⚠️ THIS IS THE RECONCILIATION. The atlas used to be a 4x4 grid indexed by raw
- * enum ordinal — sixteen cells for five shipping items. Ten of them held art for
- * things a player can never be handed, and because the removed members were
- * pointed at the nearest surviving prototype to keep `MODEL_FOR_ITEM` total,
- * six of those ten were straight DUPLICATES of a live cell (Lightning re-baked
- * the battery, Coin the star, Squid the bottle, and each triple its base). The
- * grid also had one genuinely empty cell. A dead or duplicated cell is not inert:
- * it is what makes an off-by-one in the row/column maths — the P0d bug recorded
- * on `getIconUV` — display another item's artwork instead of nothing at all, so
- * the failure is invisible in review and obvious in a race.
+ * enum ordinal — sixteen cells, nine distinct artworks, five shipping items.
+ * ELEVEN cells held art for something no roll can produce (the bob-omb, the
+ * spiked blue shell, both green shells, the bullet, and the triples), and because
+ * the three deleted items had to keep pointing at a surviving prototype to hold
+ * `MODEL_FOR_ITEM` total, SEVEN cells were byte-for-byte duplicates of another
+ * cell: Lightning re-baked the battery, Coin the star, Squid the bottle, and each
+ * triple its own base. A dead or duplicated cell is not inert — it is what makes
+ * an off-by-one in the row/column maths (the P0d bug recorded on `getIconUV`)
+ * display another item's artwork instead of nothing at all, so the failure is
+ * invisible in review and obvious in a race.
  *
  * Deriving the cell list from `LIVE_ITEMS` makes both halves structural rather
  * than promised: there is exactly one cell per live item, and no cell exists for
@@ -2245,11 +2246,10 @@ function paintStar(c: CanvasRenderingContext2D, S: number): void {
   innerRim(c, S, body, 'rgba(255,253,226,0.95)', S * 0.022, S * 0.022, 0.030);
   innerRim(c, S, body, 'rgba(196,88,0,0.85)', -S * 0.018, -S * 0.018, 0.026);
   spec(c, -R * 0.20, -R * 0.44, R * 0.20, R * 0.11, -0.5, 0.9);
-
-  // Twinkle on the upper-left arm — the one piece of "magic" in the set.
-  starPath(c, -R * 0.60, -R * 0.62, R * 0.28, R * 0.05, 4, -Math.PI / 2, 0.06);
-  c.fillStyle = 'rgba(255,255,255,0.92)';
-  c.fill();
+  // No detached sparkle. A four-point twinkle outside the star's own arm looked
+  // like a second object at 128 px and like a speck of dirt at 40 px — the ASCII
+  // dump in `.probe-tmp/iconatlas.ts` shows it as a stray cross. The silhouette
+  // has to stay a clean five-point star.
 }
 
 // ---------------------------------------------------------------------------
@@ -2502,15 +2502,19 @@ function paintBattery(c: CanvasRenderingContext2D, S: number): void {
   const CAP = R * 0.16;      // ellipse minor radius of the can ends
 
   // --- positive nub -------------------------------------------------------
+  // Wide enough that it is a NUB and not a keyline: at a 40 px HUD slot the
+  // terminal is about 6 px across, so anything narrower than ~0.45 W is swallowed
+  // whole by its own outline and the can loses the one feature that says
+  // "battery" rather than "tin".
   c.beginPath();
-  c.moveTo(-W * 0.32, TOP);
-  c.lineTo(-W * 0.28, -R * 1.00);
-  c.lineTo(W * 0.28, -R * 1.00);
-  c.lineTo(W * 0.32, TOP);
+  c.moveTo(-W * 0.46, TOP);
+  c.lineTo(-W * 0.40, -R * 1.02);
+  c.lineTo(W * 0.40, -R * 1.02);
+  c.lineTo(W * 0.46, TOP);
   c.closePath();
-  inked(c, S, lin(c, -W * 0.3, 0, W * 0.3, 0, [
-    [0, '#ffffff'], [0.4, '#d7deea'], [1, '#7d8697'],
-  ]), 0.042);
+  inked(c, S, lin(c, -W * 0.46, -R, W * 0.46, TOP, [
+    [0, '#ffffff'], [0.35, '#e2e8f2'], [0.7, '#b6bfcd'], [1, '#798394'],
+  ]), 0.040);
 
   // --- can body -----------------------------------------------------------
   const body = (cc: CanvasRenderingContext2D): void => {
@@ -2525,8 +2529,14 @@ function paintBattery(c: CanvasRenderingContext2D, S: number): void {
     cc.closePath();
   };
   body(c);
+  // Slate-navy, deliberately LESS saturated than the bottle's teal. These two are
+  // the pair the owner reported as swapped, so they are separated on three axes at
+  // once: silhouette (squat nubbed can vs necked bottle), value (dark vs pale) and
+  // hue — the wrap stays near-neutral so the item's chroma is carried entirely by
+  // the gold bolt, which puts the battery's dominant hue ~140 deg away from the
+  // bottle's cyan instead of the 38 deg it sat at when the navy dominated.
   inked(c, S, lin(c, -W, TOP, W, BOT, [
-    [0, '#5a6aa8'], [0.20, '#39456e'], [0.62, '#1b2140'], [1, '#0d1020'],
+    [0, '#5b638c'], [0.20, '#3b4260'], [0.62, '#1e2136'], [1, '#0f111c'],
   ]), 0.055);
 
   // --- steel collars ------------------------------------------------------
@@ -2550,21 +2560,24 @@ function paintBattery(c: CanvasRenderingContext2D, S: number): void {
   // Same polygon the 3-D wrap point-in-polygons for its albedo, emissive mask
   // and normal map. One definition, four consumers — so the icon and the item in
   // the player's hand carry the identical mark.
+  // The outline is 0.76 wide by 2.0 tall in its own space, so it needs a much
+  // larger x scale than y to come out as a chunky printed mark rather than a thin
+  // diagonal slash — which is exactly what it read as at the first scale I tried.
   const boltPath = (cc: CanvasRenderingContext2D): void => {
     cc.beginPath();
     for (let i = 0; i < BOLT_OUTLINE.length; i++) {
       const [bx, by] = BOLT_OUTLINE[i];
-      const x = bx * W * 0.60;
-      const y = R * 0.16 - by * R * 0.50;
+      const x = bx * W * 1.22;
+      const y = R * 0.14 - by * R * 0.58;
       if (i === 0) cc.moveTo(x, y); else cc.lineTo(x, y);
     }
     cc.closePath();
   };
   boltPath(c);
-  inked(c, S, lin(c, -W * 0.5, -R * 0.4, W * 0.5, R * 0.6, [
-    [0, '#fff3b0'], [0.30, '#ffd24a'], [0.68, '#ffc63a'], [1, '#b8760c'],
-  ]), 0.034, '#241505');
-  innerRim(c, S, boltPath, 'rgba(255,251,214,0.9)', S * 0.012, S * 0.012, 0.018);
+  inked(c, S, lin(c, -W * 0.5, -R * 0.5, W * 0.5, R * 0.7, [
+    [0, '#fffbdc'], [0.26, '#ffe066'], [0.60, '#ffc42a'], [1, '#c07f0a'],
+  ]), 0.032, '#241505');
+  innerRim(c, S, boltPath, 'rgba(255,253,228,0.95)', S * 0.012, S * 0.012, 0.018);
 
   // --- charge gauge, four pips up the shade side --------------------------
   c.save();

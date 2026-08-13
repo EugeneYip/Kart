@@ -42,7 +42,9 @@ import { clamp, clamp01 } from '@/core/MathUtils';
 // exact defect that made the character-select screen a placebo — see the note at
 // the top of `./Catalogue`.
 import { LIVE_ITEMS } from '@/items/ItemRoulette';
-import { ITEM_NAMES, TRIPLE_ITEMS } from '@/items/ItemModels';
+// `paintItemIcon` is the item ARTWORK, imported for the same reason: this file
+// used to hold a second, older copy of every item drawing (see `ItemIcons.paint`).
+import { ITEM_NAMES, TRIPLE_ITEMS, paintItemIcon } from '@/items/ItemModels';
 // Portrait data, derived there from `DRIVERS` — this module draws, it never
 // authors a palette or a hat shape of its own.
 import type { BustSpec } from './Catalogue';
@@ -284,19 +286,6 @@ export function roundRect(
   c.closePath();
 }
 
-function star(
-  c: CanvasRenderingContext2D, cx: number, cy: number, outer: number, inner: number, points = 5,
-): void {
-  c.beginPath();
-  for (let i = 0; i < points * 2; i++) {
-    const r = i % 2 === 0 ? outer : inner;
-    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
-    const x = cx + Math.cos(a) * r;
-    const y = cy + Math.sin(a) * r;
-    if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
-  }
-  c.closePath();
-}
 
 // ===========================================================================
 // (The 232u analogue speedometer that used to live here — dished plate, tick
@@ -315,15 +304,12 @@ const FONT_STACK_CANVAS =
 // Item icons
 // ===========================================================================
 
-interface ItemStyle { a: string; b: string; c: string }
-
-const SHELL_GREEN: ItemStyle = { a: '#d9ffb0', b: '#4fd139', c: '#137a1c' };
-const SHELL_RED: ItemStyle = { a: '#ffd9d0', b: '#ff4a3a', c: '#a80f0f' };
-const SHELL_BLUE: ItemStyle = { a: '#dff3ff', b: '#3f8dff', c: '#0f2fa8' };
-
 /**
- * Procedural item artwork. Every icon is a chunky, high-contrast silhouette
- * with a fat dark outline so it reads at 40 px on a bright track.
+ * The HUD's item artwork.
+ *
+ * It samples the atlas `ItemModels` bakes, and for an item with no cell in that
+ * atlas it calls `paintItemIcon()` — the same painter the atlas was baked from.
+ * This class owns no artwork of its own; see `paint()`.
  */
 export class ItemIcons {
   private cache = new Map<string, string>();
@@ -331,6 +317,8 @@ export class ItemIcons {
   private atlasSize = { w: 0, h: 0 };
   private uv: ((item: ItemType) => { x: number; y: number; w: number; h: number } | null) | null = null;
   private size: number;
+  /** True once `useAtlas` has been called with a real items module. */
+  private wired = false;
 
   constructor(size = 128) {
     this.size = size;
@@ -340,9 +328,23 @@ export class ItemIcons {
    * Adopt the items subsystem's atlas if it exposes one. Supports a raw canvas,
    * an ImageBitmap-ish object, or a THREE.Texture wrapper, and UV rectangles
    * given as {x,y,w,h}, {u0,v0,u1,v1} or a Vector4.
+   *
+   * ⚠️ `items === undefined` IS NOT A FAILURE and must not be logged as one.
+   * `HUD.build()` calls `useAtlas(this.items ?? undefined)` while `HUD.items` is
+   * still null — it has to, because the HUD constructor never receives the items
+   * module and `Game.ts` only wires it twenty lines after `await hud.init()`. That
+   * pre-wire call is the one every boot used to report, and it is the reason the
+   * console has been shouting `[ItemIcons] no item icon atlas (no items subsystem
+   * was handed to the HUD)` on a build where the atlas is adopted correctly a
+   * moment later. It is a state, not a fault; the fault is only real if no atlas
+   * has arrived by the time an icon is actually drawn, which is what `apply()`
+   * now checks.
    */
   useAtlas(items: ItemsLike | undefined): void {
-    if (!items) { this.warnNoAtlas('no items subsystem was handed to the HUD'); return; }
+    // Not wired yet — silent, and deliberately does NOT clear an atlas we already
+    // hold, so a late `setItems(undefined)` cannot blank the slot.
+    if (!items) return;
+    this.wired = true;
     const atlas = tryCall<unknown>(items, 'getIconAtlas');
     if (!atlas) { this.warnNoAtlas('getIconAtlas() returned nothing'); return; }
     const src = this.resolveImage(atlas);
@@ -394,37 +396,69 @@ export class ItemIcons {
   }
 
   /**
-   * Say so, once, when the item slot falls back to the procedural drawings.
+   * Say so, once per distinct cause, when the atlas cannot be adopted.
    *
-   * This is not cosmetic any more. `ItemModels` owns the real icon art and is
-   * being RE-SKINNED (Rocket / Plastic Bottle / Battery / Ninja); the drawings in
-   * this file are the old MK8 shapes, so without the atlas the HUD shows a
-   * banana for the Plastic Bottle and a mushroom for the Battery. A silent
-   * fallback is how a whole subsystem hides — same shape as the minimap's
-   * normalised-path warning.
+   * ⚠️ THE LATCH USED TO BE THE BUG. This was one `static` boolean shared by
+   * every instance and every reason, set by the FIRST call in the process — which
+   * is always `HUD.build()`'s pre-wire call, twenty lines before `Game.ts` hands
+   * the items module over. So the console reliably printed a reason that had
+   * already stopped being true, and a genuine later failure — `getIconAtlas()`
+   * returning nothing, a canvas that cannot be read — could never be printed at
+   * all. Proven in `.probe-tmp/iconwire.ts`: an `ItemIcons` with truly no atlas,
+   * silently drawing fallbacks, emitted ZERO warnings because a harmless earlier
+   * call had spent the flag. A broken alarm is worse than a loud one.
    *
-   * As of this writing `Game.ts` never calls `hud.setItems(this.items)`, so this
-   * fires on every boot. One line next to `wire(this.hud, 'setAudio', …)` fixes
-   * it: `wire(this.hud, 'setItems', this.items);`
+   * Keyed by reason and per-instance now, so each distinct cause is reported once
+   * and none can mask another.
    */
   private warnNoAtlas(why: string): void {
-    if (ItemIcons.warnedNoAtlas) return;
-    ItemIcons.warnedNoAtlas = true;
+    if (this.warned.has(why)) return;
+    this.warned.add(why);
     console.warn(
-      `[ItemIcons] no item icon atlas (${why}) — falling back to the built-in `
-      + 'drawings, which are NOT the re-skinned art. Game.ts needs '
-      + 'wire(this.hud, \'setItems\', this.items).',
+      `[ItemIcons] no item icon atlas (${why}) — drawing icons one at a time `
+      + 'instead. Same artwork (ItemModels.paintItemIcon), but the HUD is '
+      + 'rasterising per item instead of sampling the baked sheet.',
     );
   }
 
-  private static warnedNoAtlas = false;
+  /**
+   * The real failure, reported at the moment it becomes one: an icon is wanted,
+   * and no items module ever arrived. Distinct from `warnNoAtlas` — that means
+   * "the module is here and its atlas is unusable", this means "nobody wired it",
+   * i.e. `Game.ts` is missing `wire(this.hud, 'setItems', this.items)`.
+   */
+  private warnNeverWired(): void {
+    if (this.warned.has('unwired')) return;
+    this.warned.add('unwired');
+    console.warn(
+      '[ItemIcons] the HUD is drawing item icons but was never handed the items '
+      + 'subsystem, so there is no atlas to sample. Game.ts needs '
+      + 'wire(this.hud, \'setItems\', this.items) — see HUD.setItems().',
+    );
+  }
 
-  /** Point a DOM node's background at the icon for `item`. */
+  /** Per-instance, per-reason. Never static: see `warnNoAtlas`. */
+  private warned = new Set<string>();
+
+  /**
+   * Point a DOM node's background at the icon for `item`.
+   *
+   * Two live paths, ONE artwork. An item with a cell is sampled out of the baked
+   * sheet with a `background-position`; an item without one (everything outside
+   * `ICON_ITEMS` — the forced-grant bob-omb, shells and bullet) is rasterised on
+   * demand by `paint()`. Both end at `paintItemIcon`, so the two can differ in
+   * sharpness but never in *what they depict*, which is the failure the owner
+   * originally reported ("the battery icon shows the bottle item").
+   */
   apply(node: HTMLElement, item: ItemType | null): void {
     if (item === null) {
       node.style.backgroundImage = 'none';
       return;
     }
+    // An icon is genuinely wanted and nobody ever wired the items module: this is
+    // the moment the silent fallback becomes a real defect, so say so here rather
+    // than during boot when it is still just an ordering artefact.
+    if (!this.wired) this.warnNeverWired();
     if (this.atlasUrl && this.uv) {
       const r = this.uv(item);
       if (r) {
@@ -503,410 +537,35 @@ export class ItemIcons {
    */
   static get ROULETTE(): readonly ItemType[] { return LIVE_ITEMS; }
 
+  /**
+   * Rasterise one icon at `this.size`, using the items module's own painter.
+   *
+   * ⚠️ THIS FILE NO LONGER DRAWS ITEMS, AND MUST NOT AGAIN. It used to carry a
+   * complete parallel set — `shell`, `blueShell`, `mushroom`, `banana`, `bomb`,
+   * `starItem`, `bolt`, `ghost`, `bullet`, `coin`, `squid`: some 370 lines, all of
+   * it the art from BEFORE the P0d-D5 re-skin. So the "fallback" drew a BANANA for
+   * the Plastic Bottle, a MUSHROOM for the Battery, a GHOST for the Ninja and a
+   * RED SHELL for the Rocket, and kept a coin and a squid for items that no longer
+   * exist at all. That is not a degraded copy of an icon, it is a different
+   * object; and because it only surfaced when the atlas was missing, whichever of
+   * the two paths you audited, the other one was wrong. It is exactly the
+   * parallel-list defect this file's own header warns about for `ITEM_NAMES` and
+   * `LIVE_ITEMS`, and it is why the owner's "the battery icon shows the bottle
+   * item" survived a round of fixes.
+   *
+   * `paintItemIcon()` is now the only item artwork in the project outside the 3-D
+   * models, and the atlas is baked from it too.
+   */
   private paint(item: ItemType): HTMLCanvasElement {
     const S = this.size;
     const canvas = makeCanvas(S, S);
     const c = ctx2d(canvas);
     if (!c) return canvas;
-    const base = ItemIcons.base(item);
     c.save();
     c.translate(S * 0.5, S * 0.5);
-    const R = S * 0.40;
-    switch (base) {
-      case ItemType.GreenShell: this.shell(c, R, SHELL_GREEN); break;
-      case ItemType.RedShell: this.shell(c, R, SHELL_RED); break;
-      case ItemType.BlueShell: this.blueShell(c, R); break;
-      case ItemType.Banana: this.banana(c, R); break;
-      case ItemType.Bomb: this.bomb(c, R); break;
-      case ItemType.Star: this.starItem(c, R); break;
-      case ItemType.Lightning: this.bolt(c, R); break;
-      case ItemType.Ghost: this.ghost(c, R); break;
-      case ItemType.Bullet: this.bullet(c, R); break;
-      case ItemType.Coin: this.coin(c, R); break;
-      case ItemType.Squid: this.squid(c, R); break;
-      case ItemType.Boost:
-      default: this.mushroom(c, R); break;
-    }
+    paintItemIcon(c, ItemIcons.base(item), S);
     c.restore();
     return canvas;
-  }
-
-  // -- painters ------------------------------------------------------------
-
-  private outline(c: CanvasRenderingContext2D, w = 0.13): void {
-    c.lineJoin = 'round';
-    c.lineCap = 'round';
-    c.lineWidth = this.size * w * 0.5;
-    c.strokeStyle = '#0a1020';
-    c.stroke();
-  }
-
-  private gloss(c: CanvasRenderingContext2D, x: number, y: number, r: number): void {
-    const g = c.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, 'rgba(255,255,255,0.85)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g;
-    c.beginPath();
-    c.ellipse(x, y, r, r * 0.7, -0.4, 0, Math.PI * 2);
-    c.fill();
-  }
-
-  private shell(c: CanvasRenderingContext2D, R: number, s: ItemStyle): void {
-    // White under-rim.
-    c.beginPath();
-    c.ellipse(0, R * 0.34, R * 0.98, R * 0.44, 0, 0, Math.PI * 2);
-    c.fillStyle = '#fdfdfa';
-    c.fill();
-    this.outline(c, 0.1);
-
-    // Dome.
-    c.beginPath();
-    c.arc(0, R * 0.1, R * 0.94, Math.PI, 0);
-    c.closePath();
-    const g = c.createRadialGradient(-R * 0.3, -R * 0.5, R * 0.06, 0, R * 0.1, R * 1.12);
-    g.addColorStop(0, s.a);
-    g.addColorStop(0.45, s.b);
-    g.addColorStop(1, s.c);
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.11);
-
-    // Segment lines.
-    c.save();
-    c.beginPath();
-    c.arc(0, R * 0.1, R * 0.9, Math.PI, 0);
-    c.closePath();
-    c.clip();
-    c.strokeStyle = 'rgba(10,20,32,0.35)';
-    c.lineWidth = this.size * 0.018;
-    for (let i = -2; i <= 2; i++) {
-      c.beginPath();
-      c.moveTo(i * R * 0.36, R * 0.12);
-      c.quadraticCurveTo(i * R * 0.42, -R * 0.4, i * R * 0.2, -R * 0.85);
-      c.stroke();
-    }
-    c.restore();
-
-    this.gloss(c, -R * 0.34, -R * 0.42, R * 0.42);
-  }
-
-  private blueShell(c: CanvasRenderingContext2D, R: number): void {
-    // Spikes.
-    c.save();
-    c.fillStyle = '#eaf4ff';
-    for (let i = 0; i < 5; i++) {
-      const a = Math.PI + (i / 4) * Math.PI;
-      const x = Math.cos(a) * R * 0.82;
-      const y = R * 0.08 + Math.sin(a) * R * 0.82;
-      c.beginPath();
-      c.moveTo(x, y);
-      c.lineTo(x + Math.cos(a - 0.28) * R * 0.36, y + Math.sin(a - 0.28) * R * 0.36);
-      c.lineTo(x + Math.cos(a + 0.28) * R * 0.36, y + Math.sin(a + 0.28) * R * 0.36);
-      c.closePath();
-      c.fill();
-      this.outline(c, 0.07);
-    }
-    c.restore();
-    this.shell(c, R * 0.94, SHELL_BLUE);
-    // Wings.
-    c.fillStyle = 'rgba(240,250,255,0.95)';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.moveTo(s * R * 0.7, -R * 0.1);
-      c.quadraticCurveTo(s * R * 1.45, -R * 0.62, s * R * 1.2, R * 0.16);
-      c.quadraticCurveTo(s * R * 1.0, R * 0.02, s * R * 0.7, R * 0.1);
-      c.closePath();
-      c.fill();
-      this.outline(c, 0.07);
-    }
-  }
-
-  private mushroom(c: CanvasRenderingContext2D, R: number): void {
-    // Stem.
-    c.beginPath();
-    c.moveTo(-R * 0.44, R * 0.16);
-    c.quadraticCurveTo(-R * 0.5, R * 0.9, -R * 0.2, R * 0.92);
-    c.lineTo(R * 0.2, R * 0.92);
-    c.quadraticCurveTo(R * 0.5, R * 0.9, R * 0.44, R * 0.16);
-    c.closePath();
-    const sg = c.createLinearGradient(-R * 0.4, 0, R * 0.4, 0);
-    sg.addColorStop(0, '#fff8e2');
-    sg.addColorStop(0.6, '#f6e6c2');
-    sg.addColorStop(1, '#d8bf95');
-    c.fillStyle = sg;
-    c.fill();
-    this.outline(c, 0.11);
-
-    // Cap.
-    c.beginPath();
-    c.moveTo(-R, R * 0.2);
-    c.bezierCurveTo(-R * 1.05, -R * 0.85, R * 1.05, -R * 0.85, R, R * 0.2);
-    c.quadraticCurveTo(0, R * 0.46, -R, R * 0.2);
-    c.closePath();
-    const cg = c.createRadialGradient(-R * 0.3, -R * 0.5, R * 0.05, 0, 0, R * 1.3);
-    cg.addColorStop(0, '#ff8f8f');
-    cg.addColorStop(0.4, '#f5352c');
-    cg.addColorStop(1, '#96060c');
-    c.fillStyle = cg;
-    c.fill();
-    this.outline(c, 0.12);
-
-    // Spots.
-    c.fillStyle = '#fffdf4';
-    const spots: [number, number, number][] = [
-      [-R * 0.52, -R * 0.18, R * 0.22], [R * 0.5, -R * 0.14, R * 0.19],
-      [0, -R * 0.5, R * 0.24], [-R * 0.05, R * 0.06, R * 0.13],
-    ];
-    for (const [x, y, r] of spots) {
-      c.beginPath();
-      c.ellipse(x, y, r, r * 0.92, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-    this.gloss(c, -R * 0.4, -R * 0.48, R * 0.34);
-  }
-
-  private banana(c: CanvasRenderingContext2D, R: number): void {
-    c.save();
-    c.rotate(-0.25);
-    c.beginPath();
-    c.moveTo(-R * 0.86, -R * 0.42);
-    c.bezierCurveTo(-R * 0.3, R * 0.98, R * 0.72, R * 0.72, R * 0.9, -R * 0.1);
-    c.bezierCurveTo(R * 0.5, R * 0.42, -R * 0.2, R * 0.4, -R * 0.52, -R * 0.5);
-    c.closePath();
-    const g = c.createLinearGradient(-R, -R * 0.4, R * 0.6, R * 0.7);
-    g.addColorStop(0, '#fff6b8');
-    g.addColorStop(0.45, '#ffd42a');
-    g.addColorStop(1, '#c98c05');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.12);
-    // Tips.
-    c.fillStyle = '#5e3d0d';
-    c.beginPath();
-    c.ellipse(-R * 0.84, -R * 0.44, R * 0.12, R * 0.09, -0.6, 0, Math.PI * 2);
-    c.fill();
-    c.beginPath();
-    c.ellipse(R * 0.9, -R * 0.12, R * 0.11, R * 0.08, 0.5, 0, Math.PI * 2);
-    c.fill();
-    c.restore();
-    this.gloss(c, -R * 0.3, -R * 0.18, R * 0.3);
-  }
-
-  private bomb(c: CanvasRenderingContext2D, R: number): void {
-    // Body.
-    c.beginPath();
-    c.arc(0, R * 0.16, R * 0.8, 0, Math.PI * 2);
-    const g = c.createRadialGradient(-R * 0.3, -R * 0.2, R * 0.05, 0, R * 0.16, R * 1.0);
-    g.addColorStop(0, '#5c6c8c');
-    g.addColorStop(0.4, '#222b40');
-    g.addColorStop(1, '#070a14');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.1);
-    // Feet + wind-up key.
-    c.fillStyle = '#f4c02a';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(s * R * 0.42, R * 0.9, R * 0.24, R * 0.12, 0, 0, Math.PI * 2);
-      c.fill();
-      this.outline(c, 0.06);
-    }
-    // Fuse.
-    c.strokeStyle = '#d8dce6';
-    c.lineWidth = this.size * 0.045;
-    c.beginPath();
-    c.moveTo(R * 0.18, -R * 0.6);
-    c.quadraticCurveTo(R * 0.62, -R * 0.9, R * 0.5, -R * 1.02);
-    c.stroke();
-    // Spark.
-    star(c, R * 0.52, -R * 1.05, R * 0.3, R * 0.11, 6);
-    const sg = c.createRadialGradient(R * 0.52, -R * 1.05, 0, R * 0.52, -R * 1.05, R * 0.32);
-    sg.addColorStop(0, '#fffbe0');
-    sg.addColorStop(0.5, '#ffcf3a');
-    sg.addColorStop(1, '#ff6a00');
-    c.fillStyle = sg;
-    c.fill();
-    // Eyes.
-    c.fillStyle = '#fdfdfd';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(s * R * 0.26, R * 0.04, R * 0.15, R * 0.19, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-    c.fillStyle = '#0a0d18';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.arc(s * R * 0.27, R * 0.07, R * 0.08, 0, Math.PI * 2);
-      c.fill();
-    }
-    this.gloss(c, -R * 0.34, -R * 0.28, R * 0.3);
-  }
-
-  private starItem(c: CanvasRenderingContext2D, R: number): void {
-    // Glow.
-    const glow = c.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.25);
-    glow.addColorStop(0, 'rgba(255,240,150,0.85)');
-    glow.addColorStop(1, 'rgba(255,200,40,0)');
-    c.fillStyle = glow;
-    c.beginPath();
-    c.arc(0, 0, R * 1.25, 0, Math.PI * 2);
-    c.fill();
-
-    star(c, 0, 0, R * 1.0, R * 0.42, 5);
-    const g = c.createLinearGradient(0, -R, 0, R);
-    g.addColorStop(0, '#fffde8');
-    g.addColorStop(0.45, '#ffd82a');
-    g.addColorStop(1, '#f08f00');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.11);
-    // Eyes.
-    c.fillStyle = '#12162a';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(s * R * 0.22, -R * 0.02, R * 0.09, R * 0.16, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-  }
-
-  private bolt(c: CanvasRenderingContext2D, R: number): void {
-    c.beginPath();
-    c.moveTo(R * 0.34, -R);
-    c.lineTo(-R * 0.6, R * 0.12);
-    c.lineTo(-R * 0.05, R * 0.16);
-    c.lineTo(-R * 0.36, R);
-    c.lineTo(R * 0.66, -R * 0.2);
-    c.lineTo(R * 0.06, -R * 0.24);
-    c.closePath();
-    const g = c.createLinearGradient(-R * 0.5, -R, R * 0.5, R);
-    g.addColorStop(0, '#fffbd0');
-    g.addColorStop(0.5, '#ffd21f');
-    g.addColorStop(1, '#ff8a00');
-    c.fillStyle = g;
-    c.shadowColor = 'rgba(255,210,60,0.9)';
-    c.shadowBlur = this.size * 0.16;
-    c.fill();
-    c.shadowBlur = 0;
-    this.outline(c, 0.11);
-  }
-
-  private ghost(c: CanvasRenderingContext2D, R: number): void {
-    c.beginPath();
-    c.arc(0, -R * 0.12, R * 0.82, Math.PI, 0);
-    c.lineTo(R * 0.82, R * 0.5);
-    for (let i = 0; i < 4; i++) {
-      const x0 = R * 0.82 - (i * R * 1.64) / 4;
-      const x1 = x0 - (R * 1.64) / 8;
-      const x2 = x0 - (R * 1.64) / 4;
-      c.quadraticCurveTo(x1, R * (i % 2 === 0 ? 0.95 : 0.68), x2, R * 0.5);
-    }
-    c.closePath();
-    const g = c.createRadialGradient(-R * 0.24, -R * 0.36, R * 0.06, 0, 0, R * 1.15);
-    g.addColorStop(0, '#ffffff');
-    g.addColorStop(0.6, '#e2ecff');
-    g.addColorStop(1, '#a7bcd8');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.1);
-    // Face.
-    c.fillStyle = '#0d1222';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(s * R * 0.26, -R * 0.22, R * 0.11, R * 0.15, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-    c.beginPath();
-    c.moveTo(-R * 0.3, R * 0.14);
-    c.quadraticCurveTo(0, R * 0.5, R * 0.3, R * 0.14);
-    c.quadraticCurveTo(0, R * 0.28, -R * 0.3, R * 0.14);
-    c.closePath();
-    c.fill();
-  }
-
-  private bullet(c: CanvasRenderingContext2D, R: number): void {
-    c.save();
-    c.rotate(-0.18);
-    c.beginPath();
-    c.moveTo(-R * 0.9, -R * 0.5);
-    c.lineTo(R * 0.28, -R * 0.5);
-    c.quadraticCurveTo(R * 0.95, -R * 0.5, R * 0.95, 0);
-    c.quadraticCurveTo(R * 0.95, R * 0.5, R * 0.28, R * 0.5);
-    c.lineTo(-R * 0.9, R * 0.5);
-    c.closePath();
-    const g = c.createLinearGradient(0, -R * 0.5, 0, R * 0.5);
-    g.addColorStop(0, '#69789a');
-    g.addColorStop(0.4, '#242c40');
-    g.addColorStop(1, '#0a0e1a');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.1);
-    // Arms.
-    c.fillStyle = '#182034';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(-R * 0.1, s * R * 0.62, R * 0.34, R * 0.15, 0, 0, Math.PI * 2);
-      c.fill();
-      this.outline(c, 0.06);
-    }
-    // Eyes.
-    c.fillStyle = '#fff';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(R * 0.34, s * R * 0.16, R * 0.13, R * 0.14, 0, 0, Math.PI * 2);
-      c.fill();
-    }
-    c.restore();
-    this.gloss(c, -R * 0.3, -R * 0.3, R * 0.36);
-  }
-
-  private coin(c: CanvasRenderingContext2D, R: number): void {
-    c.beginPath();
-    c.ellipse(0, 0, R * 0.72, R * 0.92, 0, 0, Math.PI * 2);
-    const g = c.createRadialGradient(-R * 0.24, -R * 0.3, R * 0.05, 0, 0, R);
-    g.addColorStop(0, '#fff8cd');
-    g.addColorStop(0.42, '#ffd447');
-    g.addColorStop(1, '#b06a04');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.1);
-    c.beginPath();
-    c.ellipse(0, 0, R * 0.44, R * 0.64, 0, 0, Math.PI * 2);
-    c.strokeStyle = 'rgba(120,70,4,0.6)';
-    c.lineWidth = this.size * 0.03;
-    c.stroke();
-    this.gloss(c, -R * 0.24, -R * 0.34, R * 0.3);
-  }
-
-  private squid(c: CanvasRenderingContext2D, R: number): void {
-    c.beginPath();
-    c.moveTo(-R * 0.7, R * 0.1);
-    c.quadraticCurveTo(-R * 0.9, -R * 0.95, 0, -R * 0.95);
-    c.quadraticCurveTo(R * 0.9, -R * 0.95, R * 0.7, R * 0.1);
-    c.closePath();
-    const g = c.createRadialGradient(-R * 0.2, -R * 0.5, R * 0.06, 0, -R * 0.2, R * 1.1);
-    g.addColorStop(0, '#f2f8ff');
-    g.addColorStop(0.55, '#bcd4ee');
-    g.addColorStop(1, '#5b7ba6');
-    c.fillStyle = g;
-    c.fill();
-    this.outline(c, 0.1);
-    // Tentacles.
-    c.strokeStyle = '#cfe0f4';
-    c.lineWidth = this.size * 0.075;
-    c.lineCap = 'round';
-    for (let i = -2; i <= 2; i++) {
-      c.beginPath();
-      c.moveTo(i * R * 0.3, R * 0.05);
-      c.quadraticCurveTo(i * R * 0.42, R * 0.62, i * R * 0.24, R * 0.95);
-      c.stroke();
-    }
-    // Eyes.
-    c.fillStyle = '#10182c';
-    for (const s of [-1, 1]) {
-      c.beginPath();
-      c.ellipse(s * R * 0.26, -R * 0.3, R * 0.1, R * 0.14, 0, 0, Math.PI * 2);
-      c.fill();
-    }
   }
 }
 
