@@ -59,7 +59,7 @@ interface TrackRef {
   lapLength?: number;
   /** `ITrackService.trackId` — how we notice the circuit has been swapped. */
   trackId?: string;
-  def?: { id?: string };
+  def?: { id?: string; weather?: string };
   roadGroup?: THREE.Object3D;
   group?: THREE.Object3D;
   getDecorationHints?: () => unknown;
@@ -91,6 +91,14 @@ const THEME_WATER: Record<WorldTheme, WaterPresetName> = {
   snow: 'lake',
 };
 
+/**
+ * DEFAULT weather per theme, not the final word. A theme says what a place is
+ * built of, not what its sky is doing, and keying weather off it alone meant
+ * every `theme: 'city'` circuit raced in rain — including `bostonHarbor`, a
+ * `skyPreset: 'day'` harbour, which ran at midday under a downpour with
+ * `applyWetRoad(true)` cutting road roughness to 0.28x and putting droplets on
+ * the lens. `TrackDef.weather` overrides this per circuit; see `resolveWeather`.
+ */
 const THEME_WEATHER: Record<WorldTheme, WeatherName> = {
   coastal: 'leaves',
   city: 'rain',
@@ -99,6 +107,10 @@ const THEME_WEATHER: Record<WorldTheme, WeatherName> = {
   desert: 'clear',
   snow: 'snow',
 };
+
+const WEATHER_NAMES: readonly WeatherName[] = [
+  'clear', 'rain', 'storm', 'snow', 'ash', 'leaves', 'shimmer',
+];
 
 /** Baseline wind: strength, direction (radians in XZ). */
 const THEME_WIND: Record<WorldTheme, [number, number]> = {
@@ -333,7 +345,7 @@ export class Environment implements ISubsystem {
       this.weather = new Weather(this.scene, this.renderer, this.ctx as WorldContext, this.quality);
       await this.weather.init();
       this.weather.setRoadGroup(this.findRoadGroup());
-      this.weather.setPreset(THEME_WEATHER[this.theme] ?? 'clear');
+      this.weather.setPreset(this.resolveWeather());
       this.weather.group.userData.noReflect = true;
       reparent(this.weather.group, this.group);
     });
@@ -355,6 +367,29 @@ export class Environment implements ISubsystem {
   // =========================================================================
   // TRACK INTERROGATION
   // =========================================================================
+
+  /**
+   * The circuit's authored weather, or the theme default.
+   *
+   * Read off `track.def` rather than through `DecorationHints`, deliberately:
+   * `DecorationHints` is declared in `WorldTextures.ts` and is the contract
+   * `Props`/`Terrain`/`Crowd` all consume, so widening it to carry a forecast
+   * would touch three subsystems that have no use for one. `TrackRef.def`
+   * already existed for the circuit-swap check.
+   *
+   * Validated against `WEATHER_NAMES` because the def field is a plain string
+   * union with no runtime guard: an unknown name falls back to the theme rather
+   * than reaching `Weather.setPreset`, where `normalise()` would silently turn
+   * it into `'clear'` and hide the typo.
+   */
+  private resolveWeather(): WeatherName {
+    const authored = this.track?.def?.weather;
+    if (typeof authored === 'string'
+      && (WEATHER_NAMES as readonly string[]).includes(authored)) {
+      return authored as WeatherName;
+    }
+    return THEME_WEATHER[this.theme] ?? 'clear';
+  }
 
   private readHints(): DecorationHints {
     const raw = safe(() => {

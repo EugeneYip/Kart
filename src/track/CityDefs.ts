@@ -437,6 +437,11 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     subtitle: 'Brownstones, a tunnel and the cable bridge',
     theme: 'city',
     skyPreset: 'day',
+    // Explicit, because `theme: 'city'` defaults to RAIN and this is a midday
+    // harbour. Rain also triggers `Weather.applyWetRoad(true)`, which cuts road
+    // roughness to 0.28x and puts droplets on the lens — the owner's "difficult
+    // to view" complaint. None of the city series races in the wet.
+    weather: 'clear',
     laps: 3,
     terrainSeed: 16301,
     // ---- NO WATER PLANE, and that was measured, not assumed ----------------
@@ -598,6 +603,7 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     subtitle: 'A night market, a 150 m sweeper and the tiered tower',
     theme: 'city',
     skyPreset: 'sunset',
+    weather: 'clear',
     laps: 3,
     terrainSeed: 41102,
     waterLevel: null,
@@ -715,6 +721,7 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     subtitle: 'The scramble, the expressway and a torii run',
     theme: 'city',
     skyPreset: 'night',
+    weather: 'clear',
     laps: 3,
     terrainSeed: 81003,
     waterLevel: null,

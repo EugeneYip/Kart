@@ -115,6 +115,14 @@ export interface TrackDef {
   terrainSeed: number;
   /** World Y of the water plane, or null for no water. */
   waterLevel: number | null;
+  /**
+   * Weather the circuit races in. Omit to take the theme default from
+   * `Environment.THEME_WEATHER`. Spelled as a literal union rather than
+   * importing `WeatherName` from `src/world/Weather.ts`, to keep `src/track`
+   * free of a dependency on `src/world`; `Environment.resolveWeather` validates
+   * it at runtime.
+   */
+  weather?: 'clear' | 'rain' | 'storm' | 'snow' | 'ash' | 'leaves' | 'shimmer';
   fogColor: number;
   fogDensity: number;
   road: RoadStyle;

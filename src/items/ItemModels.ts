@@ -19,6 +19,10 @@
 import * as THREE from 'three';
 import { ItemType } from '@/core/Types';
 import { clamp01, hash21, lerp, smoothstep } from '@/core/MathUtils';
+// The shipping item set, owned by the roulette. Imported so the icon atlas is
+// DERIVED from it — see `ICON_ITEMS`. `ItemRoulette` imports only `@/core`, so
+// this edge adds no cycle.
+import { LIVE_ITEMS } from './ItemRoulette';
 
 // ---------------------------------------------------------------------------
 // Procedural texture helpers
@@ -397,28 +401,68 @@ export const PART = {
  * remove an enum member and the record fails to compile until it is handled,
  * and this array follows for free. Three separate places used to hardcode
  * `for (let i = 0; i < 16; i++)`.
+ *
+ * NOTE this is the ENUM, not the shipping item set: ten of its sixteen members
+ * are unreachable (see `MODEL_FOR_ITEM`). The atlas is built from `ICON_ITEMS`
+ * below, never from this.
  */
 export const ALL_ITEM_TYPES: readonly ItemType[] = Object.keys(MODEL_FOR_ITEM)
   .map((k) => Number(k) as ItemType)
   .sort((a, b) => (a as number) - (b as number));
 
-const ATLAS_CELL = 256;
-const ATLAS_COLS = 4;
-/** Rows follow the item count, so the grid can never be too small. */
-const ATLAS_ROWS = Math.max(1, Math.ceil(ALL_ITEM_TYPES.length / ATLAS_COLS));
+/**
+ * The items that get an atlas cell: exactly the live set, in the roulette's own
+ * reading order.
+ *
+ * ⚠️ THIS IS THE RECONCILIATION. The atlas used to be a 4x4 grid indexed by raw
+ * enum ordinal — sixteen cells for five shipping items. Ten of them held art for
+ * things a player can never be handed, and because the removed members were
+ * pointed at the nearest surviving prototype to keep `MODEL_FOR_ITEM` total,
+ * six of those ten were straight DUPLICATES of a live cell (Lightning re-baked
+ * the battery, Coin the star, Squid the bottle, and each triple its base). The
+ * grid also had one genuinely empty cell. A dead or duplicated cell is not inert:
+ * it is what makes an off-by-one in the row/column maths — the P0d bug recorded
+ * on `getIconUV` — display another item's artwork instead of nothing at all, so
+ * the failure is invisible in review and obvious in a race.
+ *
+ * Deriving the cell list from `LIVE_ITEMS` makes both halves structural rather
+ * than promised: there is exactly one cell per live item, and no cell exists for
+ * an item that no longer exists. `getIconUV()` returns `null` outside this set,
+ * which the HUD already handles by drawing the same artwork on demand instead —
+ * so a `grantItem()` cheat still shows a bob-omb without the atlas carrying one.
+ */
+export const ICON_ITEMS: readonly ItemType[] = LIVE_ITEMS;
+
+/**
+ * Cell size, and a single row. 256 px is the authored size; the divisor keeps a
+ * grown item set inside the 2048 px texture every GPU we target guarantees.
+ */
+const ATLAS_CELL = Math.min(256, Math.max(64, Math.floor(2048 / Math.max(1, ICON_ITEMS.length))));
+const ATLAS_COLS = Math.max(1, ICON_ITEMS.length);
+const ATLAS_ROWS = 1;
 const ATLAS_W = ATLAS_COLS * ATLAS_CELL;
 const ATLAS_H = ATLAS_ROWS * ATLAS_CELL;
 
+/** Position of an item in `ICON_ITEMS`, or -1. Linear: the set has five members. */
+function iconIndex(item: ItemType): number {
+  for (let i = 0; i < ICON_ITEMS.length; i++) if (ICON_ITEMS[i] === item) return i;
+  return -1;
+}
+
 /**
- * Which cell of the atlas belongs to an item. **The only place the index -> grid
- * mapping is written.**
+ * Which cell of the atlas belongs to an item, or `null` for an item that has no
+ * cell. **The only place the index -> grid mapping is written.**
  *
  * `getIconPixelRect`, `getIconUV` and the bake loop all route through this, so
  * the cell the artwork is drawn into and the cell the HUD samples are the same
  * expression by construction, not by two authors agreeing.
+ *
+ * It takes the enum value, not a name: `iconAtlasCell('rocket' as never)` finds
+ * nothing, which is a correct answer and not evidence of a collapsed mapping.
  */
-export function iconAtlasCell(item: ItemType): { col: number; row: number } {
-  const i = (item as number) | 0;
+export function iconAtlasCell(item: ItemType): { col: number; row: number } | null {
+  const i = iconIndex(item);
+  if (i < 0) return null;
   return { col: i % ATLAS_COLS, row: Math.floor(i / ATLAS_COLS) };
 }
 
@@ -438,6 +482,8 @@ export class ItemModels {
   private envApplied = false;
 
   private atlas: THREE.Texture | null = null;
+  /** Answer for `getIconAtlas()` before `init()` — never mistaken for the bake. */
+  private stubAtlas: THREE.Texture | null = null;
   private atlasCanvas: HTMLCanvasElement | null = null;
   private uvRects = new Map<ItemType, IconRect>();
 
@@ -490,22 +536,39 @@ export class ItemModels {
     return this.create(MODEL_FOR_ITEM[item]);
   }
 
+  /**
+   * The baked icon sheet.
+   *
+   * ⚠️ The stub for "asked before `init()`" is deliberately NOT cached into
+   * `this.atlas`. It used to be, and that is a trap with teeth: the HUD copies
+   * the atlas once, with `toDataURL()`, the first time it is handed the items
+   * module. One early call — a HUD built before `items.init()` resolves — would
+   * have permanently pinned every item slot to a 4x4 white square, with no
+   * warning anywhere, because `getIconAtlas()` had quietly answered its own
+   * question and the real bake then replaced a field nobody would read again.
+   */
   getIconAtlas(): THREE.Texture {
-    if (!this.atlas) {
-      // Degrade rather than crash if the bake failed (headless / lost context).
-      const ctx = make2d(4);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, 4, 4);
-      this.atlas = canvasTexture(ctx);
-      this.atlas.flipY = false; // same convention as the baked atlas
-      this.texs.push(this.atlas);
+    if (this.atlas) return this.atlas;
+    if (!this.stubAtlas) {
+      const ctx = make2d(ATLAS_CELL);
+      ctx.canvas.width = ATLAS_W;
+      ctx.canvas.height = ATLAS_H;
+      drawIconAtlas(ctx, ATLAS_CELL);
+      this.stubAtlas = canvasTexture(ctx);
+      this.stubAtlas.flipY = false; // same convention as the baked atlas
+      this.texs.push(this.stubAtlas);
     }
-    return this.atlas;
+    return this.stubAtlas;
   }
 
   /**
    * Normalised rect of an item's cell, **origin TOP-LEFT — image space**, i.e.
    * the same corner `getIconPixelRect` and the atlas canvas itself use.
+   *
+   * `null` for an item with no cell — everything outside `ICON_ITEMS`. The HUD
+   * (`ItemIcons.apply`) already treats a missing rect as "draw the artwork
+   * yourself", and it draws it with the same painters this atlas was baked from,
+   * so a forced `grantItem(Bomb)` still shows a bob-omb.
    *
    * ⚠️ THIS CONVENTION IS LOAD-BEARING AND WAS THE P0d ICON BUG. The only
    * consumer is the HUD (`ItemIcons.useAtlas` -> `apply`), which turns the rect

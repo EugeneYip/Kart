@@ -555,7 +555,11 @@ export class MenuSystem implements ISubsystem {
   private paintTrackName(): void {
     const t = TRACKS[this.trackIndex];
     const diff = ['EASY', 'MEDIUM', 'HARD'][clamp(t.difficulty - 1, 0, 2)];
-    setText(this.trackName, `${t.name.toUpperCase()}  —  ${diff}  ·  ${t.laps} LAPS  ·  ${t.lengthKm.toFixed(2)} KM`);
+    // Lap count and length are deliberately NOT shown: the owner asked for them
+    // out, and they were the same three-lap figure on every circuit anyway. The
+    // catalogue still carries `laps`/`lengthKm` — `buildRace` reads `t.laps` to
+    // configure the race — so this is a presentation change only.
+    setText(this.trackName, `${t.name.toUpperCase()}  —  ${diff}`);
     setText(this.trackSub, t.subtitle);
   }
 

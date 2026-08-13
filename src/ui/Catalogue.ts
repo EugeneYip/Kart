@@ -354,7 +354,11 @@ const SKY_TOP: Record<SkyPresetName, string> = {
 /** Fallback tag when a circuit has no editorial entry. */
 const THEME_TAG: Record<TrackTheme, string> = {
   coastal: 'COASTAL',
-  city: 'NIGHT CITY',
+  // The theme default, which the three city-series circuits take. It used to
+  // read 'NIGHT CITY', which was wrong for `bostonHarbor` (midday harbour) and
+  // `taipeiCircuit` (sunset). `neonMetropolis` keeps 'NIGHT CITY' via its
+  // TRACK_EDITORIAL override below, because there it is simply accurate.
+  city: 'CITY SERIES',
   volcano: 'VOLCANO',
 };
 
