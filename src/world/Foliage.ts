@@ -24,10 +24,48 @@ import { Rng, clamp01 } from '@/core/MathUtils';
 import { SHADOW_LAYER } from './Lighting';
 import {
   GLSL_FIELD, GLSL_FIELD_SHADOW_LOW, GLSL_NOISE,
-  InstanceChunks, fieldUniforms, makeBark,
-  type TerrainField, type WorldContext, type WorldTheme,
+  InstanceChunks, fieldUniforms, makeBark, roadVerge,
+  type RoadVerge, type TerrainField, type WorldContext, type WorldTheme,
   worldFogUniforms,
 } from './WorldTextures';
+
+// ---------------------------------------------------------------------------
+// ROAD CLEARANCE — the P0h fix
+// ---------------------------------------------------------------------------
+//
+// Third report of the same defect: "when players drive close to the left or
+// right edges, the visuals are similarly affected by off-track decorations or
+// terrain". Measured from the real chase pose with the eye hard against the
+// drivable edge (`.probe-tmp/edgeview.ts`), geometry inside 30 m filled 10x to
+// 90x more of the LOWER THIRD of frame at the edge than on the centreline —
+// 0.2 % centre vs 18.3 % left edge on Boston. The defect is invisible from the
+// middle of the road, which is why two earlier rounds of probes missed it.
+//
+// The placement bug on this side of it: every scatter here rejected against
+// `field.roadDistanceAt(x,z) < minDist * 0.85`. That is distance to the
+// CENTRELINE with no `halfWidth` term at all, so on a 12.5 m half-width station
+// the flower scatter (`minDist` 12) admitted anything past 10.2 m — 2.3 m INSIDE
+// the drivable road. Measured intruders before the fix: Flowers 3.73 m inside on
+// coastal, Fern 2.30 m, Cattails 1.72 m, Bush 1.13 m, tree0 1.14 m.
+//
+// And the trunk point was the only thing tested, never the CANOPY. A birch
+// canopy is up to 11 m across, so a trunk admitted at the edge overhangs the
+// tarmac by metres — `Foliage/tree2#57` reached 0.20 m inside at 6.5 m up on
+// Boston. Exactly the grandstand bug `standClearsRoad` was written for: testing
+// the anchor while the recipe builds something much wider than its anchor.
+
+/** Metres of clear verge every piece of foliage GEOMETRY must leave past the kerb. */
+const FOLIAGE_VERGE = 1.2;
+/** Kerb width outside the asphalt edge (`CROSS.kerbW`). */
+const KERB_W = 1.55;
+/**
+ * How far outboard a spot may be walked to earn its clearance before it is
+ * dropped instead. Moving is strongly preferred to deleting: the owner's
+ * constraint on this fix was "optimized with strict caution, while also
+ * maintaining aesthetic appeal", and a circuit that loses its planting is a
+ * worse outcome than one with a bush slightly further from the kerb.
+ */
+const PUSH_LIMIT = 14;
 
 // ---------------------------------------------------------------------------
 // Shared wind GLSL
@@ -973,8 +1011,12 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     const density = this.quality.foliageDensity * this.theme.treeDensity;
     if (density <= 0.02) return;
     const rng = new Rng(this.ctx.hints.terrainSeed ^ 0x7ee);
+    // 5 m of verge at the near end, i.e. ~16 m from the centreline on an 11 m
+    // half-width road — the old first argument, now expressed as clearance so a
+    // wide station cannot spend it. The CANOPY is enforced separately, per
+    // species, in `buildTreeSpecies`: this only sites the trunk.
     const spots = this.scatterSpots(
-      Math.round(560 * density), 16, 340, rng, 0.55,
+      Math.round(560 * density), 5, 330, rng, 0.55,
     );
     if (!spots.length) return;
 
@@ -1001,9 +1043,10 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
 
   private buildTreeSpecies(
     kind: ScatterKind, variant: number,
-    spots: Array<{ x: number; z: number; y: number; s: number; r: number }>,
+    spotsIn: Array<{ x: number; z: number; y: number; s: number; r: number }>,
     rng: Rng,
   ): void {
+    let spots = spotsIn;
     let trunkGeo: THREE.BufferGeometry;
     let canopyGeo: THREE.BufferGeometry;
 
@@ -1046,6 +1089,19 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       canopyGeo = this.canopyGeometry(3, h * 0.26, h * 0.7, h * 0.14, 0x8fc258, 0x39602e, rng, 1.05);
     }
 
+    // THE CANOPY, NOT THE TRUNK, DECIDES WHERE A TREE CAN STAND. A birch here is
+    // `canopyGeometry(3, h*0.26, h*0.7, h*0.14, …)` at h up to 16 m, so its crown
+    // is metres wider than the point the scatter tested. Measured before this:
+    // `tree2#57` overhung Boston's asphalt by 0.20 m at 6.5 m up and `tree0#44`
+    // by 1.14 m on coastal. Both geometries exist by now, so the real reach is
+    // available — take the wider of trunk and canopy and move the tree out.
+    const treeReach = Math.max(Foliage.reachOf(trunkGeo), Foliage.reachOf(canopyGeo));
+    spots = this.clearReach(`${kind}${variant}`, treeReach, spots);
+    if (!spots.length) {
+      trunkGeo.dispose();
+      canopyGeo.dispose();
+      return;
+    }
     const count = spots.length;
     const trunkMat = this.trunkMaterial();
     const canopyMat = this.canopyMaterial();
@@ -1108,25 +1164,30 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     // of these is a sub-metre object: a bush at 200 m is two pixels, so it got a
     // detail-0 icosahedron (20 tris a blob instead of 80) and a hard cull radius
     // rather than a 220 m scatter band nothing could resolve.
+    // Band arguments are now VERGE metres past the asphalt edge, not distance
+    // from the centreline. The values below keep each layer visually where it
+    // was on an ~11 m half-width road (13 → 2.5 + kerb ≈ 15 m out at the near
+    // end) while making a 12.5 m section push its planting out instead of
+    // letting the extra road width eat the whole margin.
     const bushCount = Math.round(760 * d * this.theme.bushDensity);
     if (bushCount > 8) {
-      const spots = this.scatterSpots(bushCount, 13, 150, rng, 0.75);
+      const spots = this.scatterSpots(bushCount, 2.5, 140, rng, 0.75);
       const geo = this.canopyGeometry(3, 0.85, 0.35, 0.55, 0x5f8f3c, 0x25401f, rng, 0.62, 0);
-      this.addScatterMesh('Bush', geo, spots, true, 150);
+      this.addScatterMesh('Bush', geo, this.clearReach('Bush', Foliage.reachOf(geo), spots), true, 150);
     }
 
     const fernCount = Math.round(620 * d * this.theme.bushDensity);
     if (fernCount > 8 && (this.ctx.theme === 'meadow' || this.ctx.theme === 'coastal')) {
-      const spots = this.scatterSpots(fernCount, 12, 110, rng, 0.9);
+      const spots = this.scatterSpots(fernCount, 2.0, 100, rng, 0.9);
       const geo = this.fernGeometry(rng);
-      this.addScatterMesh('Fern', geo, spots, true, 110);
+      this.addScatterMesh('Fern', geo, this.clearReach('Fern', Foliage.reachOf(geo), spots), true, 110);
     }
 
     const flowerCount = Math.round(1100 * d * this.theme.flowerDensity);
     if (flowerCount > 8) {
-      const spots = this.scatterSpots(flowerCount, 12, 80, rng, 1.0);
+      const spots = this.scatterSpots(flowerCount, 2.0, 70, rng, 1.0);
       const geo = this.flowerGeometry(rng);
-      this.addScatterMesh('Flowers', geo, spots, true, 80);
+      this.addScatterMesh('Flowers', geo, this.clearReach('Flowers', Foliage.reachOf(geo), spots), true, 80);
     }
 
     if (this.ctx.theme === 'coastal' || this.ctx.theme === 'meadow') {
@@ -1134,15 +1195,21 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       const spots = this.shoreSpots(n, rng);
       if (spots.length > 8) {
         const geo = this.cattailGeometry(rng);
-        this.addScatterMesh('Cattails', geo, spots, true, 120);
+        this.addScatterMesh('Cattails', geo, this.clearReach('Cattails', Foliage.reachOf(geo), spots), true, 120);
       }
     }
 
     if (this.ctx.theme === 'volcano') {
       const n = Math.round(520 * d);
-      const spots = this.scatterSpots(n, 14, 180, rng, 0.4);
+      const spots = this.scatterSpots(n, 3, 170, rng, 0.4);
       const geo = this.canopyGeometry(2, 0.7, 0.2, 0.4, 0x3a2b22, 0x1a1310, rng, 0.5, 0);
-      this.addScatterMesh('ScorchedScrub', geo, spots, true, 180);
+      this.addScatterMesh(
+        'ScorchedScrub', geo, this.clearReach('ScorchedScrub', Foliage.reachOf(geo), spots), true, 180,
+      );
+    }
+    if (this.clearLog.length) {
+      console.info(`[Foliage] road-edge clearance: ${this.clearLog.join('; ')}`);
+      this.clearLog.length = 0;
     }
   }
 
@@ -1265,12 +1332,61 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
   // SCATTERING
   // =========================================================================
 
+  /** Metres of clear ground between a point and the nearest asphalt edge. */
+  private verge(x: number, z: number): RoadVerge {
+    return roadVerge(this.ctx.stations, x, z, this._verge);
+  }
+  private readonly _verge: RoadVerge = { verge: 0, halfWidth: 11, outX: 1, outZ: 0 };
+
   /**
-   * Blue-noise-ish scatter in the band `[minDist, maxDist]` from the road,
+   * Walk a spot directly away from the road until its geometry — `reach` metres
+   * of horizontal half-extent — clears the kerb by `FOLIAGE_VERGE`.
+   *
+   * Returns false only when even `PUSH_LIMIT` metres outboard cannot buy the
+   * clearance, or when the new ground is water or too steep to plant on. Moving
+   * is the first choice on the owner's own priority order; dropping is the last.
+   */
+  private pushClear(
+    sp: { x: number; z: number; y: number; s: number; r: number }, reach: number,
+  ): boolean {
+    const need = KERB_W + FOLIAGE_VERGE + reach * sp.s;
+    let v = this.verge(sp.x, sp.z);
+    if (v.verge >= need) return true;
+    // One step is exact for a straight road; a couple of refinements settle the
+    // curved case, where walking outward also changes which station is nearest.
+    let x = sp.x, z = sp.z;
+    for (let it = 0; it < 4; it++) {
+      const short = need - v.verge;
+      if (short <= 0) break;
+      if (short > PUSH_LIMIT) return false;
+      x += v.outX * short;
+      z += v.outZ * short;
+      v = this.verge(x, z);
+    }
+    if (v.verge < need) return false;
+    if (Math.hypot(x - sp.x, z - sp.z) > PUSH_LIMIT) return false;
+    const y = this.field.heightAt(x, z);
+    if (y < this.ctx.waterLevel + 0.35) return false;
+    if (this.field.slopeAt(x, z) > 0.66) return false;
+    // Keep the original vertical bedding offset, which differs per recipe.
+    sp.y += y - this.field.heightAt(sp.x, sp.z);
+    sp.x = x;
+    sp.z = z;
+    return true;
+  }
+
+  /**
+   * Blue-noise-ish scatter in a band measured OUTWARD FROM THE ASPHALT EDGE,
    * rejecting steep ground, water and the road corridor.
+   *
+   * `minVerge`/`maxVerge` are metres of clear verge past the drivable edge, NOT
+   * distance from the centreline — that change is the fix. The old signature took
+   * centreline distances and then tested them against a bare constant, so the
+   * whole `halfWidth` of the road (7.5–12.5 m here, and it varies station by
+   * station) was silently spent as if it were verge.
    */
   private scatterSpots(
-    target: number, minDist: number, maxDist: number, rng: Rng, moistureBias: number,
+    target: number, minVerge: number, maxVerge: number, rng: Rng, moistureBias: number,
   ): Array<{ x: number; z: number; y: number; s: number; r: number }> {
     const out: Array<{ x: number; z: number; y: number; s: number; r: number }> = [];
     if (target <= 0 || !this.ctx.stations.length) return out;
@@ -1280,10 +1396,16 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     for (let i = 0; i < tries && out.length < target; i++) {
       const st = stations[(rng.next() * stations.length) | 0];
       const side = rng.next() < 0.5 ? -1 : 1;
-      const d = minDist + Math.pow(rng.next(), 0.7) * (maxDist - minDist);
+      // Band offsets now start at the station's OWN edge, so a wide section of
+      // road pushes its planting out with it instead of eating into the band.
+      const d = st.halfWidth + KERB_W + minVerge
+        + Math.pow(rng.next(), 0.7) * (maxVerge - minVerge);
       const x = st.px + st.bx * d * side + rng.range(-8, 8);
       const z = st.pz + st.bz * d * side + rng.range(-8, 8);
-      if (field.roadDistanceAt(x, z) < minDist * 0.85) continue;
+      // The accurate, tier-independent test: the jitter above and the curvature
+      // of the road can both undo the band offset, and this is what catches it.
+      // `reach` is applied later, per recipe, once the geometry is known.
+      if (this.verge(x, z).verge < KERB_W + FOLIAGE_VERGE) continue;
       const y = field.heightAt(x, z);
       if (y < this.ctx.waterLevel + 0.35) continue;
       if (field.slopeAt(x, z) > 0.66) continue;
@@ -1309,11 +1431,61 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       const z = field.centreZ + rng.range(-half, half);
       const y = field.heightAt(x, z);
       if (y < wl - 0.35 || y > wl + 1.0) continue;
-      if (field.roadDistanceAt(x, z) < 11) continue;
+      // Was `roadDistanceAt(x, z) < 11`: a bare constant against a CENTRELINE
+      // distance, so on a 12.5 m half-width station reeds were licensed 1.5 m
+      // inside the asphalt. Measured: `Cattails` 1.72 m inside on coastal.
+      if (this.verge(x, z).verge < KERB_W + FOLIAGE_VERGE) continue;
       out.push({ x, z, y: y - 0.1, s: rng.range(0.8, 1.4), r: rng.next() * Math.PI * 2 });
     }
     return out;
   }
+
+  /**
+   * Horizontal half-extent of a built geometry, metres. This is the number the
+   * anchor test has to respect: a recipe that builds an 11 m canopy around a
+   * point cannot be sited by testing the point alone.
+   */
+  private static reachOf(geo: THREE.BufferGeometry): number {
+    // An empty geometry (a dead tree has no canopy) has no bounding box, or one
+    // left at ±Infinity — either way it must contribute 0 reach, not NaN.
+    if ((geo.getAttribute('position')?.count ?? 0) === 0) return 0;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb || !Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) return 0;
+    return Math.max(
+      Math.abs(bb.min.x), Math.abs(bb.max.x),
+      Math.abs(bb.min.z), Math.abs(bb.max.z),
+    );
+  }
+
+  /**
+   * Enforce the verge with the REAL geometry reach, moving spots outboard and
+   * only dropping the ones that cannot be saved. Returns the surviving spots and
+   * logs the cost, so a density regression is visible rather than silent.
+   */
+  private clearReach(
+    name: string, reach: number,
+    spots: Array<{ x: number; z: number; y: number; s: number; r: number }>,
+  ): Array<{ x: number; z: number; y: number; s: number; r: number }> {
+    const kept: Array<{ x: number; z: number; y: number; s: number; r: number }> = [];
+    let moved = 0;
+    for (const sp of spots) {
+      const x0 = sp.x, z0 = sp.z;
+      if (!this.pushClear(sp, reach)) continue;
+      if (sp.x !== x0 || sp.z !== z0) moved++;
+      kept.push(sp);
+    }
+    const dropped = spots.length - kept.length;
+    if (dropped || moved) {
+      this.clearLog.push(
+        `${name} reach ${reach.toFixed(1)} m: moved ${moved}, dropped ${dropped}`
+        + ` of ${spots.length}`,
+      );
+    }
+    return kept;
+  }
+
+  private clearLog: string[] = [];
 
   // =========================================================================
 

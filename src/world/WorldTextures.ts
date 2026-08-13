@@ -110,6 +110,83 @@ export interface PathStation {
   s: number;
 }
 
+/** What `roadVerge` measured at a point. */
+export interface RoadVerge {
+  /**
+   * Metres of clear ground between the point and the nearest asphalt EDGE.
+   * Negative means the point is on the drivable road.
+   */
+  verge: number;
+  /** Road half-width at the nearest centreline point. */
+  halfWidth: number;
+  /** Unit direction, in XZ, that points AWAY from the road from here. */
+  outX: number;
+  outZ: number;
+}
+
+/**
+ * Perpendicular distance from an XZ point to the nearest asphalt edge.
+ *
+ * WHY THIS EXISTS, AND WHY NOT `TerrainField.roadDistanceAt`. Two independent
+ * errors made the baked field unusable for deciding whether a decoration is on
+ * the road, and Foliage was using it for exactly that:
+ *
+ *  1. It measures to the CENTRELINE, not to the edge — its own doc comment says
+ *     so — and every Foliage caller compared it against a bare constant with no
+ *     `halfWidth` term. On a 12.5 m half-width station the flower scatter
+ *     admitted anything past 10.2 m, i.e. 2.3 m INSIDE the drivable road.
+ *  2. It is a NEAREST-TEXEL lookup on a 2.4 m (ultra) to 5.0 m (low) grid, so it
+ *     over-reports clearance by up to a texel half-diagonal — another 1.7–3.5 m
+ *     of leak, and a different amount per quality tier.
+ *
+ * This walks the resampled stations instead (~7 m spacing) and projects onto the
+ * two adjoining chords, which is accurate to a few centimetres and tier-
+ * independent. Same approach as `Props.roadClearance`, shared so the two cannot
+ * drift apart again.
+ */
+export function roadVerge(
+  stations: readonly PathStation[], x: number, z: number, out?: RoadVerge,
+): RoadVerge {
+  const r: RoadVerge = out ?? { verge: 0, halfWidth: 11, outX: 1, outZ: 0 };
+  const n = stations.length;
+  if (n === 0) {
+    r.verge = 1e9; r.halfWidth = 11; r.outX = 1; r.outZ = 0;
+    return r;
+  }
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < n; i++) {
+    const dx = stations[i].px - x, dz = stations[i].pz - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bd) { bd = d2; bi = i; }
+  }
+  let best = Math.sqrt(bd);
+  let hw = stations[bi].halfWidth;
+  let cx = stations[bi].px, cz = stations[bi].pz;
+  for (const j of [(bi - 1 + n) % n, bi]) {
+    const a = stations[j], b = stations[(j + 1) % n];
+    const ex = b.px - a.px, ez = b.pz - a.pz;
+    const len2 = ex * ex + ez * ez;
+    if (len2 < 1e-6) continue;
+    let t = ((x - a.px) * ex + (z - a.pz) * ez) / len2;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const px = a.px + ex * t, pz = a.pz + ez * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < best) {
+      best = d;
+      hw = a.halfWidth + (b.halfWidth - a.halfWidth) * t;
+      cx = px; cz = pz;
+    }
+  }
+  let ox = x - cx, oz = z - cz;
+  const ol = Math.hypot(ox, oz);
+  if (ol > 1e-6) { ox /= ol; oz /= ol; } else { ox = 1; oz = 0; }
+  r.verge = best - hw;
+  r.halfWidth = hw;
+  r.outX = ox;
+  r.outZ = oz;
+  return r;
+}
+
 // ---------------------------------------------------------------------------
 // Hashing + noise
 // ---------------------------------------------------------------------------
@@ -745,6 +822,16 @@ const INF = 1e9;
  */
 export const EDGE_RANGE = 24;
 
+/**
+ * Kerb width outside the asphalt edge. This is `CROSS.kerbW` from TrackBuilder,
+ * restated rather than imported so the terrain bake does not pull the whole
+ * track-mesh builder (and MeshBVH) into the world-texture module graph. If the
+ * kerb ever changes, `.probe-tmp/edgeview.ts` reports grass on the asphalt again.
+ */
+const KERB_W = 1.55;
+/** Width of the grass-mask ramp back to full density, metres. */
+const GRASS_RAMP = 3.4;
+
 export class TerrainField {
   readonly extent: number;
   readonly res: number;
@@ -1079,7 +1166,29 @@ export class TerrainField {
         const d = dist[i];
         const hw = halfW[i] || 11;
 
-        const roadMask = d < INF ? clamp01((hw + 2.6 - d) / 3.4) : 0;
+        // GRASS KILL MASK. `data.r` has exactly one consumer — the blade shader
+        // in Foliage.ts, which keeps a blade when `rnd·0.92 < (1 − mask)·…`. So
+        // wherever this is below 1, *some* blades live, and the innermost lateral
+        // offset at which that happens is where grass grows through the tarmac.
+        //
+        // It used to be `clamp01((hw + 2.6 − d) / 3.4)`, saturated only out to
+        // `d <= hw − 0.8`: blades were licensed from 0.8 m INSIDE the asphalt
+        // edge outward. Worse, `d` is the distance to the nearest centreline
+        // *station* (~7 m spacing), which over-reads the perpendicular distance,
+        // and a 3.4 m ramp baked at 2.4–5.0 m per texel is under two texels wide,
+        // so bilinear reconstruction smears it several metres further in.
+        // Measured (`.probe-tmp/edgeview.ts`): blades could live up to 10.5 m
+        // inside the asphalt edge, on 646 of 646 station-sides on coastal and on
+        // every station-side of four other circuits. That is the owner's
+        // "ground-level decorations interfere with the track visuals", present on
+        // every metre of every lap.
+        //
+        // So the plateau now runs past the KERB, plus one texel of guard band —
+        // the leak is a bake-resolution artefact, so the margin is sized by the
+        // bake resolution rather than by a constant that silently stops working
+        // when the tier changes `metresPerTexel` from 2.4 to 5.0.
+        const grassPlateau = hw + KERB_W + mpt;
+        const roadMask = d < INF ? clamp01((grassPlateau + GRASS_RAMP - d) / GRASS_RAMP) : 0;
         const ao = clamp01(1 - (blur[i] - h) * 0.085);
         const moist = clamp01(
           fbm2D(wx * 0.0034, wz * 0.0034, 4, this.seed + 1201) * 1.25 - 0.12,

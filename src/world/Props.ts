@@ -36,8 +36,8 @@ import { SHADOW_LAYER } from './Lighting';
 // hint rather than the live `worldRegistry.sky`.
 import { SKY_PRESETS, skyNightFactor } from './Sky';
 import {
-  InstanceChunks, canvasTexture, makeDetailNormal, worldRegistry,
-  type PathStation, type TerrainField, type WorldContext, type WorldTheme,
+  InstanceChunks, canvasTexture, makeDetailNormal, roadVerge, worldRegistry,
+  type PathStation, type RoadVerge, type TerrainField, type WorldContext, type WorldTheme,
 } from './WorldTextures';
 // The shared procedural texture library (AGENTS.md section 4). Only the two
 // primitives the facade sets need: a Sobel height->normal and a float->greyscale
@@ -534,6 +534,57 @@ class Builder {
   }
 
   /**
+   * Cloth bent onto a MAST: anchored along its left edge, free at the right.
+   *
+   * The national flags used `plate(..., { flapAcross: true })`, which emits four
+   * vertices and two triangles with `aFlap` = 0 at the mast edge and 1 at the free
+   * edge. The sway shader displaces each vertex by `aFlap · g`, and with no
+   * interior vertices there is nothing between 0 and 1 — so the whole panel
+   * translated as one rigid board. A 2.7 x 1.8 m flat quad swinging stiffly reads
+   * as a painted signboard, not cloth, which is what the owner was asking about
+   * when they asked whether the flags were properly there. (They were present and
+   * double-sided; they just could not ripple.)
+   *
+   * Same construction as `banner()`, with the anchor rotated 90 degrees: `aFlap`
+   * grades along X instead of Y, squared so the motion stays near the free edge
+   * rather than shearing the whole panel, and a couple of rows in Y so the wave
+   * has a diagonal to run along. 36 triangles instead of 2, on a handful of
+   * instances per circuit.
+   */
+  mastCloth(
+    cx: number, cy: number, cz: number,
+    w: number, h: number, yaw: number, hex: number,
+    cols = 6, rows = 3, uvRect?: [number, number, number, number],
+  ): void {
+    const uv = uvRect ?? [0, 0, 1, 1];
+    const ca = Math.cos(yaw), sa = Math.sin(yaw);
+    const base = this.vertexCount;
+    const stride = cols + 1;
+    for (let j = 0; j <= rows; j++) {
+      const fy = j / rows;              // 0 = top, 1 = bottom
+      for (let i = 0; i <= cols; i++) {
+        const fx = i / cols;            // 0 = mast (anchored), 1 = free edge
+        // Squared along the length so the hoist stays put and the fly end moves,
+        // with a small extra lift toward the bottom corner — that asymmetry is
+        // what stops the ripple looking like a flat pendulum.
+        this.flap = fx * fx * (0.82 + 0.18 * fy);
+        const lx = fx * w;
+        // u grows with local +x, matching `plate()`'s front face — see the u-axis
+        // note there before changing this.
+        this.vert(cx + lx * ca, cy - fy * h, cz + lx * sa, 0, 0, 1,
+          uv[0] + (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+      }
+    }
+    this.flap = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const a = base + j * stride + i;
+        this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+      }
+    }
+  }
+
+  /**
    * Sweep a cross-section along X between `x0` and `x1`.
    *
    * Segment `i` (`pts[i]` -> `pts[i+1]`) becomes one flat-shaded quad whose
@@ -683,8 +734,16 @@ function patchProp(
         ${opts.sway ? `
         {
           float ph = aPhase * 6.2831;
-          float g = sin(uTime * 2.3 + ph + apxOrigin.x * 0.07)
-                  + 0.45 * sin(uTime * 5.1 + ph * 1.7);
+          // The -aFlap terms are what make the wave TRAVEL. Without them g varied
+          // only with time and the instance origin, so every vertex of a cloth
+          // moved in lockstep and the panel translated rigidly no matter how
+          // finely it was subdivided -- a flag read as a swinging signboard. The
+          // phase now lags with distance from the anchor, which turns the same
+          // displacement into a ripple running out to the free edge. Cloths whose
+          // aFlap is only ever 0 or 1 (banner end rows, balloons) see a constant
+          // phase offset and are visually unchanged.
+          float g = sin(uTime * 2.3 + ph + apxOrigin.x * 0.07 - aFlap * 2.6)
+                  + 0.45 * sin(uTime * 5.1 + ph * 1.7 - aFlap * 4.1);
           float amp = aFlap * uWind * ${opts.sway.toFixed(3)};
           transformed.x += uWindDir.x * g * amp;
           transformed.z += uWindDir.y * g * amp;
@@ -2143,6 +2202,31 @@ const TOWER_H = 46;
  */
 const PLINTH_PROPS = new Set(['grandstand', 'crowdstand']);
 
+/**
+ * Metres of clear ground a roadside prop's GEOMETRY must leave past the kerb.
+ *
+ * The P0h fix. `roadside()` bands its anchors at `halfWidth + o.min …`, and every
+ * call site reads as if that were clearance — but it is the ANCHOR, and the
+ * recipe then builds outward from it in both directions. `tyreWall` is banded at
+ * `min: 1.0` and its stack is 0.63 m deep, so its near face stood 0.37 m past the
+ * asphalt edge: on the kerb, 2.24 m tall, on both sides, every 11 m. Measured
+ * from the edge-riding chase pose (`.probe-tmp/edgeview.ts`), it was in frame at
+ * 545 of 969 poses on coastal and blocked 171 road-ahead sightlines — the single
+ * most pervasive contributor to the owner's "scenery clutter affecting the track".
+ *
+ * This is the third instance of one mistake in this file: `planStands` tested a
+ * 78 m terrace at its anchor, `catchFence` tested a 6.1 m panel against a
+ * constant 14 m, and `roadside` tested a nothing-wide point. So the correction is
+ * applied once, in `emit()`, from the geometry's REAL local AABB rotated into the
+ * anchor's own frame — no per-recipe constant to drift, and it covers all 16
+ * `roadside` call sites at once.
+ */
+const PROP_KERB_VERGE = 0.6;
+/** Kerb width outside the asphalt edge (`CROSS.kerbW`). */
+const PROP_KERB_W = 1.55;
+/** How far outboard an anchor may be walked before the push is abandoned. */
+const PROP_PUSH_LIMIT = 6;
+
 const SHADOW_MIN_RADIUS = 0.95;
 
 /**
@@ -2210,6 +2294,8 @@ export class Props implements ISubsystem {
   /** Instances the road-volume guard removed this build — reported once. */
   private volumeDrops = 0;
   private volumePushes = 0;
+  /** Roadside anchors `clearKerb()` walked outboard this build — reported once. */
+  private kerbPushes = 0;
   /** Anchors the road-SURFACE guard moved off the asphalt — reported once. */
   private roadSurfacePushes = 0;
   private roadSurfaceWorst = 0;
@@ -2339,6 +2425,12 @@ export class Props implements ISubsystem {
       console.info(
         `[Props] footprint bedding: ${this.footprintRejects} anchors rejected for ground`
         + ' relief bigger than the instance standing on it (see bedOnFootprint)',
+      );
+    }
+    if (this.kerbPushes > 0) {
+      console.info(
+        `[Props] kerb clearance: ${this.kerbPushes} roadside anchors walked outboard so their`
+        + ` geometry leaves ${PROP_KERB_VERGE} m past the kerb (see clearKerb)`,
       );
     }
     this.poseMotionProps();
@@ -2568,6 +2660,12 @@ export class Props implements ISubsystem {
     const bounds = new THREE.Box3();
     for (let i = 0; i < anchors.length; i++) {
       const a = anchors[i];
+      // Kerb clearance BEFORE the road-volume test, so a prop that is pushed
+      // outboard is tested against the volumes at the place it will actually
+      // stand. `corridor: true` recipes (gantry, portal, arch, deck pylon) belong
+      // over the carriageway and are left where they are, and `o.place` callers
+      // compose their own transform so the anchor is not the thing that moves.
+      if (o.corridor !== true && !o.place && this.clearKerb(a, localBox)) this.kerbPushes++;
       if (o.corridor !== true && this.insideRoadVolume(a, localBox)) { blocked++; continue; }
       _m.identity();
       if (o.place) {
@@ -2638,6 +2736,71 @@ export class Props implements ISubsystem {
     this.meshes.push({ mesh, motion: o.motion, chunks });
     return mesh;
   }
+
+  /**
+   * Walk a roadside anchor outboard until its GEOMETRY clears the kerb.
+   *
+   * Only `side !== 0` anchors qualify, which is exactly the set `roadside()`
+   * produces — `annulus()`, `shoreline()`, the stand-derived passes and
+   * `collectAuthored()` all set `side: 0` and are placed deliberately elsewhere.
+   * That is a structural gate, not a list of prop names: a name-based exemption
+   * list is how the half-buried start-line box survived five playtests.
+   *
+   * The reach toward the road is computed by rotating the local AABB's four
+   * horizontal corners by the anchor's own yaw and taking the most negative
+   * projection onto the outward direction. That is exact for an off-centre box
+   * and for `faceRoad: false` passes with a random yaw, so it does not depend on
+   * which of the two orientation conventions the recipe used.
+   *
+   * Returns false only if the clearance cannot be bought within
+   * `PROP_PUSH_LIMIT`; the anchor is then left untouched and kept, because a prop
+   * slightly close to the kerb is a smaller loss than a hole in the scenery.
+   */
+  private clearKerb(a: Anchor, bb: THREE.Box3 | null): boolean {
+    if (a.side === 0 || bb === null) return false;
+    const stations = this.ctx.stations;
+    if (!stations.length) return false;
+    const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
+    // local +X -> (cos, 0, -sin); local +Z -> (sin, 0, cos)
+    const corners: Array<[number, number]> = [
+      [bb.min.x, bb.min.z], [bb.max.x, bb.min.z],
+      [bb.min.x, bb.max.z], [bb.max.x, bb.max.z],
+    ];
+    let x = a.x, z = a.z;
+    let moved = 0;
+    for (let it = 0; it < 4; it++) {
+      const v = roadVerge(stations, x, z, this._verge);
+      // How far the geometry reaches TOWARD the road from the anchor: the most
+      // negative projection of a rotated corner onto the outward direction.
+      let reach = 0;
+      for (const [lx, lz] of corners) {
+        const wx = (lx * ca + lz * sa) * a.scale;
+        const wz = (-lx * sa + lz * ca) * a.scale;
+        const proj = wx * v.outX + wz * v.outZ;
+        if (-proj > reach) reach = -proj;
+      }
+      const short = PROP_KERB_W + PROP_KERB_VERGE + reach - v.verge;
+      if (short <= 0.001) break;
+      if (moved + short > PROP_PUSH_LIMIT) return false;
+      x += v.outX * short;
+      z += v.outZ * short;
+      moved += short;
+    }
+    if (moved <= 0.001) return false;
+    // These anchors were seated on the heightfield by `roadside()`, so the new
+    // spot takes its height from the same surface. Water and slope were already
+    // vetted at the old spot and a sub-metre step cannot plausibly cross either,
+    // but a wet or sheer landing is refused rather than assumed away.
+    const y = this.field.heightAt(x, z);
+    if (y < this.ctx.waterLevel + 0.35) return false;
+    if (this.field.slopeAt(x, z) > 0.62) return false;
+    a.x = x;
+    a.z = z;
+    a.y = y;
+    return true;
+  }
+
+  private readonly _verge: RoadVerge = { verge: 0, halfWidth: 11, outX: 1, outZ: 0 };
 
   /**
    * True when this prop occupies a tunnel bore / shell, a bridge deck box or an
@@ -4357,6 +4520,23 @@ export class Props implements ISubsystem {
     const unknown = new Set<string>();
     let reseated = 0;
     let worstReseat = 0;
+    // The single worst correction is a MISLEADING headline and it has already
+    // cost a review cycle: Taipei logged "worst correction 153.07 m", which reads
+    // like a heightfield fault, and it is nothing of the kind. Measured
+    // (`.probe-tmp/reseat.ts`), all four corrections above 30 m on that circuit
+    // are `mountainRidge` skyline cones authored at `lat: 700`, 528 m from the
+    // road. A `lat` that large is applied along a BANKED binormal in
+    // `Track.getDecorationHints()`, so 700 m x sin(13.5 deg) hands them 164 m of
+    // spurious altitude; the recipe builds them `capBottom: false` because they
+    // are meant to be bedded in the ground, so 164 m up they would show an open
+    // bottom face. The re-seat is what rescues the composition, not what breaks
+    // it. What actually needs watching is the correction for props the driver
+    // passes close to, so that is reported separately — near-road p50 is 0.23 m
+    // on Taipei and under 2.5 m on every circuit.
+    let nearWorst = 0;
+    let nearWorstType = '';
+    let farCount = 0;
+    const NEAR_BAND = 40;
 
     for (const p of props) {
       const key = normaliseType(p.type);
@@ -4401,7 +4581,15 @@ export class Props implements ISubsystem {
         if (ground >= this.ctx.waterLevel) {
           const seated = ground + surf.up;
           if (Math.abs(seated - y) > 1e-3) {
-            worstReseat = Math.max(worstReseat, Math.abs(seated - y));
+            const corr = Math.abs(seated - y);
+            worstReseat = Math.max(worstReseat, corr);
+            // `surf.lat` is the authored lateral offset, which IS the distance
+            // from the carriageway — no projection needed.
+            if (Math.abs(surf.lat) <= NEAR_BAND) {
+              if (corr > nearWorst) { nearWorst = corr; nearWorstType = p.type; }
+            } else if (corr > 30) {
+              farCount++;
+            }
             reseated++;
             y = seated;
           }
@@ -4421,7 +4609,10 @@ export class Props implements ISubsystem {
     if (reseated) {
       console.info(
         `[Props] re-seated ${reseated} authored props onto the heightfield`
-        + ` (outside the road corridor; worst correction ${worstReseat.toFixed(2)} m)`,
+        + ` (outside the road corridor); worst within ${NEAR_BAND} m of the road`
+        + ` ${nearWorst.toFixed(2)} m${nearWorstType ? ` (${nearWorstType})` : ''}`
+        + `; ${farCount} distant backdrop props corrected by more than 30 m`
+        + ` (expected — see collectAuthored)`,
       );
     }
   }
@@ -4889,8 +5080,10 @@ export class Props implements ISubsystem {
         b.prism(0, 0.4, 0, 0.09, 7.2, 6, 0xd8dade, { taper: 0.7 });
         b.sphere(0, 7.75, 0, 0.14, 6, 4, 0xffd23f);
         const cloth = this.builder();
-        cloth.flap = 1;
-        cloth.plate(1.3, 6.3, 0, 2.6, 1.6, rng.range(0, 6.28), 0xe8332a, { flapAcross: true });
+        // Subdivided cloth, not a 2-triangle quad — see `mastCloth`. Measured
+        // (`.probe-tmp/flagcheck.ts`): this pennant had 4 vertices and 2 distinct
+        // `aFlap` levels, so it could only swing rigidly.
+        cloth.mastCloth(0, 7.1, 0, 2.6, 1.6, rng.range(0, 6.28), 0xe8332a, 5, 2);
         return { geo: b.build('flagPole'), cloth: cloth.build('flagPoleCloth'), cull: CULL_MID };
       }
 
@@ -6644,10 +6837,12 @@ export class Props implements ISubsystem {
       b.box(0.1, y, 0, 0.06, 0.05, 0.06, 0xb8bcc4);
     }
     const cloth = this.builder();
-    cloth.flap = 1;
     const cw = 2.7, chh = 1.8;
-    cloth.plate(0.11 + cw * 0.5, 0.56 + mastH - 1.4, 0, cw, chh, 0, 0xffffff,
-      { flapAcross: true, uvRect: atlasRect(cell) });
+    // `mastCloth` grades `aFlap` across its own span, so the builder-level
+    // `flap = 1` the old `plate(..., flapAcross)` call needed would flatten the
+    // gradient to a constant. Left unset on purpose.
+    cloth.mastCloth(0.11, 0.56 + mastH - 1.4 + chh * 0.5, 0, cw, chh, 0, 0xffffff,
+      6, 3, atlasRect(cell));
     return {
       geo: b.build(`flagMast${cell}`), flag: cloth.build(`flagCloth${cell}`),
       cull: CULL_MID,
