@@ -1680,12 +1680,20 @@ export function planStands(ctx: WorldContext, limit = 8): StandSpec[] {
   place(2, -1, 1.0, true);
   place(4, 1, 0.8, false);
 
+  const standRng = new Rng(((ctx.hints.terrainSeed | 0) ^ 0x57a4d5) >>> 0 || 1);
+
   const order = Array.from({ length: n }, (_, i) => i)
     .sort((a, b) => Math.abs(curv[b]) - Math.abs(curv[a]));
   for (const i of order) {
     if (out.length >= limit) break;
     // Outside of the corner: opposite the turn direction.
-    place(i, curv[i] > 0 ? -1 : 1, 0.5 + Math.random() * 0.3, false);
+    // `Math.random()` here made stand and crowd counts NON-REPRODUCIBLE between
+    // runs of the same circuit — Crowd came out 1818 / 1816 / 1751 / 1721 across
+    // four identical builds, which silently invalidates any before/after
+    // measurement anyone takes of this subsystem. Seeded from the circuit's own
+    // `terrainSeed`, offset so it cannot phase-lock with the terrain scatter that
+    // shares that seed.
+    place(i, curv[i] > 0 ? -1 : 1, 0.5 + standRng.next() * 0.3, false);
   }
   return out;
 }

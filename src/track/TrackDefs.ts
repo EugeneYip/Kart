@@ -573,7 +573,11 @@ export const TRACKS: Record<string, TrackDef> = {
       // Pushed to 18 (4.1 m of verge) and thinned 26 -> 18 instances.
       { type: 'townHouse', t: 0.52, lat: 20, step: 0.013, end: 0.63, mirror: true },
       { type: 'streetLamp', t: 0.525, lat: -12, step: 0.014, end: 0.63 },
-      { type: 'planter', t: 0.56, lat: 11, step: 0.008, end: 0.60 },
+      // lat 13, not 11: at these stations the half-width is 8.5 m and the planter
+      // builds outward from its anchor, so lat 11 put three instances 0.04-0.16 m
+      // inside the kerb line. `clearRoadSurface` only pushes props off the
+      // ASPHALT, so a prop on the kerb is not caught by it.
+      { type: 'planter', t: 0.56, lat: 13, step: 0.008, end: 0.60 },
       // promenade + cove
       { type: 'palmCluster', t: 0.655, lat: -18, step: 0.016, end: 0.70 },
       { type: 'buoy', t: 0.735, lat: -30, step: 0.01, end: 0.775 },
