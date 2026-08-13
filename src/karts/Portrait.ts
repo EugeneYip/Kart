@@ -117,6 +117,12 @@ const SHOULDER_DROP = 0.34;
 /** The crop never goes below this height in rig space (hips are at y = 0). */
 const CROP_FLOOR = 0.02;
 /**
+ * How much wider than tall the fit box is allowed to get before the extra width
+ * is ignored. 1.30 keeps the capybara's hat brim inside the card at 220 px while
+ * bringing its head back to the same apparent size as the rest of the roster.
+ */
+const PORTRAIT_MAX_ASPECT = 1.30;
+/**
  * Fraction of the half-frame the subject box's worst corner is fitted to. The
  * fit is solved, not guessed, so this is also the guaranteed `worst` NDC in the
  * framing report — 0.90 leaves a 5 % margin against the 0.95 in-frame limit.
@@ -420,6 +426,30 @@ export class PortraitStudio {
     _box.min.y = Math.max(CROP_FLOOR, _head.min.y - headH * SHOULDER_DROP);
     _box.min.x -= halfW * 0.14;
     _box.max.x += halfW * 0.14;
+
+    // A WIDE ACCESSORY MUST NOT SHRINK THE CHARACTER.
+    //
+    // The fit solves the camera distance against the *worst* NDC extent of this
+    // box, so a subject that is much wider than it is tall fits by width and
+    // wastes the vertical frame. Measured: the capybara's floppy bucket-hat brim
+    // is 0.49 m across against a 0.32 m head height, which put the camera at
+    // 2.24 units where every other driver sits at 1.14–1.48, and its head filled
+    // 0.445 of the card against 0.51–0.66 for the rest. In the menu that reads as
+    // "Capy is drawn smaller than everybody else", which is exactly the kind of
+    // unevenness the roster is being judged on.
+    //
+    // So the fit box's horizontal and depth extents are clamped to a multiple of
+    // its height. The brim is then allowed to run to (or just past) the frame
+    // edge — which is what a portrait photographer does with a wide hat — while
+    // the head keeps the same apparent size as everyone else's. `_head` is left
+    // unclamped so the reported framing still describes the true silhouette.
+    _box.getSize(_size);
+    const fitH = Math.max(1e-4, _size.y);
+    const maxHalf = fitH * PORTRAIT_MAX_ASPECT * 0.5;
+    _box.getCenter(_c);
+    if (_size.x * 0.5 > maxHalf) { _box.min.x = _c.x - maxHalf; _box.max.x = _c.x + maxHalf; }
+    if (_size.z * 0.5 > maxHalf) { _box.min.z = _c.z - maxHalf; _box.max.z = _c.z + maxHalf; }
+
     _box.getSize(_size);
     const subjH = Math.max(1e-4, _size.y);
 

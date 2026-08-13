@@ -176,6 +176,16 @@ function makeAtlasTexture(
 }
 
 const _atlasCol = new THREE.Color();
+const _mixA = new THREE.Color();
+const _mixB = new THREE.Color();
+
+/** Blend two CSS colours in linear space and return `rgb(...)`. */
+function mixHex(a: string, b: string, t: number): string {
+  _mixA.set(a);
+  _mixB.set(b);
+  _mixA.lerp(_mixB, t);
+  return `rgb(${Math.round(_mixA.r * 255)},${Math.round(_mixA.g * 255)},${Math.round(_mixA.b * 255)})`;
+}
 
 function writeRgb(hex: number, out: Uint8Array, o: number, mul = 1): void {
   _atlasCol.setHex(hex);
@@ -762,6 +772,80 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
 
   const eyeSize = spec.eyeSize ?? 1;
 
+  /**
+   * A real iris: limbal ring, radial fibres, a pupil, and a bright catchlight
+   * plus a dim bounce light opposite it.
+   *
+   * Both eye paths used to fill three flat ellipses — iris, pupil, one dot. A
+   * flat disc of colour is the single most doll-like thing you can put on a
+   * face, and at portrait size (208 px per cell) the eye is most of what the
+   * player looks at. The limbal ring is doing the heavy lifting: a dark rim
+   * around the iris is what makes it read as a wet sphere set into a socket
+   * rather than as a sticker.
+   */
+  const drawIris = (
+    cx: number, cy: number, rx: number, ry: number, iris: string, pupilR: number,
+  ) => {
+    const grad = g.createRadialGradient(cx, cy - ry * 0.22, rx * 0.10, cx, cy, rx * 1.02);
+    grad.addColorStop(0, mixHex(iris, '#ffffff', 0.38));
+    grad.addColorStop(0.52, iris);
+    grad.addColorStop(0.86, mixHex(iris, '#120b08', 0.34));
+    grad.addColorStop(1, mixHex(iris, '#0d0806', 0.62));
+    g.fillStyle = grad;
+    g.beginPath();
+    g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    g.fill();
+    // Radial fibres — eight strokes clipped to the iris, alternating light/dark.
+    g.save();
+    g.beginPath();
+    g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    g.clip();
+    g.lineWidth = Math.max(1, rx * 0.11);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.32;
+      g.strokeStyle = i % 2 === 0 ? 'rgba(255,255,255,0.16)' : 'rgba(20,12,8,0.20)';
+      g.beginPath();
+      g.moveTo(cx + Math.cos(a) * rx * 0.34, cy + Math.sin(a) * ry * 0.34);
+      g.lineTo(cx + Math.cos(a) * rx * 1.02, cy + Math.sin(a) * ry * 1.02);
+      g.stroke();
+    }
+    g.restore();
+    // Limbal ring.
+    g.strokeStyle = 'rgba(14,9,7,0.55)';
+    g.lineWidth = Math.max(1, rx * 0.14);
+    g.beginPath();
+    g.ellipse(cx, cy, rx * 0.95, ry * 0.95, 0, 0, Math.PI * 2);
+    g.stroke();
+    // Pupil.
+    g.fillStyle = '#0f0a09';
+    g.beginPath();
+    g.ellipse(cx, cy, pupilR, Math.min(ry * 0.92, pupilR * 1.25), 0, 0, Math.PI * 2);
+    g.fill();
+    // Catchlight, then the weaker bounce from the opposite side.
+    g.fillStyle = 'rgba(255,255,255,0.95)';
+    g.beginPath();
+    g.ellipse(cx - rx * 0.34, cy - ry * 0.40, rx * 0.26, rx * 0.22, -0.5, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = 'rgba(198,222,255,0.45)';
+    g.beginPath();
+    g.ellipse(cx + rx * 0.30, cy + ry * 0.34, rx * 0.14, rx * 0.12, 0, 0, Math.PI * 2);
+    g.fill();
+  };
+
+  /** Upper-lid shadow across the top of an eyeball. */
+  const drawLidShadow = (cx: number, cy: number, rx: number, ry: number) => {
+    g.save();
+    g.beginPath();
+    g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    g.clip();
+    const sh = g.createLinearGradient(0, cy - ry, 0, cy + ry * 0.35);
+    sh.addColorStop(0, 'rgba(52,28,16,0.45)');
+    sh.addColorStop(1, 'rgba(52,28,16,0)');
+    g.fillStyle = sh;
+    g.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
+    g.restore();
+  };
+
   // -------------------------------------------------------------------------
   //  Animal cell (fox / capybara)
   // -------------------------------------------------------------------------
@@ -918,27 +1002,16 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
       g.beginPath();
       g.ellipse(x, ey, rx, Math.max(ry, cell * 0.010), 0, 0, Math.PI * 2);
       g.fill();
+      drawLidShadow(x, ey, rx, Math.max(ry, cell * 0.010));
 
       // Iris + pupil, gaze-shifted.
       const gx = mirror * rx * (expr === 'thoughtful' ? 0.20 : expr === 'determined' ? 0.18 : 0);
       const gy = ryFull * gazeY;
-      g.fillStyle = spec.eye;
-      g.beginPath();
-      g.ellipse(x + gx, ey + gy, rx * (capy ? 0.86 : 0.70), Math.min(ry, rx * 0.86), 0, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = '#120d0a';
-      g.beginPath();
-      g.ellipse(x + gx, ey + gy, rx * (capy ? 0.60 : 0.36), Math.min(ry * 0.86, rx * 0.5), 0, 0, Math.PI * 2);
-      g.fill();
-      // Two catchlights — the single biggest "alive" cue on a stylised face.
-      g.fillStyle = 'rgba(255,255,255,0.95)';
-      g.beginPath();
-      g.ellipse(x + gx - rx * 0.30, ey + gy - ryFull * 0.34, rx * 0.20, rx * 0.20, 0, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = 'rgba(255,255,255,0.55)';
-      g.beginPath();
-      g.ellipse(x + gx + rx * 0.26, ey + gy + ryFull * 0.24, rx * 0.10, rx * 0.10, 0, 0, Math.PI * 2);
-      g.fill();
+      drawIris(
+        x + gx, ey + gy,
+        rx * (capy ? 0.86 : 0.70), Math.min(ry, rx * 0.86),
+        spec.eye, rx * (capy ? 0.60 : 0.36),
+      );
 
       // Upper lid as a fur-coloured cap, so narrowing reads as a lid not a crop.
       if (lid > 0.06) {
@@ -976,6 +1049,45 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     };
     drawBrow(exL, 1);
     drawBrow(exR, -1);
+
+    if (!capy) {
+      // The red fox's TEAR STRIPE: a dark wedge running from the inner corner of
+      // each eye down onto the muzzle. It is on every reference photograph and it
+      // is most of what distinguishes a fox's face from a generic orange animal's.
+      // `Driver.ts` also puts a shallow ridge here so the key light catches it.
+      for (const sgn of [-1, 1]) {
+        const x0 = cell * 0.5 + sgn * cell * 0.10;
+        g.fillStyle = 'rgba(58,32,20,0.42)';
+        g.beginPath();
+        g.moveTo(x0 + sgn * cell * 0.055, ey + ryFull * 0.30);
+        g.quadraticCurveTo(
+          x0 + sgn * cell * 0.030, splitY - cell * 0.05,
+          x0 - sgn * cell * 0.006, splitY + cell * 0.010,
+        );
+        g.quadraticCurveTo(
+          x0 + sgn * cell * 0.060, splitY - cell * 0.06,
+          x0 + sgn * cell * 0.098, ey + ryFull * 0.38,
+        );
+        g.closePath();
+        g.fill();
+      }
+      // Pale brow spot above each eye — the small light patch a red fox has just
+      // inboard of the ear, and a cheap second value in the pelt field.
+      g.fillStyle = 'rgba(255,244,226,0.20)';
+      for (const sgn of [-1, 1]) {
+        g.beginPath();
+        g.ellipse(cell * 0.5 + sgn * cell * 0.20, ey - cell * 0.20, cell * 0.060, cell * 0.034, sgn * 0.3, 0, Math.PI * 2);
+        g.fill();
+      }
+    } else {
+      // A capybara's brow is a heavy horizontal shelf and the eyes sit under it,
+      // which is where the permanently-unbothered expression comes from.
+      const shelf = g.createLinearGradient(0, ey - cell * 0.16, 0, ey + cell * 0.02);
+      shelf.addColorStop(0, 'rgba(58,40,26,0.30)');
+      shelf.addColorStop(1, 'rgba(58,40,26,0)');
+      g.fillStyle = shelf;
+      g.fillRect(0, ey - cell * 0.16, cell, cell * 0.18);
+    }
 
     // --- nose bridge shade, under the geometric nose -----------------------
     const ny = splitY + cell * (capy ? 0.045 : 0.020);
@@ -1181,11 +1293,14 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
         return;
       }
 
-      // sclera
-      g.fillStyle = '#ffffff';
+      // Sclera. Not #ffffff: a pure-white eyeball is the classic tell of a
+      // decal, because a real sclera is in shadow under the lid and picks up
+      // bounce from the cheek.
+      g.fillStyle = '#f6f2ec';
       g.beginPath();
       g.ellipse(x, ey, rx, Math.max(ry, cell * 0.012), 0, 0, Math.PI * 2);
       g.fill();
+      if (!shut) drawLidShadow(x, ey, rx, Math.max(ry, cell * 0.012));
 
       if (!shut) {
         if (expr === 'hit') {
@@ -1201,18 +1316,19 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
             : expr === 'thoughtful' ? mirror * rx * 0.30 : 0;
           // `thoughtful` is "eyes up and away" — the gaze offset IS the read.
           const lookY = expr === 'thoughtful' ? -ry * 0.44 : 0;
-          g.fillStyle = spec.eye;
+          drawIris(
+            x + look, ey + ry * 0.1 + lookY,
+            rx * 0.62, Math.min(ry, rx * 0.72), spec.eye, rx * 0.30,
+          );
+          // Lash line along the top lid — one dark stroke, and the difference
+          // between "has eyes" and "has a face".
+          g.strokeStyle = 'rgba(40,24,18,0.55)';
+          g.lineWidth = cell * 0.016;
+          g.lineCap = 'round';
           g.beginPath();
-          g.ellipse(x + look, ey + ry * 0.1 + lookY, rx * 0.62, Math.min(ry, rx * 0.72), 0, 0, Math.PI * 2);
-          g.fill();
-          g.fillStyle = '#141018';
-          g.beginPath();
-          g.ellipse(x + look, ey + ry * 0.1 + lookY, rx * 0.3, Math.min(ry * 0.72, rx * 0.36), 0, 0, Math.PI * 2);
-          g.fill();
-          g.fillStyle = 'rgba(255,255,255,0.95)';
-          g.beginPath();
-          g.ellipse(x + look - rx * 0.22, ey - ry * 0.32 + lookY, rx * 0.16, rx * 0.16, 0, 0, Math.PI * 2);
-          g.fill();
+          g.moveTo(x - rx * 1.04, ey - ry * 0.58);
+          g.quadraticCurveTo(x, ey - ry * 1.20, x + rx * 1.04, ey - ry * 0.58);
+          g.stroke();
         }
       }
 

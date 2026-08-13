@@ -701,13 +701,21 @@ class Harness {
     const holder = document.getElementById('atlas');
     if (!holder) return;
     const src = this.items.getIconCanvas();
+    // Aspect-preserving. This drew into a fixed 256x256, which was right while the
+    // sheet was a 4x4 square; it is now a 5x1 strip (one cell per LIVE item), so a
+    // square destination squashed it 5:1 and made this inspector useless for
+    // judging the very art it exists to show.
+    const MAX = 320;
+    const aspect = src && src.height > 0 ? src.width / src.height : 1;
+    const w = aspect >= 1 ? MAX : Math.max(1, Math.round(MAX * aspect));
+    const h = aspect >= 1 ? Math.max(1, Math.round(MAX / aspect)) : MAX;
     const c = document.createElement('canvas');
-    c.width = 256; c.height = 256;
+    c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (ctx) {
       ctx.fillStyle = 'rgba(255,255,255,0.05)';
-      ctx.fillRect(0, 0, 256, 256);
-      if (src) ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, 256, 256);
+      ctx.fillRect(0, 0, w, h);
+      if (src) ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, w, h);
     }
     holder.appendChild(c);
   }

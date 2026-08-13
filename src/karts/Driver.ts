@@ -97,6 +97,57 @@ export interface DriverDef {
   face: FaceSpec;
   /** Extra scarf / cape that trails behind. */
   scarf?: boolean;
+  /**
+   * Rest posture, in degrees. The rig used to be authored bolt upright for
+   * everyone and only leaned when `DriverPose` asked, which is why a parked grid
+   * read as eight mannequins: MK8DX drivers are *settled* into the seat before
+   * anything moves. `crouch` pitches the whole torso forward about the waist,
+   * `shrug` raises and narrows the shoulder line, `chin` tips the head.
+   *
+   * These are baked into the geometry at build time, so they cost nothing per
+   * frame and the arms still reach the wheel — `skeletonFor` solves the hand
+   * position AFTER applying them.
+   */
+  crouch?: number;
+  shrug?: number;
+  chin?: number;
+  /**
+   * Elbow flare, in metres, added to the outboard elbow offset.
+   *
+   * FROM BEHIND, THE ELBOWS ARE THE WIDEST PART OF A SEATED DRIVER — wider than
+   * the shoulders, wider than any hat. Every driver used to carry their arms at
+   * `+0.026 + bulk * 0.024`, i.e. one arm pose scaled by mass, which is why four
+   * mid-bulk humans (mechanic 0.38, robot 0.42, racer 0.50, aviator 0.55) came
+   * out as the same rear outline however much detail went on their heads. A
+   * formula driver tucks their elbows in; a heavy on a cruiser hangs them out.
+   * That difference is worth more silhouette than everything else in this file.
+   */
+  elbowOut?: number;
+  /**
+   * Back-of-head / rear-shoulder treatment.
+   *
+   * THIS IS THE MOST-VIEWED 30 % OF THE MODEL AND IT USED TO BE EMPTY. The chase
+   * camera sits behind the kart, so what it shows is the nape, the crown and the
+   * shoulder line — and every differentiating beat the eight humans owned (a
+   * visor, a brim, goggles, a T-slit) is on the FRONT of the head, pointing away.
+   * Measured: the rear-view normalised silhouette IoU between mechanic and racer
+   * was 0.920, and the eight humans sat in a 0.82–0.92 cluster. They were, from
+   * the angle the player actually looks from, one character with eight palettes.
+   *
+   * Each value is a deliberately different OUTLINE, not a different decoration:
+   * a soft round mass, a hard horizontal blade, a comb, a trapezium, two
+   * ribbons, a second sphere, a bell, a flared skirt.
+   *
+   * Clearance is not negotiable and was measured, not guessed
+   * (`.probe-tmp/fox-space.ts`, 45 mm probe, worst case over all six chassis):
+   *   - head height (driver y >= 0.40): midline is CLEAR out to z = +0.30.
+   *   - y = 0.40..0.48, z = +0.33..+0.45 is the buggy's roll hoop — blocked.
+   *   - behind the shoulders (y ~ 0.28, z = +0.10..+0.27) needs |x| >= 0.17,
+   *     so anything at shoulder height has to be two outboard panels rather
+   *     than one sheet across the midline.
+   */
+  rear?: 'hairMop' | 'spoiler' | 'finComb' | 'napeRoll' | 'streamers'
+  | 'dorsalPack' | 'mantle' | 'neckCurtain';
 
   // --- animals -------------------------------------------------------------
   species?: Species;
@@ -123,9 +174,16 @@ const HUMAN_EYE = '#2b2f3a';
 export const DRIVERS: Record<DriverId, DriverDef> = {
   // 1. Plucky mechanic — backwards cap, goggles on the forehead, overalls.
   mechanic: {
-    id: 'mechanic', name: 'Nova', scale: 1.0, bulk: 0.38, headR: 0.115, neck: 0.020,
-    torso: 0.255, head: 'cap', outfit: 'overalls', skinColor: 0xe8ab7f,
+    id: 'mechanic', name: 'Nova', scale: 1.0, bulk: 0.30, headR: 0.120, neck: 0.026,
+    torso: 0.262, head: 'cap', outfit: 'overalls', skinColor: 0xe8ab7f,
     suit: 0x2c3d63, suitAlt: 0xf1e7d3,
+    // Auburn hair. `furDark`/`furAlt` route through `KartManager.paintFor`
+    // untouched for humans today, so claiming them for hair costs nothing and
+    // buys the fur material's strand normal and anisotropic sheen — which is
+    // exactly the shading hair wants and a re-tinted cloth would not give.
+    furDark: 0x6b3a1e, furAlt: 0xa9683a,
+    rear: 'hairMop',
+    crouch: 5, shrug: 0.10, chin: -3, elbowOut: 0.004,
     face: {
       style: 'human', skin: '#e8ab7f', eye: '#3b6ea5', brow: '#5c3a24',
       blush: 'rgba(214,102,86,0.30)', eyeSize: 1.06, mark: 'freckles',
@@ -133,9 +191,13 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 2. Cool racer — full-face helmet, tinted visor, winglets.
   racer: {
-    id: 'racer', name: 'Blitz', scale: 1.02, bulk: 0.5, headR: 0.118, neck: 0.012,
-    torso: 0.27, head: 'fullHelmet', outfit: 'race', skinColor: 0xd39a72,
+    id: 'racer', name: 'Blitz', scale: 1.02, bulk: 0.62, headR: 0.112, neck: 0.012,
+    torso: 0.278, head: 'fullHelmet', outfit: 'race', skinColor: 0xd39a72,
     suit: 0xe9edf4, suitAlt: 0xffcf2f,
+    rear: 'spoiler', elbowOut: -0.020,
+    // The straight-line specialist is folded into the car: the deepest crouch on
+    // the roster and shoulders pulled up around the helmet.
+    crouch: 13, shrug: 0.26, chin: -6,
     face: {
       style: 'visor', skin: '#d39a72', eye: '#101820', brow: '#2a2f38',
       glow: '#8fd8ff', eyeSize: 0.9, mark: 'none',
@@ -143,9 +205,13 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 3. Robot — chromed dome, single optic band, antenna, piston arms.
   robot: {
-    id: 'robot', name: 'Zephyr', scale: 0.98, bulk: 0.42, headR: 0.112, neck: 0.034,
-    torso: 0.25, head: 'robot', outfit: 'plated', skinColor: 0xb9c2cc,
+    id: 'robot', name: 'Zephyr', scale: 0.98, bulk: 0.36, headR: 0.104, neck: 0.052,
+    torso: 0.244, head: 'robot', outfit: 'plated', skinColor: 0xb9c2cc,
     suit: 0x39424c, suitAlt: 0x9aa5b2,
+    rear: 'finComb', elbowOut: 0.028,
+    // A machine does not slouch. Bolt upright, square shoulders — and being the
+    // ONLY driver with no crouch is itself a characterisation.
+    crouch: 0, shrug: 0.0, chin: 0,
     face: {
       style: 'robot', skin: '#1a1d23', eye: '#59ffd0', brow: '#1a1d23',
       glow: '#59ffd0', eyeSize: 1.15, mark: 'none',
@@ -156,6 +222,12 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     id: 'heavy', name: 'Torque', scale: 1.14, bulk: 1.0, headR: 0.108, neck: 0.0,
     torso: 0.25, head: 'trucker', outfit: 'jacket', skinColor: 0xc98b62,
     suit: 0x4b5540, suitAlt: 0xe07a2c,
+    furDark: 0x33261c, furAlt: 0x6b5238,
+    rear: 'napeRoll', elbowOut: 0.026,
+    // Heavy and settled: leans BACK, shoulders dropped, chin up. The only
+    // negative crouch on the roster, which is what stops the biggest driver
+    // reading as the same pose scaled up.
+    crouch: -4, shrug: -0.14, chin: 4,
     face: {
       style: 'human', skin: '#c98b62', eye: '#4a3524', brow: '#3a2a1c',
       eyeSize: 0.86, mark: 'stubble',
@@ -163,9 +235,11 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 5. Small speedster — oversized teardrop helmet, big eyes, scarf.
   speedy: {
-    id: 'speedy', name: 'Pip', scale: 0.84, bulk: 0.2, headR: 0.126, neck: 0.010,
-    torso: 0.215, head: 'aero', outfit: 'slim', skinColor: 0xf2c49b,
+    id: 'speedy', name: 'Pip', scale: 0.82, bulk: 0.16, headR: 0.132, neck: 0.010,
+    torso: 0.206, head: 'aero', outfit: 'slim', skinColor: 0xf2c49b,
     suit: 0xd93a7a, suitAlt: 0xfdf3e3,
+    rear: 'streamers', elbowOut: 0.022,
+    crouch: 10, shrug: 0.18, chin: -4,
     face: {
       style: 'human', skin: '#f2c49b', eye: '#2f8f6b', brow: '#4a3520',
       blush: 'rgba(224,116,96,0.35)', eyeSize: 1.28, mark: 'none',
@@ -174,9 +248,13 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 6. Alien — elongated cranium under a glass bubble, black almond eyes.
   alien: {
-    id: 'alien', name: 'Vex', scale: 0.94, bulk: 0.24, headR: 0.112, neck: 0.048,
-    torso: 0.245, head: 'bubble', outfit: 'slim', skinColor: 0x9fe3b8,
+    id: 'alien', name: 'Vex', scale: 0.94, bulk: 0.22, headR: 0.108, neck: 0.070,
+    torso: 0.252, head: 'bubble', outfit: 'slim', skinColor: 0x9fe3b8,
     suit: 0x1d2c50, suitAlt: 0x3cf0c8,
+    rear: 'dorsalPack', elbowOut: -0.014,
+    // Unnervingly still. A slight backward set and a raised chin so the long
+    // cranium reads as looking down its nose at the field.
+    crouch: -2, shrug: 0.06, chin: 5,
     face: {
       style: 'alien', skin: '#9fe3b8', eye: '#0b0d12', brow: '#7cc79a',
       glow: '#6effc8', eyeSize: 1.35, mark: 'none',
@@ -184,9 +262,11 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 7. Knight — crested great-helm with a T-slit, pauldrons over a gambeson.
   knight: {
-    id: 'knight', name: 'Ember', scale: 1.06, bulk: 0.74, headR: 0.115, neck: 0.0,
-    torso: 0.26, head: 'greatHelm', outfit: 'armour', skinColor: 0xdda07a,
+    id: 'knight', name: 'Ember', scale: 1.06, bulk: 0.80, headR: 0.113, neck: 0.0,
+    torso: 0.256, head: 'greatHelm', outfit: 'armour', skinColor: 0xdda07a,
     suit: 0x38445e, suitAlt: 0xd9a53a,
+    rear: 'mantle', elbowOut: 0.018,
+    crouch: 6, shrug: 0.20, chin: -2,
     face: {
       style: 'visor', skin: '#dda07a', eye: '#141820', brow: '#2b2118',
       eyeSize: 0.94, mark: 'scar',
@@ -194,9 +274,12 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 8. Pilot — leather flight cap, earflaps, aviator goggles, scarf.
   aviator: {
-    id: 'aviator', name: 'Strata', scale: 1.0, bulk: 0.55, headR: 0.116, neck: 0.018,
-    torso: 0.26, head: 'flightCap', outfit: 'jacket', skinColor: 0xdfae86,
+    id: 'aviator', name: 'Strata', scale: 1.0, bulk: 0.48, headR: 0.118, neck: 0.030,
+    torso: 0.272, head: 'flightCap', outfit: 'jacket', skinColor: 0xdfae86,
     suit: 0x8a6b45, suitAlt: 0xf3e7d0,
+    furDark: 0x5b4630, furAlt: 0x8c6f4c,
+    rear: 'neckCurtain', elbowOut: -0.008,
+    crouch: 3, shrug: -0.06, chin: 2,
     face: {
       style: 'human', skin: '#dfae86', eye: '#7a6a4a', brow: '#4a3a26',
       eyeSize: 1.0, mark: 'moustache',
@@ -217,8 +300,14 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // Bold two-mass blocking: cold blue knit over the whole upper body against
     // warm orange fur everywhere else, with the mustard beret as the only accent.
     suit: 0x4a7398, suitAlt: 0xd8a32b, skinColor: 0xe4761f,
-    species: 'fox', fur: 0xe4761f, furAlt: 0xf3e3cb, furDark: 0x4a2e20,
-    muzzle: 1.05, tail: true, knitwear: true, expressive: true,
+    species: 'fox', fur: 0xe4761f, furAlt: 0xf3e3cb, furDark: 0x2e1a12,
+    // A red fox's muzzle is close to HALF its head length — 1.05 R was already
+    // long, and 1.28 puts the nose where the reference photographs put it.
+    muzzle: 1.28, tail: true, knitwear: true, expressive: true,
+    // Alert and forward: ears up, weight over the wheel. `chin` is negative so
+    // the long muzzle points slightly down the road rather than at the sky,
+    // which is what stops a sharp snout reading as a beak.
+    crouch: 8, shrug: 0.14, chin: -5, elbowOut: -0.010,
     face: {
       style: 'fox', skin: '#e4761f', snout: '#f3e3cb', nose: '#241713',
       eye: '#43301c', brow: '#8a4a16', eyeSize: 1.10, mark: 'whiskers',
@@ -233,8 +322,17 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     id: 'capy', name: 'Capy', scale: 1.12, bulk: 0.94, headR: 0.128, neck: 0.0,
     torso: 0.222, head: 'bucketHat', outfit: 'pelt',
     suit: 0x6e90ae, suitAlt: 0xc4622d, skinColor: 0xc9a98a,
-    species: 'capy', fur: 0xc9a98a, furAlt: 0xe3cbae, furDark: 0x8a6a4a,
-    muzzle: 0.78, knitwear: true, expressive: true,
+    species: 'capy', fur: 0xa8815d, furAlt: 0xcaa87e, furDark: 0x6e5136,
+    // A capybara's muzzle is NOT short — it is long, deep and BLUNT, a
+    // rectangular block ending in a broad flat nose pad. Shortening it to 0.78 R
+    // to make it "blunt" was the wrong lever: it turned the head into a ball and
+    // read as a bear cub. The length comes back and the bluntness is carried by
+    // the section width and the superellipse exponents instead.
+    muzzle: 1.06, knitwear: true, expressive: true,
+    // Utterly unbothered: sits back, shoulders down, chin up. Together with the
+    // negative-crouch heavy this is the only other reclined driver, and the two
+    // are 0.94 vs -0.14 apart on `shrug` so they still separate.
+    crouch: -6, shrug: -0.10, chin: 6, elbowOut: 0.034,
     face: {
       style: 'capy', skin: '#c9a98a', snout: '#e3cbae', nose: '#3b2a20',
       eye: '#2c1e16', brow: '#6b4c30', eyeSize: 1.0, mark: 'whiskers',
@@ -772,6 +870,33 @@ class RigBucket {
     return this;
   }
 
+  /**
+   * Per-vertex warp of every entry on `node`. Used once, to bake the rest-posture
+   * lean into the torso: the lean ramps quadratically with height, which is not
+   * an affine transform, so a matrix cannot express it. A LINEAR shear can, and
+   * was tried — it drags the waist forward with the shoulders and reads as a bad
+   * skinning weight rather than as a spine.
+   *
+   * Must run after every part is added (the scarf arrives from `buildHead`) and
+   * before the AO bake, or the occlusion is baked in the wrong pose.
+   */
+  warpNode(node: DriverNode, fn: (y: number) => number): this {
+    for (const e of this.entries) {
+      if (e.node !== node) continue;
+      const pos = e.geom.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) pos.setZ(i, pos.getZ(i) + fn(pos.getY(i)));
+      pos.needsUpdate = true;
+      e.geom.computeVertexNormals();
+    }
+    return this;
+  }
+
+  /** Rigid transform of every entry on `node` (the baked head pitch + lean). */
+  transformNode(node: DriverNode, m: THREE.Matrix4): this {
+    for (const e of this.entries) if (e.node === node) e.geom.applyMatrix4(m);
+    return this;
+  }
+
   /** Adds `geom` on `node`, plus its X mirror on `mirrorNode`. */
   pair(
     node: DriverNode, mirrorNode: DriverNode, slot: MaterialSlot,
@@ -867,20 +992,51 @@ interface Skeleton {
   hand: THREE.Vector3;
   chest: number;
   waist: number;
+  /**
+   * Baked rest posture. `lean` is the forward offset (metres toward -Z) at the
+   * shoulder line, `leanAt` ramps it from nothing at the hem, `shoulderZ` is the
+   * shoulder pivot after the lean, `chin` is the head pitch in radians.
+   *
+   * Baking the posture into the geometry rather than into `DriverPose` means a
+   * parked grid already reads as twelve people sitting in twelve different ways,
+   * and it costs zero per-frame work. It also cannot fight the pose channels:
+   * `DriverPose.pitch` still swings the torso about the same waist pivot, it just
+   * starts from a lean instead of from attention.
+   */
+  lean: number;
+  shoulderZ: number;
+  leanAt(y: number): number;
+  chin: number;
 }
 
 function skeletonFor(d: DriverDef, o: DriverBuildOptions): Skeleton {
   const bulk = d.bulk;
   const hipY = 0.012 + bulk * 0.006;
-  const torsoTop = hipY + d.torso;
-  const shoulderHalf = 0.098 + bulk * 0.062;
-  const shoulderY = torsoTop - 0.028;
+  const crouch = (d.crouch ?? 0) * DEG;
+  const shrug = d.shrug ?? 0;
+  // Leaning forward trades vertical rise for reach, exactly as a real spine does
+  // — without the cosine a "crouched" driver is just a taller driver pushed
+  // forward, and the shoulder ends up above where it started.
+  const torsoTop = hipY + d.torso * Math.cos(crouch);
+  const lean = d.torso * Math.sin(crouch);
+  const shoulderHalf = (0.098 + bulk * 0.062) * (1 - shrug * 0.22);
+  const shoulderY = torsoTop - 0.028 + shrug * 0.030;
   const neckY = torsoTop + 0.004;
   const headY = neckY + d.neck + d.headR * 0.86;
 
+  const hemY = hipY - 0.06;
+  const spanY = Math.max(1e-4, (torsoTop + 0.014) - hemY);
+  // Quadratic ramp: a spine bends most near the top, so a linear ramp shears the
+  // waist forward and reads as a bad skinning weight rather than a lean.
+  const leanAt = (y: number): number => {
+    const t = clamp01((y - hemY) / spanY);
+    return lean * t * t;
+  };
+  const shoulderZ = -0.004 - leanAt(shoulderY);
+
   const wt = o.wheelTarget ?? new THREE.Vector3(0, shoulderY - 0.03, -0.30);
   const wr = (o.wheelRadius ?? 0.10) * (o.gripSpread ?? 1);
-  const shoulder = new THREE.Vector3(shoulderHalf, shoulderY, -0.004);
+  const shoulder = new THREE.Vector3(shoulderHalf, shoulderY, shoulderZ);
   const hand = new THREE.Vector3(wr * 0.80, wt.y + wr * 0.18, wt.z + 0.010);
 
   // A driver's arm is about 1.25 × torso height. Chassis put their wheels at
@@ -895,17 +1051,22 @@ function skeletonFor(d: DriverDef, o: DriverBuildOptions): Skeleton {
 
   // Elbow sits outboard of the straight shoulder→hand line and a little low,
   // which is what makes an arm read as an arm rather than a bent pipe.
+  // `elbowOut` is clamped so a tucked driver cannot pull the elbow inside the
+  // shoulder line, which would fold the upper arm through the ribs.
+  const flare = clamp(0.026 + bulk * 0.024 + (d.elbowOut ?? 0), 0.008, 0.090);
   const elbow = new THREE.Vector3(
-    Math.max(shoulderHalf, hand.x) + 0.026 + bulk * 0.024,
-    lerp(shoulderY, hand.y, 0.46) - 0.030 - bulk * 0.012,
-    lerp(-0.004, hand.z, 0.44) + 0.014,
+    Math.max(shoulderHalf, hand.x) + flare,
+    lerp(shoulderY, hand.y, 0.46) - 0.030 - bulk * 0.012 + (d.elbowOut ?? 0) * 0.45,
+    lerp(shoulderZ, hand.z, 0.44) + 0.014,
   );
   return {
     hipY, torsoTop, shoulderY, shoulderHalf, neckY, headY, elbow, hand,
     chest: 0.088 + bulk * 0.052,
     waist: 0.074 + bulk * 0.040,
+    lean, shoulderZ, leanAt, chin: (d.chin ?? 0) * DEG,
   };
 }
+
 
 // --- torso variants --------------------------------------------------------
 
@@ -956,7 +1117,7 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
   // Shoulder caps — separate volumes so the silhouette has real shoulders.
   const cap = superShape(0.052 + bulk * 0.030, 0.040 + bulk * 0.018, 0.052 + bulk * 0.026, 3.6, 3.4, 12, 8);
   b.pair('torso', 'torso', capSlotFor(d), cap, {
-    pos: [s.shoulderHalf * 0.92, s.shoulderY + 0.006, -0.004], detail: 0,
+    pos: [s.shoulderHalf * 0.92, s.shoulderY + 0.006, s.shoulderZ - 0.002], detail: 0,
   });
 
   // --- suit-specific colour blocking ------------------------------------
@@ -1032,7 +1193,7 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       }
       const pauldron = shell(0.070 + bulk * 0.020, 1.5, 0.030, -0.034, 0.013, 16);
       b.pair('torso', 'torso', 'paint', pauldron, {
-        pos: [s.shoulderHalf * 0.88, s.shoulderY + 0.012, 0], rot: [0, 0, -14], detail: 0,
+        pos: [s.shoulderHalf * 0.88, s.shoulderY + 0.012, s.shoulderZ + 0.004], rot: [0, 0, -14], detail: 0,
       });
       b.add('torso', 'chrome', roundedBox(0.044, 0.038, 0.018, 3.4), {
         pos: [0, s.hipY + 0.164, -front * 0.94], detail: 1,
@@ -1140,6 +1301,23 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       b.add('torso', 'cloth', drop, {
         pos: [0.052, s.torsoTop - 0.030, -front * 0.86], rot: [-104, 0, 9], detail: 0, shade: 0.94,
       });
+      // COARSE FLANK TUFTS. A capybara's coat is bristly and sparse and it sheds
+      // in clumps, so the animal's outline is never a clean curve — which is
+      // both the species read and the fix for the one measured shortcoming this
+      // character had: its three-quarter silhouette complexity was 4.75 against
+      // a roster mean of 6.08, the lowest on the roster by a wide margin. The
+      // tufts go on the shoulder line and the flank, where a three-quarter view
+      // puts them on the outline rather than inside it.
+      for (let i = 0; i < 7; i++) {
+        const t = i / 6;
+        const sx = i % 2 === 0 ? 1 : -1;
+        const y = lerp(s.hipY - 0.030, s.torsoTop - 0.020, t);
+        b.add('hips', 'furDark', earWedge(0.013, 0.030 + (i % 3) * 0.008, 0.007, 0.6), {
+          pos: [sx * (s.chest * 1.02 + bulk * 0.006), y, lerp(-front * 0.30, back * 0.62, t)],
+          rot: [16 + (i % 3) * 10, sx * 22, sx * (74 + (i % 2) * 12)],
+          detail: 2, shade: 0.86,
+        });
+      }
       // Fringe. Four stubby strands — cheap, and it is what makes it a scarf.
       for (let i = 0; i < 4; i++) {
         const fx = 0.052 + (i - 1.5) * 0.017;
@@ -1257,7 +1435,7 @@ function buildArms(b: RigBucket, d: DriverDef, s: Skeleton): void {
   const bulk = d.bulk;
   const upperR = 0.040 + bulk * 0.020;
   const foreR = 0.034 + bulk * 0.016;
-  const shoulder = new THREE.Vector3(s.shoulderHalf, s.shoulderY, -0.004);
+  const shoulder = new THREE.Vector3(s.shoulderHalf, s.shoulderY, s.shoulderZ);
   const armSlot = armSlotFor(d);
   const foreSlot = foreSlotFor(d);
   const handSlot = handSlotFor(d);
@@ -1425,14 +1603,17 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       { z: R * 0.66, y: R * 0.02, hw: R * 0.82, hUp: R * 0.74, hDown: R * 0.88, eSide: 3.0, eTop: 2.8, eBot: 2.9 },
       { z: R * 1.00, y: R * 0.02, hw: R * 0.50, hUp: R * 0.44, hDown: R * 0.54, eSide: 2.8, eTop: 2.6, eBot: 2.7 },
     ]
-    // A capybara skull is a loaf: no taper worth speaking of, corners chamfered
-    // rather than rounded, and it keeps its width right up to the crown.
+    // A capybara skull is a loaf with a FLAT TOP. The defining reference feature
+    // is that the eyes, ears and nostrils all sit on one high plane — it is a
+    // semi-aquatic animal, built to float with just that plane above the water —
+    // so the forehead is a shelf, not a dome. eTop at 6.0+ is what makes it a
+    // shelf; at 4.4 the crown rounded over and the whole head read as a bear cub.
     : [
-      { z: -R * 0.82, y: R * 0.02, hw: R * 0.68, hUp: R * 0.70, hDown: R * 0.76, eSide: 4.4, eTop: 4.0, eBot: 4.6 },
-      { z: -R * 0.26, y: R * 0.01, hw: R * 0.90, hUp: R * 0.92, hDown: R * 0.96, eSide: 4.8, eTop: 4.4, eBot: 4.6 },
-      { z: R * 0.26, y: 0, hw: R * 0.97, hUp: R * 0.88, hDown: R * 1.02, eSide: 5.0, eTop: 4.6, eBot: 4.8 },
-      { z: R * 0.78, y: 0, hw: R * 0.84, hUp: R * 0.74, hDown: R * 0.88, eSide: 4.4, eTop: 4.0, eBot: 4.2 },
-      { z: R * 1.02, y: 0, hw: R * 0.56, hUp: R * 0.50, hDown: R * 0.60, eSide: 3.8, eTop: 3.4, eBot: 3.6 },
+      { z: -R * 0.82, y: R * 0.06, hw: R * 0.72, hUp: R * 0.66, hDown: R * 0.80, eSide: 4.8, eTop: 6.0, eBot: 4.6 },
+      { z: -R * 0.26, y: R * 0.04, hw: R * 0.94, hUp: R * 0.86, hDown: R * 1.00, eSide: 5.2, eTop: 6.4, eBot: 4.6 },
+      { z: R * 0.26, y: 0, hw: R * 1.00, hUp: R * 0.84, hDown: R * 1.06, eSide: 5.4, eTop: 6.4, eBot: 4.8 },
+      { z: R * 0.80, y: -R * 0.02, hw: R * 0.92, hUp: R * 0.78, hDown: R * 0.94, eSide: 4.8, eTop: 5.6, eBot: 4.2 },
+      { z: R * 1.06, y: -R * 0.04, hw: R * 0.62, hUp: R * 0.54, hDown: R * 0.64, eSide: 4.0, eTop: 4.2, eBot: 3.6 },
     ], 22), { pos: [0, hy, 0], detail: 0 });
 
   // --- snout -------------------------------------------------------------
@@ -1445,23 +1626,80 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       { z: -R * 0.45, y: hy - R * 0.24, hw: R * 0.52, hUp: R * 0.36, hDown: R * 0.42, eSide: 3.2, eTop: 3.0, eBot: 3.0 },
       { z: R * 0.10, y: hy - R * 0.18, hw: R * 0.60, hUp: R * 0.42, hDown: R * 0.48, eSide: 3.2, eTop: 3.0, eBot: 3.0 },
     ], { segments: 18 })
+    // A capybara muzzle is a long, DEEP, near-parallel-sided block ending in a
+    // broad flat nose pad — it is not a cone and it is not short. The bluntness
+    // comes from the section barely narrowing (0.78 R at the tip against 0.86 R
+    // at the base) and from superellipse exponents up at 5, so the corners
+    // chamfer instead of rounding. Shortening the muzzle to fake bluntness was
+    // the earlier mistake and it cost the species read entirely.
     : loft([
-      { z: tipZ, y: hy - R * 0.20, hw: R * 0.54, hUp: R * 0.32, hDown: R * 0.36, eSide: 4.2, eTop: 3.8, eBot: 4.0 },
-      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.19, hw: R * 0.62, hUp: R * 0.36, hDown: R * 0.42, eSide: 4.6, eTop: 4.2, eBot: 4.2 },
-      { z: -R * 0.40, y: hy - R * 0.16, hw: R * 0.68, hUp: R * 0.42, hDown: R * 0.46, eSide: 4.6, eTop: 4.2, eBot: 4.2 },
-      { z: R * 0.16, y: hy - R * 0.12, hw: R * 0.76, hUp: R * 0.50, hDown: R * 0.52, eSide: 4.4, eTop: 4.0, eBot: 4.0 },
+      { z: tipZ, y: hy - R * 0.16, hw: R * 0.78, hUp: R * 0.40, hDown: R * 0.52, eSide: 5.0, eTop: 5.2, eBot: 4.4 },
+      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.15, hw: R * 0.82, hUp: R * 0.42, hDown: R * 0.54, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: -R * 0.40, y: hy - R * 0.14, hw: R * 0.86, hUp: R * 0.46, hDown: R * 0.56, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: R * 0.16, y: hy - R * 0.12, hw: R * 0.90, hUp: R * 0.52, hDown: R * 0.58, eSide: 4.8, eTop: 5.0, eBot: 4.2 },
     ], { segments: 18 });
   b.add('head', 'furAlt', snout, { detail: 0 });
+
+  if (!fox) {
+    // The MORRILLO: the raised oval scent gland on top of a capybara's snout.
+    // It is the single most specific thing about the animal's profile and it is
+    // the reason this head cannot be mistaken for a generic rodent.
+    b.add('head', 'fur', superShape(R * 0.26, R * 0.10, R * 0.34, 3.0, 2.6, 11, 7), {
+      pos: [0, hy + R * 0.20, tipZ + mz * 0.44], detail: 0, shade: 0.94,
+    });
+    // Heavy jowl either side of the block, which is what gives a capybara its
+    // permanently unimpressed expression.
+    b.pair('head', 'head', 'furAlt', superShape(R * 0.22, R * 0.26, R * 0.40, 3.6, 3.2, 10, 7), {
+      pos: [R * 0.74, hy - R * 0.34, tipZ + mz * 0.70], rot: [0, -8, -8], detail: 0, shade: 0.92,
+    });
+    // COARSE GUARD HAIRS along the nape. A capybara's coat is bristly and sparse
+    // — nothing like a fox's plush pelt — and it carries a low ridge of longer
+    // hair over the shoulders. Measured reason to bother: the capybara was the
+    // only driver whose three-quarter silhouette complexity fell below 5.0
+    // (4.75 against a roster mean of 6.08). A wide low brick with a soft hat is
+    // smooth by design, but smooth and shapeless are not the same thing, and the
+    // fix has to come from the animal rather than from an accessory.
+    for (let i = 0; i < 5; i++) {
+      const t = i / 4;
+      const sx = (t - 0.5) * 2;
+      b.add('head', 'furDark', earWedge(R * 0.10, R * (0.34 - Math.abs(sx) * 0.13), R * 0.05, 0.55), {
+        pos: [sx * R * 0.62, hy + R * (0.74 - Math.abs(sx) * 0.10), R * (0.52 + Math.abs(sx) * 0.08)],
+        rot: [26, sx * 16, sx * 20], detail: i === 2 ? 1 : 2, shade: 0.88,
+      });
+    }
+  }
 
   // Cheek tufts: pale fur flaring out below the eyes. On the fox these are the
   // widest thing on the head, which is what stops the wedge reading as a beak.
   const cheek = fox
-    ? superShape(R * 0.26, R * 0.24, R * 0.30, 2.6, 2.4, 9, 6)
+    ? superShape(R * 0.34, R * 0.30, R * 0.40, 2.5, 2.3, 10, 7)
     : superShape(R * 0.24, R * 0.22, R * 0.26, 3.2, 3.0, 9, 6);
   b.pair('head', 'head', 'furAlt', cheek, {
-    pos: [R * (fox ? 0.74 : 0.80), hy - R * (fox ? 0.22 : 0.14), -R * (fox ? 0.30 : 0.20)],
+    pos: [R * (fox ? 0.80 : 0.80), hy - R * (fox ? 0.20 : 0.14), -R * (fox ? 0.24 : 0.20)],
     rot: [0, fox ? -22 : -14, fox ? -14 : -6], detail: 0,
   });
+
+  if (fox) {
+    // The CHEEK RUFF. A red fox's cheeks flare backward and downward into a
+    // white ruff that is the widest thing on the animal's head — wider than the
+    // skull, wider than the ears at their bases. Without it a long muzzle plus a
+    // tapering crown is a beak, and the head reads as a bird. Two swept lobes
+    // rather than one blob so the outline has a notch in it.
+    for (let i = 0; i < 2; i++) {
+      const t = i;
+      b.pair('head', 'head', 'furAlt', superShape(
+        R * (0.30 - t * 0.06), R * (0.34 - t * 0.06), R * (0.26 + t * 0.06), 2.4, 2.2, 9, 6,
+      ), {
+        pos: [R * (1.00 - t * 0.08), hy - R * (0.34 + t * 0.24), R * (0.10 + t * 0.30)],
+        rot: [t * 12, -18, -26 - t * 12], detail: t === 0 ? 0 : 1, shade: 1 - t * 0.06,
+      });
+    }
+    // Dark eye-to-muzzle line in relief, the fox's "tear stripe". Painting it in
+    // the atlas alone leaves it flat; a shallow ridge catches the key light.
+    b.pair('head', 'head', 'furDark', superShape(R * 0.07, R * 0.05, R * 0.30, 2.6, 2.2, 6, 4), {
+      pos: [R * 0.40, hy - R * 0.02, -R * 0.66], rot: [-16, 10, -8], detail: 2, shade: 0.9,
+    });
+  }
 
   // --- face panels -------------------------------------------------------
   // Upper band: eyes + brows, on the skull front.
@@ -1488,30 +1726,37 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
 
   // --- ears --------------------------------------------------------------
   if (fox) {
-    // Large triangular ears with dark tips. This is the head's "one idea":
-    // nothing else on the roster has a tall paired triangle above the skull.
-    const eh = R * 0.98;
+    // EARS ARE THE SPECIES. A red fox's ear is enormous — roughly 40–45 % of head
+    // length, broad at the base, near-vertical with only a slight outward lean,
+    // and BLACK over most of its outer back rather than just at the point. The
+    // previous 0.98 R wedge leaning out at 24 deg read as a cat; 1.28 R at 15 deg
+    // reads as a fox. Nothing else on the roster has a tall paired triangle above
+    // the skull, so this is also the head's silhouette idea.
+    const eh = R * 1.28;
     const earPlace: RigPlace = {
-      pos: [R * 0.44, hy + R * 0.72, R * 0.06], rot: [-8, 0, -24], detail: 0,
+      pos: [R * 0.46, hy + R * 0.66, R * 0.10], rot: [-11, -8, -15], detail: 0,
     };
-    b.pair('head', 'head', 'fur', earWedge(R * 0.36, eh, R * 0.15, 0.22), earPlace);
-    // The dark tip is a second wedge in the SAME local frame, so it lands on the
-    // point however the ear is leaned.
-    const tip = earWedge(R * 0.23, eh * 0.44, R * 0.16, 0.22);
-    tip.translate(eh * 0.22 * 0.56, eh * 0.58, 0);
+    b.pair('head', 'head', 'fur', earWedge(R * 0.42, eh, R * 0.16, 0.20), earPlace);
+    // The dark back of the ear is a second wedge in the SAME local frame, so it
+    // lands correctly however the ear is leaned. It covers the outer 55 %, not a
+    // token tip — that is what the reference photographs show.
+    const tip = earWedge(R * 0.33, eh * 0.60, R * 0.17, 0.20);
+    tip.translate(eh * 0.20 * 0.56, eh * 0.42, R * 0.012);
     b.pair('head', 'head', 'furDark', tip, earPlace);
     // Pale inner ear, pressed into the front face.
-    const inner = earWedge(R * 0.21, eh * 0.62, R * 0.05, 0.22);
-    inner.translate(eh * 0.05, eh * 0.16, -R * 0.070);
+    const inner = earWedge(R * 0.26, eh * 0.66, R * 0.05, 0.20);
+    inner.translate(eh * 0.04, eh * 0.14, -R * 0.075);
     b.pair('head', 'head', 'furAlt', inner, { ...earPlace, detail: 1 });
   } else {
-    // Small rounded ears, set high and wide — deliberately almost nothing, so
-    // the head reads as one blunt mass.
-    b.pair('head', 'head', 'fur', superShape(R * 0.20, R * 0.19, R * 0.11, 2.8, 2.6, 10, 7), {
-      pos: [R * 0.78, hy + R * 0.68, R * 0.14], rot: [0, 0, -18], detail: 0,
+    // A capybara's ears are tiny, round, and set FAR BACK and low on that flat
+    // top plane — level with the eyes, which is the semi-aquatic giveaway. Set
+    // high and forward they read as a bear's; set back and small they read as a
+    // capybara's, and they leave the forehead shelf as one unbroken mass.
+    b.pair('head', 'head', 'fur', superShape(R * 0.15, R * 0.16, R * 0.10, 2.6, 2.4, 9, 6), {
+      pos: [R * 0.84, hy + R * 0.34, R * 0.56], rot: [-6, 0, -26], detail: 0,
     });
-    b.pair('head', 'head', 'furDark', disc(R * 0.11, R * 0.030, 0, 9), {
-      pos: [R * 0.80, hy + R * 0.70, R * 0.06], rot: [0, 74, 0], detail: 1, shade: 0.9,
+    b.pair('head', 'head', 'furDark', disc(R * 0.085, R * 0.026, 0, 9), {
+      pos: [R * 0.88, hy + R * 0.34, R * 0.50], rot: [0, 66, 0], detail: 1, shade: 0.86,
     });
   }
 
@@ -1521,6 +1766,305 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     pos: [R * 0.36, hy + R * (fox ? 0.52 : 0.56), -R * (fox ? 0.78 : 0.70)],
     rot: [0, 0, fox ? -12 : -8], detail: 2, shade: 0.95,
   });
+}
+
+// --- the back of the head --------------------------------------------------
+
+/**
+ * The 30 % of the model the chase camera actually shows.
+ *
+ * Every driver's identifying beat used to face forward — a visor, a brim, a
+ * T-slit, goggles — so from behind the eight humans were one shape. Measured
+ * rear-view normalised silhouette IoU before this function existed: 0.920
+ * (mechanic ~ racer), 0.896 (knight ~ aviator), 0.884 (robot ~ aviator), with
+ * the whole human cluster in 0.82–0.92. Only the fox (0.696, because of the
+ * tail) and the capybara (0.797) separated at all.
+ *
+ * So each case here is a different OUTLINE seen from directly behind:
+ *   hairMop      soft round mass + one spike
+ *   spoiler      hard horizontal blade
+ *   finComb      a comb of vertical fins
+ *   napeRoll     trapezium, head sunk into it
+ *   streamers    teardrop + two thin ribbons
+ *   dorsalPack   sphere plus a smaller sphere behind it
+ *   mantle       vertical crest over a wide bell of cloth
+ *   neckCurtain  helmet flaring into a skirt
+ *
+ * ⚠️ A REAR FEATURE THAT EXTENDS BACKWARD DOES NOT CHANGE A REAR SILHOUETTE.
+ * The first revision of this function put a hair mass, a spoiler, a fin stack
+ * and a plume *behind* each head — and the measured rear IoU went the wrong way,
+ * 0.920 -> 0.929, because from directly behind every one of them projected
+ * inside the outline it was meant to break. (The three-quarter and profile
+ * figures did improve: p90 0.918 -> 0.873 and 0.795 -> 0.772.) To move the rear
+ * mask a feature has to be WIDER than the skull or TALLER than the crown, and
+ * ideally asymmetric — mirror symmetry is what makes two different characters
+ * score the same normalised outline. Every case below is sized against the local
+ * skull half-width (~R) and the shoulder half-width, not against nothing.
+ *
+ * Clearances are from `.probe-tmp/fox-space.ts` at a 45 mm probe, worst case
+ * over all six chassis: the midline is clear at head height (driver y >= 0.40)
+ * out to z = +0.30; y = 0.40..0.48 / z = +0.33..+0.45 is the buggy's roll hoop;
+ * behind the shoulders (y ~ 0.28) anything past z = +0.10 needs |x| >= 0.17.
+ * Nothing here reaches past z = +0.26 at head height, and the mantle is two
+ * outboard panels for exactly that reason.
+ */
+function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
+  if (!d.rear) return;
+  const R = d.headR;
+  const hy = s.headY;
+  const bulk = d.bulk;
+
+  switch (d.rear) {
+    case 'hairMop': {
+      // Hair on the `furDark` slot: it gets the pelt material, so it arrives with
+      // a strand normal and an anisotropic sheen instead of reading as a moulded
+      // plastic wig. Three overlapping lobes rather than one shell, so the
+      // outline is lumpy — a single smooth mass reads as a swim cap. Each lobe is
+      // WIDER than the skull (1.24 R against 0.98 R) and hangs to below the jaw,
+      // which is what puts it in the rear outline at all.
+      for (let i = 0; i < 3; i++) {
+        const t = i / 2;
+        const lobe = superShape(
+          R * (1.24 - t * 0.16), R * (0.46 - t * 0.06), R * (0.54 - t * 0.08),
+          2.7, 2.5, 13, 8,
+        );
+        b.add('head', 'furDark', lobe, {
+          pos: [0, hy + R * (0.24 - t * 0.44), R * (0.30 + t * 0.10)],
+          rot: [t * 10, 0, 0], detail: i === 0 ? 0 : 1, shade: 1 - t * 0.10,
+        });
+      }
+      // Side sweeps down past the ears, wider still — the three-quarter read.
+      b.pair('head', 'head', 'furDark', superShape(R * 0.28, R * 0.52, R * 0.34, 2.6, 2.4, 9, 7), {
+        pos: [R * 1.06, hy - R * 0.24, R * 0.16], rot: [6, 0, -13], detail: 0,
+      });
+      // Ponytail: swung out to the driver's LEFT and up, so it breaks the top
+      // corner of the outline rather than hiding behind the skull. Asymmetry is
+      // the cheapest silhouette separator there is — a mirror-symmetric shape
+      // scores the same normalised IoU as every other mirror-symmetric shape.
+      b.add('head', 'furDark', taperTube([
+        new THREE.Vector3(-R * 0.16, hy + R * 0.34, R * 0.56),
+        new THREE.Vector3(-R * 0.66, hy + R * 0.76, R * 0.86),
+        new THREE.Vector3(-R * 1.16, hy + R * 0.96, R * 1.06),
+        new THREE.Vector3(-R * 1.62, hy + R * 0.86, R * 1.14),
+      ], [R * 0.26, R * 0.23, R * 0.16, R * 0.05], 9, 12, 0.10), { detail: 0 });
+      b.add('head', 'clothAlt', sweepRing(ringProfile(R * 0.24, R * 0.038, R * 0.048, 6), 10), {
+        pos: [-R * 0.44, hy + R * 0.62, R * 0.76], rot: [64, 0, -44], detail: 1, shade: 0.88,
+      });
+      // A lit highlight lock so the mass has two values in it from behind.
+      b.add('head', 'furAlt', taperTube([
+        new THREE.Vector3(R * 0.46, hy + R * 0.42, R * 0.34),
+        new THREE.Vector3(R * 0.72, hy + R * 0.02, R * 0.46),
+        new THREE.Vector3(R * 0.66, hy - R * 0.44, R * 0.52),
+      ], [R * 0.08, R * 0.10, R * 0.04], 7, 8, 0.12), { detail: 2, shade: 0.92 });
+      break;
+    }
+    case 'spoiler': {
+      // A rear wing on a crash helmet, deliberately OVERSIZED at 1.62 R against a
+      // 1.16 R shell so the blade actually sticks out past the helmet, with
+      // endplates rising above the crown. From behind: a hard T. Nothing else on
+      // the roster has a straight horizontal edge at head height.
+      const blade = extrude([
+        new THREE.Vector2(-R * 1.62, 0), new THREE.Vector2(R * 1.62, 0),
+        new THREE.Vector2(R * 1.30, R * 0.46), new THREE.Vector2(-R * 1.30, R * 0.46),
+      ], R * 0.10, R * 0.030);
+      b.add('head', 'paint2', blade, {
+        pos: [0, hy + R * 0.44, R * 0.90], rot: [-76, 0, 0], detail: 0,
+      });
+      // Endplates: vertical fences at the blade tips, above the crown line.
+      b.pair('head', 'head', 'paint', extrude([
+        new THREE.Vector2(-R * 0.34, 0), new THREE.Vector2(R * 0.30, 0),
+        new THREE.Vector2(R * 0.20, R * 0.74), new THREE.Vector2(-R * 0.28, R * 0.62),
+      ], R * 0.050, R * 0.016), {
+        pos: [R * 1.58, hy + R * 0.40, R * 0.86], rot: [0, 90, 0], detail: 0,
+      });
+      // Pillar + extractor vents in the shell under it.
+      b.add('head', 'metal', roundedBox(R * 0.22, R * 0.34, R * 0.16, 4.0), {
+        pos: [0, hy + R * 0.20, R * 0.92], detail: 1, shade: 0.55,
+      });
+      for (let i = 0; i < 3; i++) {
+        b.add('head', 'metal', roundedBox(R * (0.64 - i * 0.10), R * 0.075, R * 0.10, 4.4), {
+          pos: [0, hy - R * (0.16 + i * 0.20), R * 0.94], detail: 2, shade: 0.48,
+        });
+      }
+      break;
+    }
+    case 'finComb': {
+      // Heat-sink fins ON TOP of the dome, not behind it — five hard slabs
+      // rising to 0.9 R above the crown and splaying to 1.3 R, so the top of the
+      // rear outline is a comb. A machine should be the one driver whose
+      // silhouette has straight lines and hard corners in it.
+      for (let i = 0; i < 5; i++) {
+        const t = Math.abs(i - 2) / 2;
+        const fin = extrude([
+          new THREE.Vector2(-R * 0.30, 0), new THREE.Vector2(R * 0.34, 0),
+          new THREE.Vector2(R * 0.24, R * (0.90 - t * 0.44)),
+          new THREE.Vector2(-R * 0.26, R * (0.78 - t * 0.38)),
+        ], R * 0.075, R * 0.022);
+        b.add('head', i % 2 === 0 ? 'chrome' : 'metal', fin, {
+          pos: [(i - 2) * R * 0.42, hy + R * (0.94 - t * 0.14), R * (0.16 + t * 0.10)],
+          rot: [-10, 0, (i - 2) * 7], detail: t === 0 ? 0 : 1, shade: i % 2 === 0 ? 1.0 : 0.7,
+        });
+      }
+      // Coolant manifold across the nape, wider than the dome, with a bleed slot.
+      b.add('head', 'metal', roundedBox(R * 2.10, R * 0.26, R * 0.30, 4.6), {
+        pos: [0, hy - R * 0.48, R * 0.54], detail: 0, shade: 0.6,
+      });
+      b.add('head', 'glow', roundedBox(R * 1.70, R * 0.075, R * 0.075, 5.0), {
+        pos: [0, hy - R * 0.48, R * 0.70], detail: 0,
+      });
+      break;
+    }
+    case 'napeRoll': {
+      // No neck at all: a thick roll of muscle from the jaw into the shoulders,
+      // plus a popped collar standing behind the head. The outline is a solid
+      // trapezium with the head sunk into the top of it.
+      b.add('head', 'skin', superShape(
+        R * (0.86 + bulk * 0.10), R * 0.34, R * 0.44, 3.8, 3.2, 12, 7,
+      ), { pos: [0, hy - R * 0.62, R * 0.40], rot: [12, 0, 0], detail: 0, shade: 0.90 });
+      // Two creases across the roll — the detail that says "thick neck" rather
+      // than "cylinder".
+      for (let i = 0; i < 2; i++) {
+        b.add('head', 'skin', sweepRing(ringProfile(R * (0.72 + bulk * 0.08), R * 0.045, R * 0.030, 6), 14), {
+          pos: [0, hy - R * (0.50 + i * 0.22), R * 0.42], rot: [82, 0, 0],
+          detail: 2, shade: 0.80,
+        });
+      }
+      // Popped jacket collar: two square wings standing UP either side of the
+      // head, so the skull sits in a notch. From behind that is a trapezium with
+      // a bite out of the top — the read no other driver has.
+      b.pair('torso', 'torso', 'clothAlt', verticalLoft([
+        { z: 0, y: 0, hw: 0.040, hUp: 0.013, hDown: 0.013, eSide: 4.6, eTop: 4.0 },
+        { z: 0.060, y: -0.008, hw: 0.046, hUp: 0.012, hDown: 0.012, eSide: 4.8, eTop: 4.2 },
+        { z: 0.104, y: -0.018, hw: 0.036, hUp: 0.011, hDown: 0.011, eSide: 4.4, eTop: 4.0 },
+      ], 14), {
+        pos: [R * 1.14, s.torsoTop - 0.028, s.chest * 0.56], rot: [-14, 0, -11], detail: 0, shade: 0.92,
+      });
+      // Yoke across the back joining the two wings, at shoulder height.
+      b.add('torso', 'clothAlt', verticalLoft([
+        { z: 0, y: 0, hw: s.chest * 1.22, hUp: 0.013, hDown: 0.013, eSide: 5.0, eTop: 4.2 },
+        { z: 0.042, y: -0.008, hw: s.chest * 1.18, hUp: 0.012, hDown: 0.012, eSide: 4.8, eTop: 4.0 },
+      ], 16), {
+        pos: [0, s.torsoTop - 0.052, s.chest * 0.62], rot: [-12, 0, 0], detail: 0, shade: 0.86,
+      });
+      // A short mullet under the cap so the trapezium is not one flat value.
+      b.add('head', 'furDark', superShape(R * 0.80, R * 0.26, R * 0.34, 2.8, 2.5, 11, 7), {
+        pos: [0, hy - R * 0.18, R * 0.62], rot: [16, 0, 0], detail: 1,
+      });
+      break;
+    }
+    case 'streamers': {
+      // The aero helmet already has a long tail; two ribbons streaming off the
+      // nape add the one thing a teardrop has not got — a broken outline. They
+      // splay well OUTSIDE the shoulder line and rise above it, at different
+      // lengths, so from behind the smallest driver gets two asymmetric spikes.
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? 1 : -1;
+        const len = i === 0 ? 1.0 : 0.72;
+        b.add('torso', 'clothAlt', taperTube([
+          new THREE.Vector3(sx * 0.024, s.torsoTop - 0.016, s.chest * 0.50),
+          new THREE.Vector3(sx * (s.shoulderHalf * 0.90), s.torsoTop + 0.030 * len, s.chest * 0.50 + 0.058 * len),
+          new THREE.Vector3(sx * (s.shoulderHalf * 1.42), s.torsoTop + 0.074 * len, s.chest * 0.50 + 0.112 * len),
+          new THREE.Vector3(sx * (s.shoulderHalf * 1.72), s.torsoTop + 0.100 * len, s.chest * 0.50 + 0.150 * len),
+        ], [0.020, 0.026, 0.020, 0.008], 7, 12, 0.05), {
+          detail: i === 0 ? 0 : 1, shade: i === 0 ? 1 : 0.90,
+        });
+      }
+      // Nape pad the ribbons leave from, so they are attached to something.
+      b.add('head', 'paint2', superShape(R * 0.62, R * 0.24, R * 0.22, 3.2, 2.8, 10, 6), {
+        pos: [0, hy - R * 0.52, R * 0.62], rot: [22, 0, 0], detail: 1, shade: 0.86,
+      });
+      break;
+    }
+    case 'dorsalPack': {
+      // The breathing pipes used to run back and stop in mid-air. They now
+      // terminate in a life-support pack that is WIDE and LOW rather than deep:
+      // from behind, a glass sphere sitting on a broad hump with two outboard
+      // tanks. Nothing else on the roster is narrow at the top and wide below.
+      b.add('head', 'metal', superShape(R * 1.34, R * 0.50, R * 0.46, 4.0, 3.2, 14, 8), {
+        pos: [0, hy - R * 0.96, R * 0.92], rot: [-8, 0, 0], detail: 0, shade: 0.78,
+      });
+      b.pair('head', 'head', 'chrome', lathe([
+        new THREE.Vector2(0, -R * 0.30), new THREE.Vector2(R * 0.24, -R * 0.26),
+        new THREE.Vector2(R * 0.27, R * 0.20), new THREE.Vector2(R * 0.20, R * 0.32),
+        new THREE.Vector2(0, R * 0.34),
+      ], 11), {
+        pos: [R * 1.30, hy - R * 0.92, R * 0.94], rot: [0, 0, -14], detail: 0,
+      });
+      // Twin glowing vents on the outboard faces of the tanks.
+      b.pair('head', 'head', 'glow', disc(R * 0.15, R * 0.050, R * 0.050, 12), {
+        pos: [R * 1.52, hy - R * 1.12, R * 0.96], rot: [0, 0, 90], detail: 0,
+      });
+      // Spine ridge linking the pack to the collar ring.
+      b.add('head', 'metal', taperTube([
+        new THREE.Vector3(0, hy - R * 0.46, R * 0.62),
+        new THREE.Vector3(0, hy - R * 0.72, R * 0.80),
+        new THREE.Vector3(0, hy - R * 0.92, R * 0.88),
+      ], [R * 0.13, R * 0.15, R * 0.17], 8, 8), { detail: 1, shade: 0.66 });
+      break;
+    }
+    case 'mantle': {
+      // Two OUTBOARD cloth panels, not one sheet: the clearance map says the
+      // midline behind the shoulders is blocked out to |x| = 0.17 by the seat
+      // back and headrest on at least one chassis, so a cape across the middle
+      // would saw through the seat on every corner. They flare wider than the
+      // shoulders and hang past the elbow, which is what makes the rear outline
+      // a bell rather than a rectangle.
+      const panel = verticalLoft([
+        { z: 0, y: 0, hw: 0.048, hUp: 0.011, hDown: 0.011, eSide: 3.4, eTop: 3.0 },
+        { z: 0.090, y: -0.006, hw: 0.082, hUp: 0.010, hDown: 0.010, eSide: 3.6, eTop: 3.2 },
+        { z: 0.178, y: -0.014, hw: 0.096, hUp: 0.009, hDown: 0.009, eSide: 3.2, eTop: 3.0 },
+      ], 14);
+      b.pair('torso', 'torso', 'clothAlt', panel, {
+        pos: [s.shoulderHalf * 1.00, s.shoulderY - 0.006, s.chest * 0.78],
+        rot: [-100, 0, 15], detail: 0, shade: 0.88,
+      });
+      // Scalloped hem tabs, the heraldic detail that makes it a mantle.
+      for (let i = 0; i < 3; i++) {
+        b.pair('torso', 'torso', 'paint2', superShape(0.023, 0.028, 0.010, 2.6, 2.4, 7, 5), {
+          pos: [
+            s.shoulderHalf * 1.00 + (i - 1) * 0.032 + 0.036,
+            s.shoulderY - 0.178 - (i % 2) * 0.014,
+            s.chest * 0.78 + 0.024,
+          ],
+          detail: 2, shade: 0.84,
+        });
+      }
+      // Horsehair plume: UP off the crest, then back. The vertical spike over the
+      // horizontal bell is the whole silhouette idea.
+      b.add('head', 'clothAlt', taperTube([
+        new THREE.Vector3(0, hy + R * 1.30, R * 0.02),
+        new THREE.Vector3(R * 0.06, hy + R * 1.86, R * 0.26),
+        new THREE.Vector3(R * 0.10, hy + R * 1.92, R * 0.80),
+        new THREE.Vector3(R * 0.06, hy + R * 1.52, R * 1.22),
+      ], [R * 0.13, R * 0.21, R * 0.18, R * 0.06], 9, 14, 0.14), { detail: 0, shade: 0.94 });
+      break;
+    }
+    case 'neckCurtain': {
+      // Leather neck curtain: the flight cap flares into a skirt over the nape
+      // and out onto the shoulders at 1.62 R — wider than any other driver's
+      // head. Outline is a trapezoid growing downward, the inverse of the
+      // knight's bell, and the two earflaps are different lengths.
+      b.add('head', 'clothAlt', verticalLoft([
+        { z: -R * 0.10, y: 0, hw: R * 1.00, hUp: R * 0.30, hDown: R * 0.62, eSide: 3.6, eTop: 3.2, eBot: 3.6 },
+        { z: -R * 0.60, y: R * 0.03, hw: R * 1.34, hUp: R * 0.26, hDown: R * 0.70, eSide: 3.8, eTop: 3.4, eBot: 3.6 },
+        { z: -R * 1.06, y: R * 0.05, hw: R * 1.62, hUp: R * 0.22, hDown: R * 0.66, eSide: 3.6, eTop: 3.2, eBot: 3.4 },
+      ], 18, true, true), {
+        pos: [0, hy - R * 0.06, R * 0.40], rot: [10, 0, 0], detail: 0, shade: 0.88,
+      });
+      // Stitched seam and a buckle on one side only.
+      b.add('head', 'rubber', sweepRing(ringProfile(R * 1.06, R * 0.030, R * 0.038, 6), 16), {
+        pos: [0, hy - R * 0.34, R * 0.40], rot: [80, 0, 0], detail: 1, shade: 0.66,
+      });
+      b.add('head', 'chrome', roundedBox(R * 0.15, R * 0.11, R * 0.055, 4.2), {
+        pos: [R * 1.24, hy - R * 0.72, R * 0.62], rot: [14, 0, -18], detail: 1,
+      });
+      // Hair escaping under the curtain at the nape.
+      b.add('head', 'furDark', superShape(R * 0.86, R * 0.18, R * 0.24, 2.8, 2.5, 10, 6), {
+        pos: [0, hy - R * 0.96, R * 0.50], rot: [20, 0, 0], detail: 1,
+      });
+      break;
+    }
+  }
 }
 
 function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
@@ -1796,7 +2340,7 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       // Soft felted beret worn at a tilt, with the little stalk on top. Tilted
       // headwear is worth a surprising amount: a symmetrical hat reads as part
       // of the skull, an asymmetrical one reads as a *choice* the character made.
-      const tilt: RigPlace = { pos: [-R * 0.10, hy + R * 0.68, R * 0.05], rot: [-9, 0, 19] };
+      const tilt: RigPlace = { pos: [-R * 0.12, hy + R * 0.60, R * 0.24], rot: [-13, 0, 19] };
       b.add('head', 'clothAlt', verticalLoft([
         { z: -R * 0.10, y: 0, hw: R * 0.88, hUp: R * 0.84, hDown: R * 0.92, eSide: 3.2, eTop: 3.0, eBot: 3.4 },
         { z: R * 0.10, y: -R * 0.01, hw: R * 1.08, hUp: R * 1.02, hDown: R * 1.10, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
@@ -1807,13 +2351,13 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       // because a beret with no band is a bowl.
       b.add('head', 'clothAlt', sweepRing(ringProfile(R * 0.90, R * 0.075, R * 0.055, 6), 16, (th) => ({
         dr: Math.sin(th * 2) * R * 0.035, dy: 0,
-      })), { ...tilt, pos: [-R * 0.10, hy + R * 0.60, R * 0.05], detail: 0, shade: 0.86 });
+      })), { ...tilt, pos: [-R * 0.12, hy + R * 0.52, R * 0.24], detail: 0, shade: 0.86 });
       // Stalk.
       b.add('head', 'clothAlt', lathe([
         new THREE.Vector2(0, 0), new THREE.Vector2(R * 0.055, R * 0.012),
         new THREE.Vector2(R * 0.048, R * 0.090), new THREE.Vector2(R * 0.026, R * 0.118),
         new THREE.Vector2(0, R * 0.124),
-      ], 9), { ...tilt, pos: [-R * 0.13, hy + R * 1.08, R * 0.03], detail: 1, shade: 0.92 });
+      ], 9), { ...tilt, pos: [-R * 0.15, hy + R * 1.00, R * 0.22], detail: 1, shade: 0.92 });
 
       // Round thin dark-rimmed spectacles. Two rims + a bridge + temples: the
       // temples matter, they are what stop the glasses floating off the face.
@@ -1847,22 +2391,27 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
         { z: R * 0.28, y: 0, hw: R * 1.02, hUp: R * 1.00, hDown: R * 1.04, eSide: 4.2, eTop: 4.0, eBot: 4.0 },
         { z: R * 0.52, y: -R * 0.01, hw: R * 0.92, hUp: R * 0.90, hDown: R * 0.94, eSide: 3.8, eTop: 3.6, eBot: 3.6 },
         { z: R * 0.64, y: -R * 0.01, hw: R * 0.60, hUp: R * 0.58, hDown: R * 0.62, eSide: 3.2, eTop: 3.0, eBot: 3.0 },
-      ], 22), { pos: [0, hy + R * 0.60, R * 0.02], rot: [-5, 0, 6], detail: 0 });
+      ], 22), { pos: [0, hy + R * 0.62, R * 0.26], rot: [-15, 0, 7], detail: 0 });
       // Darker grosgrain band round the base of the crown.
       b.add('head', 'furDark', sweepRing(ringProfile(R * 1.03, R * 0.052, R * 0.075, 6), 18), {
-        pos: [0, hy + R * 0.62, R * 0.02], rot: [-5, 0, 6], detail: 0, shade: 0.82,
+        pos: [0, hy + R * 0.64, R * 0.26], rot: [-15, 0, 7], detail: 0, shade: 0.82,
       });
       // Floppy brim. The warp is what makes it floppy: it dips front and back,
       // lifts at the sides, and its outline is not a circle.
+      // The warp amplitudes are deliberately large: a shallow warp reads as a
+      // manufacturing tolerance, and only a brim whose OUTLINE is visibly not a
+      // circle reads as soft felt that has been sat on.
       b.add('head', 'clothAlt', sweepRing(
         brimProfile(R * 0.96, R * 1.62, R * 0.062, R * 0.20), 26, (th) => ({
-          dr: Math.sin(th * 2 + 0.7) * R * 0.070,
-          dy: -R * 0.055 * (0.5 - 0.5 * Math.cos(th * 2)) + Math.sin(th * 3) * R * 0.028,
+          dr: Math.sin(th * 2 + 0.7) * R * 0.150 + Math.sin(th * 3 - 1.1) * R * 0.070,
+          dy: -R * 0.090 * (0.5 - 0.5 * Math.cos(th * 2)) + Math.sin(th * 3) * R * 0.060,
         }),
-      ), { pos: [0, hy + R * 0.56, R * 0.02], rot: [-5, 0, 6], detail: 0, shade: 0.94 });
+      ), { pos: [0, hy + R * 0.58, R * 0.26], rot: [-15, 0, 7], detail: 0, shade: 0.94 });
       break;
     }
   }
+
+  buildRearRead(b, d, s);
 
   // Scarf trailing over the shoulder — belongs to the torso so it doesn't
   // swing with the head.
@@ -1898,6 +2447,29 @@ export function buildDriver(id: DriverId, o: DriverBuildOptions): DriverBuild {
   if (d.tail) buildTail(b, d, s);
   const headSocketRaw = buildHead(b, d, s);
 
+  // --- baked rest posture ------------------------------------------------
+  // Must run here: after every part exists (the scarf and the collar arrive from
+  // `buildHead`) and before the AO bake, or the occlusion is baked in the wrong
+  // pose and a leaning driver carries an upright driver's contact shadows.
+  const headPivot = new THREE.Vector3(0, s.neckY, 0.004);
+  if (s.lean !== 0) {
+    b.warpNode('torso', (y) => -s.leanAt(y));
+    // The head is rigid, so it rides the shoulders as a translation rather than
+    // being sheared — a sheared skull is instantly wrong in a portrait.
+    const dz = -s.leanAt(s.neckY);
+    b.transformNode('head', _mat.makeTranslation(0, 0, dz));
+    headSocketRaw.z += dz;
+    headPivot.z += dz;
+  }
+  if (s.chin !== 0) {
+    const m = new THREE.Matrix4()
+      .makeTranslation(headPivot.x, headPivot.y, headPivot.z)
+      .multiply(new THREE.Matrix4().makeRotationX(s.chin))
+      .multiply(new THREE.Matrix4().makeTranslation(-headPivot.x, -headPivot.y, -headPivot.z));
+    b.transformNode('head', m);
+    headSocketRaw.applyMatrix4(m);
+  }
+
   // --- AO bake (driver-space, before the pivot split) -------------------
   const occl = b.occluder();
   const crease = 46;
@@ -1916,9 +2488,9 @@ export function buildDriver(id: DriverId, o: DriverBuildOptions): DriverBuild {
   const world: Record<DriverNode, THREE.Vector3> = {
     hips: new THREE.Vector3(0, 0, 0),
     torso: new THREE.Vector3(0, s.hipY, 0.006),
-    head: new THREE.Vector3(0, s.neckY, 0.004),
-    armL: new THREE.Vector3(-s.shoulderHalf, s.shoulderY, -0.004),
-    armR: new THREE.Vector3(s.shoulderHalf, s.shoulderY, -0.004),
+    head: headPivot,
+    armL: new THREE.Vector3(-s.shoulderHalf, s.shoulderY, s.shoulderZ),
+    armR: new THREE.Vector3(s.shoulderHalf, s.shoulderY, s.shoulderZ),
     foreL: new THREE.Vector3(-s.elbow.x, s.elbow.y, s.elbow.z),
     foreR: new THREE.Vector3(s.elbow.x, s.elbow.y, s.elbow.z),
   };
