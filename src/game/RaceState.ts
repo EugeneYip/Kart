@@ -228,6 +228,48 @@ export class LapTracker {
     this.finishTime = raceTime;
   }
 
+  /**
+   * Force a finish for a kart that was still racing normally when the race closed
+   * out — the leader took the flag and the grace window expired underneath it.
+   *
+   * This is NOT a DNF, and it must not reuse `markDnf`. `markDnf` stamps
+   * `raceTime`, which is correct for a genuine timeout but gave EVERY remaining
+   * kart an identical total when the player won: with a 16 s grace window and a
+   * comfortable win, eight or nine cars all showed the same time. That is the
+   * "many of the NPC racers' time records are repeated ... makes it feel a bit
+   * fake" the owner reported.
+   *
+   * The projection uses the kart's OWN measured pace — mean completed lap time
+   * multiplied by the laps it still owed. Preferred over the simpler
+   * `raceTime / fractionDone` because that window includes the standing start and
+   * so flatters every kart by the same systematic amount, which would reintroduce
+   * clustering, just at a different value.
+   *
+   * Returns the projected total so the caller can enforce ordering across karts;
+   * this method deliberately knows nothing about the rest of the field.
+   */
+  projectFinish(raceTime: number, totalLaps: number): number {
+    if (this.finished) return this.finishTime;
+    this.finished = true;
+    this.dnf = false;
+    // `progress` is `lap + t` with `lap` starting at 1 on a normal grid, so laps
+    // actually completed is `progress - 1`. Clamped because a kart still sitting
+    // behind the line has lap 0 and would otherwise read as negative.
+    const done = Math.max(0, this.progress - 1);
+    const owed = Math.max(0, totalLaps - done);
+    let pace = 0;
+    if (this.lapTimes.length > 0) {
+      let sum = 0;
+      for (let i = 0; i < this.lapTimes.length; i++) sum += this.lapTimes[i];
+      pace = sum / this.lapTimes.length;
+    } else if (done > 1e-3) {
+      // No completed lap to average yet: fall back to elapsed pace so far.
+      pace = raceTime / done;
+    }
+    this.finishTime = pace > 0 ? raceTime + owed * pace : raceTime;
+    return this.finishTime;
+  }
+
   /** Displayed lap number, clamped to the race length. */
   displayLap(totalLaps: number): number {
     return Math.max(1, Math.min(totalLaps, this.lap === 0 ? 1 : this.lap));

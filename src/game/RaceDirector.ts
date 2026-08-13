@@ -708,7 +708,10 @@ export class RaceDirector implements ISubsystem {
       const grace = this.race.phaseTime;
       const everyone = this.finishedCount >= this.kartCount();
       if (everyone || grace >= RACE_TUNING.finishGraceSeconds) {
-        if (!everyone) this.dnfRemaining();
+        // The leader has finished and the grace window expired. Whoever is still
+        // out there was lapping normally, so project their times rather than
+        // stamping the clock — see closeOutRemaining.
+        if (!everyone) this.closeOutRemaining(false);
         if (this.race.raceTime - this.lastFinishTime >= RACE_TUNING.resultsDelaySeconds || !everyone) {
           this.enterResults();
         }
@@ -832,23 +835,82 @@ export class RaceDirector implements ISubsystem {
   private checkTimeouts(): void {
     const budget = RACE_TUNING.dnfSecondsPerLap * this.race.totalLaps;
     if (this.race.raceTime < budget) return;
-    this.dnfRemaining();
+    // A genuine timeout: these karts are stuck, so DNF is the truth.
+    this.closeOutRemaining(true);
     if (this.race.phase !== 'finished') {
       this.race.set('finished');
       this.debug.phase = 'finished';
     }
   }
 
-  private dnfRemaining(): void {
+  /**
+   * Close out every kart that has not crossed the line.
+   *
+   * `timedOut` separates two callers that used to share one code path and one
+   * wrong outcome:
+   *
+   *  - `checkTimeouts()` — the race has run `dnfSecondsPerLap * laps` (450 s at
+   *    three laps). These karts really are stuck, and a DNF is the truth.
+   *  - the end-of-race close-out at `finishGraceSeconds` — the leader took the
+   *    flag and the 16 s grace expired while these karts were still lapping
+   *    perfectly well. They are NOT DNF and must not share the leader's clock.
+   *
+   * Three defects were living here, and only the first was reported:
+   *
+   *  1. Every kart was stamped with the same `this.race.raceTime`, so a
+   *     comfortable player win produced eight or nine identical times on the
+   *     results board. `LapTracker.projectFinish` now extrapolates each kart from
+   *     its own measured lap pace.
+   *  2. All of them were marked `dnf: true` even when they were racing normally.
+   *  3. WORST, and unreported: this walked `roster.karts`, so the karts still on
+   *     track were awarded finishing positions by their INDEX IN THE ROSTER
+   *     ARRAY rather than by who was actually ahead. A kart running a comfortable
+   *     second could be handed 9th because of where it happened to sit in the
+   *     array. `this.rank` is already insertion-sorted by `better()` on every
+   *     tick, so the correct order was sitting right there unused.
+   */
+  private closeOutRemaining(timedOut: boolean): void {
     const list = this.roster?.karts;
     if (!list) return;
-    for (let i = 0; i < list.length; i++) {
-      const k = list[i];
+    const totalLaps = this.race.totalLaps;
+    const raceTime = this.race.raceTime;
+
+    // `this.rank` is best-first and includes finished karts (they sort ahead via
+    // `better`), so skipping the finished ones yields exactly the unfinished
+    // runners in true race order. Fall back to roster order only if ranking has
+    // not run yet, which would mean no tick has completed.
+    const order: readonly number[] = this.rank.length > 0
+      ? this.rank
+      : list.filter((k) => k).map((k) => k.id);
+
+    // Results must read monotonically: a kart classified behind another can never
+    // show a quicker total. Projections come from independent per-kart paces and
+    // can cross, so clamp each one above the previous. Seed from the slowest time
+    // already on the board so no projection can beat a real finisher.
+    let floor = 0;
+    for (let i = 0; i < this.race.results.length; i++) {
+      const t = this.race.results[i].time;
+      if (t > floor) floor = t;
+    }
+
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i];
+      const k = this.kartById(id);
       if (!k) continue;
-      const tr = this.race.trackers.get(k.id);
+      const tr = this.race.trackers.get(id);
       if (!tr || tr.finished) continue;
-      tr.markDnf(this.race.raceTime);
-      this.race.finishOrder.push(k.id);
+
+      if (timedOut) {
+        tr.markDnf(raceTime);
+      } else {
+        const projected = tr.projectFinish(raceTime, totalLaps);
+        // +0.001 keeps the ordering STRICT, so two karts on identical pace still
+        // differ — an exact tie is what made the board look generated.
+        if (projected <= floor) tr.finishTime = floor + 0.001;
+        floor = tr.finishTime;
+      }
+
+      this.race.finishOrder.push(id);
       const position = this.race.finishOrder.length;
       tr.position = position;
       k.finished = true;
@@ -856,14 +918,17 @@ export class RaceDirector implements ISubsystem {
       k.racePosition = position;
       this.finishedCount++;
       this.race.results.push({
-        kartId: k.id,
+        kartId: id,
         position,
         time: tr.finishTime,
         bestLap: isFinite(tr.bestLap) ? tr.bestLap : 0,
-        laps: tr.lap,
-        dnf: true,
+        // A projected finisher completed the race as far as the board is
+        // concerned — reporting its part-finished lap count next to a real
+        // finisher's would read as a bug. A genuine DNF reports what it managed.
+        laps: timedOut ? tr.lap : totalLaps,
+        dnf: timedOut,
       });
-      bus.emit('race:finish', { kartId: k.id, position, totalTime: tr.finishTime });
+      bus.emit('race:finish', { kartId: id, position, totalTime: tr.finishTime });
     }
   }
 
@@ -892,7 +957,10 @@ export class RaceDirector implements ISubsystem {
     this.debug.phase = 'results';
 
     // Anything still out there gets a result row so the table is never ragged.
-    this.dnfRemaining();
+    // `false`, i.e. project rather than DNF: a genuine timeout has already run
+    // `closeOutRemaining(true)` and left nothing behind, so whatever reaches this
+    // safety net was racing normally when the flag fell.
+    this.closeOutRemaining(false);
     this.race.results.sort((a, b) => a.position - b.position);
 
     if (this.mode === 'gp' && this.cupActive) {
