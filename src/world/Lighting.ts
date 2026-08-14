@@ -527,6 +527,12 @@ interface Cascade {
   mapSize: number;
   /** Redraw every `interval` frames. Far cascades barely move; near must be 1. */
   interval: number;
+  /**
+   * Frame offset within `interval`, so no two cascades fall due on the same
+   * frame. Without it, periods 2 and 3 collide every sixth frame and rasterise
+   * all three cascades at once — see `intervalFor`.
+   */
+  phase: number;
 }
 
 /** The slice of `WebGLShadowMap` the cascade driver needs to talk to. */
@@ -680,7 +686,25 @@ export class Lighting implements ISubsystem {
     // Redraw cadence. Cascade 0 must be every frame (it holds the kart's own
     // shadow); the outer boxes are hundreds of metres across so a stale frame
     // or two is invisible. This is a straight 2-3x cut in shadow rasterisation.
-    const intervalFor = (i: number): number => (i === 0 ? 1 : i === 1 ? 2 : 3);
+    //
+    // PHASE, not just period. The cadence used to be 1 / 2 / 3, and `due` tests
+    // `frame % interval === 0`, so cascades 1 and 2 both came due on every frame
+    // where `frame % 6 === 0` — and that frame rasterised all three cascades,
+    // 3 x 2048^2 = 12.6 Mpx of depth, against an amortised 1 + 1/2 + 1/3 = 1.83
+    // passes. A once-every-six-frames spike of 1.6x the average is exactly the
+    // shape of a visible hitch, and shadow depth is the largest single item in the
+    // frame: 8.39 Mpx of 14.92 Mpx total, 56.2 %, and the only part that does NOT
+    // shrink when the window does.
+    //
+    // 1 / 2 / 4 with cascade 2 offset by 2 fixes both halves at once. Odd frames
+    // and `frame % 4 === 2` are disjoint sets, so cascades 1 and 2 can never
+    // coincide: the worst frame is now 2 cascades instead of 3. And the amortised
+    // rate FALLS, to 1 + 1/2 + 1/4 = 1.75, because cascade 2 now redraws every
+    // fourth frame rather than every third — which is invisible on a box hundreds
+    // of metres across, where a stale frame moves the shadow by well under a texel.
+    const intervalFor = (i: number): number => (i === 0 ? 1 : i === 1 ? 2 : 4);
+    /** Frame offset, so two cascades never fall due together. See `intervalFor`. */
+    const phaseFor = (i: number): number => (i === 1 ? 1 : i === 2 ? 2 : 0);
 
     for (let i = 0; i < N; i++) {
       const light = new THREE.DirectionalLight(0xffffff, 1);
@@ -717,6 +741,7 @@ export class Lighting implements ISubsystem {
         centreDist,
         mapSize: sizeFor(i),
         interval: intervalFor(i),
+        phase: phaseFor(i),
       });
     }
     this.keyLight = this.cascades[0].light;
@@ -1493,7 +1518,9 @@ export class Lighting implements ISubsystem {
       const c = this.cascades[i];
       // Only re-fit a cascade on the frame it will actually redraw. Moving the
       // ortho without redrawing would slide the stale depth map off the world.
-      const due = i === 0 || this.frame % c.interval === 0;
+      // `phase` keeps cascades 1 and 2 from ever coming due on the same frame —
+      // see `intervalFor` in the cascade builder for why that mattered.
+      const due = i === 0 || (this.frame - c.phase) % c.interval === 0;
       if (!due) { c.light.shadow.needsUpdate = false; continue; }
       c.light.shadow.needsUpdate = true;
 

@@ -62,8 +62,26 @@ export const QUALITY_PRESETS: Record<QualityTier, QualitySettings> = {
     ssao: true, ssr: false, motionBlur: true, bloom: true, dof: true,
     particleBudget: 9000, anisotropy: 8, foliageDensity: 0.85, reflectionProbes: true,
   },
+  /**
+   * `shadowMapSize` and `cascadeCount` say 2048 / 3, NOT 4096 / 4.
+   *
+   * They used to claim 4096 / 4, and `Lighting` clamps them to 2048 and 3
+   * (`clamp(quality.shadowMapSize, 512, 2048)` and `clamp(cascadeCount, 1, 3)`),
+   * so ultra has always rendered shadows identically to `high` while the table
+   * advertised something else. Two people read the preset as the shipping value
+   * and were wrong.
+   *
+   * The clamp is the correct half and stays. Shadow depth is already the single
+   * largest item in the frame — 8.39 Mpx of 14.92 Mpx rasterised, 56.2 %, and the
+   * only part that does not shrink when the window does. At 4096 with 4 cascades
+   * the worst frame would rasterise 67 Mpx of depth against today's 12.6, about
+   * 5.3x, which no part of the 16.6 ms budget can absorb.
+   *
+   * Ultra still differs from high where it is affordable: SSR on, 20k particles
+   * against 9k, anisotropy 16 against 8, full foliage density.
+   */
   ultra: {
-    tier: 'ultra', renderScale: 1.0, shadowMapSize: 4096, cascadeCount: 4,
+    tier: 'ultra', renderScale: 1.0, shadowMapSize: 2048, cascadeCount: 3,
     ssao: true, ssr: true, motionBlur: true, bloom: true, dof: true,
     particleBudget: 20000, anisotropy: 16, foliageDensity: 1.0, reflectionProbes: true,
   },
