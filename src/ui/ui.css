@@ -458,14 +458,34 @@
   -webkit-backdrop-filter: blur(calc(6 * var(--u)));
   transition: border-color 180ms ease;
 }
-/* Empty still reads as a real, solid slot — just unlit. */
+/*
+ * EMPTY must read as an empty FRAME, not as an object.
+ *
+ * This used to be styled "a real, solid slot — just unlit", which gave it a 50 %
+ * border radius, a top-weighted radial highlight, an inset white top rim, a drop
+ * shadow and a 0.90–0.94 alpha navy fill. Sitting over the sky at the top centre
+ * of the screen, that is not a UI slot: it is a shaded sphere with a cast shadow.
+ * The owner reported it as "objects or balloons that appear unnaturally suspended
+ * in the air", on every circuit.
+ *
+ * Diagnosed by elimination against the live build: with the sky dome, sun shafts,
+ * every VFX system, the weather, all props, the terrain, the karts, the
+ * projectiles, the hazards, the item boxes, the entire track root AND the
+ * bloom/grade/vignette pass all disabled — an empty scene — the disc was still on
+ * screen. It was never in the scene. `document.elementFromPoint` had earlier
+ * pointed at the canvas, which is misleading: the HUD is `pointer-events: none`,
+ * so that API looks straight through it.
+ *
+ * The slot still has to be findable when empty, so the ring stays. What goes is
+ * every cue that implies volume — the lit-sphere gradient, the white top rim, the
+ * drop shadow and the glass blur.
+ */
 .ak-item--empty .ak-item__frame {
-  border-color: rgba(216, 232, 255, 0.72);
-  background:
-    radial-gradient(ellipse at 50% 16%, rgba(58, 92, 152, 0.32) 0%, rgba(7, 11, 26, 0.9) 66%),
-    linear-gradient(180deg, rgba(16, 25, 50, 0.9), rgba(5, 8, 20, 0.94));
-  box-shadow: var(--ak-shadow), inset 0 calc(3 * var(--u)) 0 rgba(255, 255, 255, 0.1),
-    inset 0 calc(-12 * var(--u)) calc(20 * var(--u)) rgba(0, 0, 0, 0.5);
+  border-color: rgba(216, 232, 255, 0.34);
+  background: rgba(8, 12, 26, 0.24);
+  box-shadow: inset 0 0 calc(10 * var(--u)) rgba(0, 0, 0, 0.28);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .ak-item--empty .ak-item__glow { opacity: 0; }
 
