@@ -20,19 +20,33 @@
 
 import * as THREE from 'three';
 import { Track } from '@/track/Track';
+import { TRACK_ORDER } from '@/track/TrackDefs';
 import { QUALITY_PRESETS } from '@/core/Config';
 import { PhysicsWorld } from '@/physics/PhysicsWorld';
 import { makeTuning, type CCClass } from '@/physics/Tuning';
 import { DriftStage, SurfaceType, type FrameContext, type KartState } from '@/core/Types';
 
 /**
- * Every circuit id, in menu order. These must match `TRACK_ORDER` in
- * `TrackDefs.ts` exactly: `getTrackDef()` silently falls back to the default
- * circuit for an unknown id, so a typo here does not throw — it quietly probes
- * Sunset Coastline three times and reports three identical, meaningless rows.
+ * Every circuit id, in menu order — RE-EXPORTED from `TRACK_ORDER`, never retyped.
+ *
+ * This used to be a hardcoded tuple of three ids, with a doc comment insisting it
+ * "must match `TRACK_ORDER` in `TrackDefs.ts` exactly". It did not: the three city
+ * circuits were added to `TRACK_ORDER` and never here, so every probe that drove
+ * off this list silently covered HALF THE GAME — including
+ * `.probe-tmp/road-black-audit.ts`, whose headline "86 material/geometry pairings
+ * audited" was 86 pairings over three circuits, not six.
+ *
+ * A hand-maintained mirror of a list that grows is a hole that reopens every time
+ * someone adds a circuit, and `getTrackDef()` falls back silently on an unknown id
+ * so nothing ever throws to warn you. Deriving it makes the whole class of mistake
+ * unrepresentable.
+ *
+ * `TrackId` is consequently `string` rather than a narrow union. That is the right
+ * trade for a dev harness: the union only ever bought a compile-time typo check,
+ * and it bought that by encoding a list that was already wrong.
  */
-export const TRACK_IDS = ['sunsetCoastline', 'neonMetropolis', 'volcanoRush'] as const;
-export type TrackId = (typeof TRACK_IDS)[number];
+export const TRACK_IDS: readonly string[] = TRACK_ORDER;
+export type TrackId = string;
 
 // ---------------------------------------------------------------------------
 //  Fake renderer — Track's constructor wants one; nothing draws
