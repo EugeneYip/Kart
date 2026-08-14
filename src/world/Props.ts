@@ -493,44 +493,99 @@ class Builder {
     this.quad(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2],
       hex, shade, [uv[0], uv[3], uv[2], uv[1]]);
     if (!opts.single) {
-      // Seen from behind, local +x is on the viewer's LEFT, so the back face
-      // wants the mirrored range to read correctly from that side.
+      // ---- THE BACK FACE READ MIRRORED. -----------------------------------
+      // The intent below was right and the arithmetic double-negated it. Seen
+      // from local -Z the viewer's right IS local -x, so the back face does want
+      // u to run the other way along +x — but the corner order is ALREADY
+      // reversed here (p1 first, not p0), and `quad()` assigns its rect relative
+      // to the corner order it is given: `a -> (r0,r1)`, `b -> (r2,r1)`. Reversing
+      // the corners AND reversing the range cancels out, so the back face was
+      // emitted with u ascending along +x exactly like the front face, i.e.
+      // mirrored. Passing the SAME range as the front face is what mirrors it,
+      // because `a` is now the +x corner.
+      //
+      // The invariant to check, and the one `.probe-tmp/mirror.ts` asserts per
+      // triangle: `cross(du/dp, dv/dp)` must point the same way as the winding
+      // normal. Front face: du/dp = +x, dv/dp = +y, cross = +Z = its normal. Back
+      // face with this range: du/dp = -x, dv/dp = +y, cross = -Z = its normal.
+      // Both pass; the old range gave the back face cross = +Z against a -Z
+      // normal. That is view-independent and therefore testable headlessly.
       this.quad(p1[0], p1[1], p1[2], p0[0], p0[1], p0[2], p3[0], p3[1], p3[2], p2[0], p2[1], p2[2],
-        hex, shade * 0.8, [uv[2], uv[3], uv[0], uv[1]]);
+        hex, shade * 0.8, [uv[0], uv[3], uv[2], uv[1]]);
     }
   }
 
-  /** Hanging cloth with vertical segments so the wind wave has something to bend. */
+  /**
+   * Hanging cloth with vertical segments so the wind wave has something to bend.
+   *
+   * ---- WHY `double` EXISTS, AND WHY THE START-LINE BANNERS WERE MIRRORED ----
+   * This emits ONE sheet, wound and uv'd to be read from local +Z. That is right
+   * for a `standBanner`, because a grandstand is yawed by convention 1 (local +Z
+   * points AT the road — see the PROP ORIENTATION block in Track.ts) so the +Z
+   * sheet faces the driver.
+   *
+   * It is exactly wrong for anything yawed by convention 2. A gate — gantry,
+   * arch, portal — is yawed so local **+Z follows the TANGENT**, i.e. down-track,
+   * *away* from a driver approaching it; `tunnelportal`'s recipe says so in as
+   * many words ("local -Z is the face the driver sees"). The two start-line
+   * banners had only a +Z sheet, and `prop-atlas-cloth` is `DoubleSide`, so the
+   * approaching driver was shown the BACK of that sheet and read every wordmark
+   * and the caption under it in mirror image. Nothing was wrong with the atlas,
+   * the u axis or the caption draw — the identical `banner()` call on the
+   * grandstand read correctly in the same frame, which is the proof.
+   *
+   * `double` adds a second sheet `gap` metres toward -Z with the winding AND the
+   * u direction both reversed, so each side reads correctly from its own side and
+   * neither depends on which way the prop happens to be yawed. Real trackside
+   * banners are printed both sides anyway. Cost is 2x the sheet's triangles on a
+   * handful of instances.
+   */
   banner(
     cx: number, cy: number, cz: number,
     w: number, h: number, yaw: number, hex: number,
     segs = 4, uvRect?: [number, number, number, number],
+    opts: { double?: boolean; gap?: number } = {},
   ): void {
     const uv = uvRect ?? [0, 0, 1, 1];
     const ca = Math.cos(yaw), sa = Math.sin(yaw);
-    const base = this.vertexCount;
-    const stride = segs + 1;
-    for (let j = 0; j <= segs; j++) {
-      const fy = j / segs;            // 0 = top (anchored), 1 = bottom
-      this.flap = fy * fy;
-      for (let i = 0; i <= segs; i++) {
-        const fx = i / segs;
-        const lx = (fx - 0.5) * w;
-        const y = cy - fy * h;
-        // u runs uMin -> uMax as lx goes -w/2 -> +w/2, exactly as in `plate()`'s
-        // front face — see the long note on the u axis there. A viewer of this
-        // cloth's +z face sees local +x on their right, so u must grow with +x.
-        this.vert(cx + lx * ca, y, cz + lx * sa, 0, 0, 1,
-          uv[0] + (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+    // In-plane axes are U = (ca, 0, sa) and world +Y, so the sheet's outward
+    // normal is U x Y = (-sa, 0, ca) — which is (0,0,1) at yaw 0, matching the
+    // literal that used to be written here, but is correct at every other yaw too.
+    const nx = -sa, nz = ca;
+    const gap = opts.gap ?? 0.016;
+    const sheet = (side: 1 | -1): void => {
+      const base = this.vertexCount;
+      const stride = segs + 1;
+      const ox = side < 0 ? -nx * gap : 0;
+      const oz = side < 0 ? -nz * gap : 0;
+      for (let j = 0; j <= segs; j++) {
+        const fy = j / segs;            // 0 = top (anchored), 1 = bottom
+        this.flap = fy * fy;
+        for (let i = 0; i <= segs; i++) {
+          const fx = i / segs;
+          const lx = (fx - 0.5) * w;
+          const y = cy - fy * h;
+          // u runs uMin -> uMax as lx goes -w/2 -> +w/2 on the +Z sheet, exactly
+          // as in `plate()`'s front face — see the long note on the u axis there.
+          // A viewer of that face sees local +x on their right, so u must grow
+          // with +x. The -Z sheet's viewer sees +x on their LEFT, so its u runs
+          // the other way; `1 - fx` is that mirror.
+          const fu = side > 0 ? fx : 1 - fx;
+          this.vert(cx + lx * ca + ox, y, cz + lx * sa + oz, nx * side, 0, nz * side,
+            uv[0] + (uv[2] - uv[0]) * fu, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+        }
       }
-    }
-    this.flap = 0;
-    for (let j = 0; j < segs; j++) {
-      for (let i = 0; i < segs; i++) {
-        const a = base + j * stride + i;
-        this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+      this.flap = 0;
+      for (let j = 0; j < segs; j++) {
+        for (let i = 0; i < segs; i++) {
+          const a = base + j * stride + i;
+          if (side > 0) this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+          else this.I.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
+        }
       }
-    }
+    };
+    sheet(1);
+    if (opts.double) sheet(-1);
   }
 
   /**
@@ -555,33 +610,79 @@ class Builder {
     cx: number, cy: number, cz: number,
     w: number, h: number, yaw: number, hex: number,
     cols = 6, rows = 3, uvRect?: [number, number, number, number],
+    opts: { double?: boolean; gap?: number; bow?: number } = {},
   ): void {
     const uv = uvRect ?? [0, 0, 1, 1];
     const ca = Math.cos(yaw), sa = Math.sin(yaw);
-    const base = this.vertexCount;
-    const stride = cols + 1;
-    for (let j = 0; j <= rows; j++) {
-      const fy = j / rows;              // 0 = top, 1 = bottom
-      for (let i = 0; i <= cols; i++) {
-        const fx = i / cols;            // 0 = mast (anchored), 1 = free edge
-        // Squared along the length so the hoist stays put and the fly end moves,
-        // with a small extra lift toward the bottom corner — that asymmetry is
-        // what stops the ripple looking like a flat pendulum.
-        this.flap = fx * fx * (0.82 + 0.18 * fy);
-        const lx = fx * w;
-        // u grows with local +x, matching `plate()`'s front face — see the u-axis
-        // note there before changing this.
-        this.vert(cx + lx * ca, cy - fy * h, cz + lx * sa, 0, 0, 1,
-          uv[0] + (uv[2] - uv[0]) * fx, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+    // See `banner()`: the sheet's outward normal is U x Y = (-sa, 0, ca). This
+    // used to be written as the literal (0, 0, 1), which is only correct at
+    // yaw 0 — and `flagpole` builds its pennant at `rng.range(0, 6.28)`, so every
+    // roadside pennant in the game was lit off a normal up to 180 degrees out.
+    const nx = -sa, nz = ca;
+    const gap = opts.gap ?? 0.014;
+    /**
+     * Camber, metres. A sail is not a flat sheet: it bellies away from the chord,
+     * deepest around a third of the way aft. `sin(pi * fx) ** 1.35` is that
+     * profile with the maximum pulled forward, and it is applied along the sheet's
+     * own normal so it works at any yaw.
+     */
+    const bow = opts.bow ?? 0;
+    const sheet = (side: 1 | -1): void => {
+      const base = this.vertexCount;
+      const stride = cols + 1;
+      for (let j = 0; j <= rows; j++) {
+        const fy = j / rows;              // 0 = top, 1 = bottom
+        for (let i = 0; i <= cols; i++) {
+          const fx = i / cols;            // 0 = mast (anchored), 1 = free edge
+          // Squared along the length so the hoist stays put and the fly end moves,
+          // with a small extra lift toward the bottom corner — that asymmetry is
+          // what stops the ripple looking like a flat pendulum.
+          this.flap = fx * fx * (0.82 + 0.18 * fy);
+          const lx = fx * w;
+          // Belly, tapering to nothing at the head and the foot so the cloth
+          // still meets its boom and its yard.
+          const A = Math.sin(Math.PI * fx) ** 1.35;
+          const B = Math.sin(Math.PI * (0.15 + fy * 0.7));
+          const camber = bow * A * B;
+          const off = (side < 0 ? -gap : 0) + camber;
+          // The camber has to reach the NORMALS as well as the positions, or a
+          // bellied sail is shaded as the flat sheet it no longer is — which is
+          // the section 0 failure this replaced in the first place. Surface is
+          // p(fx,fy) = U*fx*w - Y*fy*h + N*camber, so the tangents carry the
+          // camber's own derivatives and `t2 x t1` is the outward normal (it
+          // reduces to (-sa, 0, ca) when `bow` is 0, matching the flat sheet).
+          const dA = fx <= 0 || fx >= 1 ? 0
+            : 1.35 * Math.sin(Math.PI * fx) ** 0.35 * Math.PI * Math.cos(Math.PI * fx);
+          const dcx = bow * dA * B;
+          const dcy = bow * A * 0.7 * Math.PI * Math.cos(Math.PI * (0.15 + fy * 0.7));
+          // t1 = (ca*w + nx*dcx, 0, sa*w + nz*dcx);  t2 = (nx*dcy, -h, nz*dcy)
+          const t1x = ca * w + nx * dcx, t1z = sa * w + nz * dcx;
+          const t2x = nx * dcy, t2z = nz * dcy;
+          let vnx = (-h) * t1z - t2z * 0;
+          let vny = t2z * t1x - t2x * t1z;
+          let vnz = t2x * 0 - (-h) * t1x;
+          const vl = Math.hypot(vnx, vny, vnz) || 1;
+          vnx = (vnx / vl) * side; vny = (vny / vl) * side; vnz = (vnz / vl) * side;
+          // u grows with local +x on the +Z sheet, matching `plate()`'s front face
+          // — see the u-axis note there. The -Z sheet mirrors it, exactly as
+          // `banner()` does and for the same reason.
+          const fu = side > 0 ? fx : 1 - fx;
+          this.vert(cx + lx * ca + nx * off, cy - fy * h, cz + lx * sa + nz * off,
+            vnx, vny, vnz,
+            uv[0] + (uv[2] - uv[0]) * fu, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
+        }
       }
-    }
-    this.flap = 0;
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const a = base + j * stride + i;
-        this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+      this.flap = 0;
+      for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < cols; i++) {
+          const a = base + j * stride + i;
+          if (side > 0) this.I.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+          else this.I.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
+        }
       }
-    }
+    };
+    sheet(1);
+    if (opts.double) sheet(-1);
   }
 
   /**
@@ -776,11 +877,22 @@ function patchProp(
       `);
 
     if (opts.atlas) {
+      // ---- `fract()` COLLAPSED EVERY HAND-WRITTEN 0..1 CELL RECT. ------------
+      // `fract(1.0)` is 0.0. Three text-bearing recipes authored their cell rect
+      // as literal `[0,0,1,1]` / `[0,1,1,0]` (gantryBanner, holoAdSign,
+      // billboardSign) rather than through `atlasRect()`, which insets by 0.006.
+      // Both ends of both axes therefore mapped to the SAME value — the panel's
+      // whole uv range degenerated to one point and every one of those panels
+      // rendered as a single flat texel of a sponsor cell. That is the "large flat
+      // red panel" reported over the volcano circuit: `billboard`'s 8.8 x 4.9 m
+      // face reduced to the corner colour of whatever cell its seed picked.
+      // `clamp` cannot do that; the callers now inset with `CELL_FULL` as well, so
+      // a linear filter cannot reach into the neighbouring cell either.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <uv_vertex>', /* glsl */ `
         #include <uv_vertex>
         #ifdef USE_MAP
-          vMapUv = aAtlas.xy + fract(vMapUv) * aAtlas.zw;
+          vMapUv = aAtlas.xy + clamp(vMapUv, 0.0, 1.0) * aAtlas.zw;
         #endif
       `);
     }
@@ -862,8 +974,26 @@ export const SPONSORS: readonly Sponsor[] = [
   { lines: ['VOLT'], bg: '#7a2ed6', fg: '#f2e9ff', weight: 1 },
   { lines: ['TINY TRIP', 'CLUB'], bg: '#e4573c', fg: '#fff4e2', weight: 0.4 },
   { lines: ['DRIFT'], bg: '#0d1b2a', fg: '#4fd6ff', weight: 1 },
-  { lines: ['KART'], bg: '#f4f1e6', fg: '#c2192a', weight: 1 },
+  // ---- P0e. The owner asked for the two start-line banners to read CAPY LAB and
+  // FOXY KART. CAPY LAB is cell 0 already; this cell was the anonymous wordmark
+  // "KART", which is the championship's own name with the first word missing —
+  // every board on every circuit already carries "FOXY KART CHAMPIONSHIP" as its
+  // caption. Setting it as the two-line lockup the other multi-word brands use
+  // costs nothing (`sponsorCellPlan` + `fitLine` already size two-line cells) and
+  // turns a meaningless board into the game's own brand.
+  { lines: ['FOXY', 'KART'], bg: '#f4f1e6', fg: '#c2192a', weight: 1 },
 ];
+
+/**
+ * A whole atlas cell in CELL-LOCAL uv, for the `atlasCells` / `signCells` path
+ * where the SHADER supplies the cell offset and the geometry only says "all of
+ * it". v top-first, exactly like `atlasRect()`; inset by the same 0.006 so a
+ * linear filter cannot reach the neighbouring cell and — the reason this constant
+ * exists at all — so no coordinate is ever exactly 0 or 1. See the `clamp` note
+ * in `patchProp`: the three recipes that hand-wrote `[0,0,1,1]` or `[0,1,1,0]`
+ * had their uv range collapsed to a single texel by the `fract()` this replaced.
+ */
+const CELL_FULL: [number, number, number, number] = [0.006, 0.994, 0.994, 0.006];
 
 /**
  * Weighted cell lookup, 20 slots. `emit()` picks a cell from the anchor's uniform
@@ -2211,6 +2341,38 @@ const TOWER_H = 46;
 const PLINTH_PROPS = new Set(['grandstand', 'crowdstand']);
 
 /**
+ * ================== THE `elevated` GATE WAS A BLANKET EXEMPTION ==============
+ *
+ * Condition 4 above used to be a bare `!surf.elevated`: on any bridge deck, bore
+ * or helix, EVERY authored prop outside the corridor kept the deck's Y, at
+ * whatever height the carriageway happened to be. The reasoning was a composition
+ * one — a prop authored beside a deck was authored in the deck's frame — and it is
+ * sound for deck-edge dressing. It is nonsense at 84 m of lateral offset.
+ *
+ * Measured (`.probe-tmp/elevgate.ts`), the gate was the only thing holding up:
+ *
+ *     tokyoNeon    skyscraper   lat +-84   8 instances 13.4-24.2 m IN THE AIR
+ *                                          (46 m towers, bases up to 24 m off the
+ *                                          ground) and 5 more 1.5-10.8 m BURIED
+ *     volcanoRush  obsidianSpire lat -32   5 instances 21.8-52.1 m in the air,
+ *                                          2 more 17.8-23.9 m buried
+ *     sunsetCoastline townHouse  lat +-20  6 of 6 floating 4.9-8.2 m
+ *
+ * Nineteen props between 4.9 m and 52 m off the ground, on three circuits, and
+ * `.probe-tmp/buried.ts` could not see any of it because its `AIRBORNE` list
+ * excused half the names before it measured them.
+ *
+ * So the gate is now a DISTANCE, not a flag. Within `corridor + DECK_FRAME` of the
+ * centreline a prop is plausibly part of the structure — a parapet lamp, a chevron
+ * on the edge beam, a brake board — and keeps the deck datum, which is what the
+ * original reasoning was actually about. Beyond that it is landscape and stands on
+ * the ground like everything else. `DECK_FRAME` is the edge beam plus a parapet
+ * walk: everything the measurement found inside it is within 0.4 m of the ground
+ * anyway, so the choice of value does not decide any prop's fate by a whisker.
+ */
+const DECK_FRAME = 4.0;
+
+/**
  * Metres of clear ground a roadside prop's GEOMETRY must leave past the kerb.
  *
  * The P0h fix. `roadside()` bands its anchors at `halfWidth + o.min …`, and every
@@ -3094,9 +3256,14 @@ export class Props implements ISubsystem {
         { cull: CULL_MID, bloom: true, shadow: false, corridor: true });
     }
     {
-      // Sponsor banner hanging under the deck.
+      // Sponsor banner hanging under the deck. `double` because this gantry is
+      // yawed by convention 2 (local +Z = tangent = down-track), so the single +Z
+      // sheet `banner()` used to emit was seen from behind by every approaching
+      // driver and read mirrored — see the long note on `banner()`.
+      // `CELL_FULL`, not `[0,0,1,1]`: an ascending v range put the artwork upside
+      // down and the exact 0/1 ends were collapsed to one texel by the shader.
       const b = this.builder();
-      b.banner(0, 11.2, -0.1, (hw + 1) * 2, 2.6, 0, 0xffffff, 5, [0, 0, 1, 1]);
+      b.banner(0, 11.2, -0.1, (hw + 1) * 2, 2.6, 0, 0xffffff, 5, CELL_FULL, { double: true });
       this.emit('gantryBanner', b.build('gantryBanner'), this.atlasSway, gantryAnchor,
         { cull: CULL_MID, atlasCells: 8, shadow: false, corridor: true });
     }
@@ -3373,12 +3540,26 @@ export class Props implements ISubsystem {
     // ---- distance / turn signs ----------------------------------------------
     {
       const anchors = roadside(ctx, rng, { spacing: 95, min: 4, max: 6.5, limit: this.count(18) });
+      // ---- THE POST WAS BEING PAINTED WITH SPONSOR ARTWORK. -----------------
+      // Post and face used to be ONE geometry on `this.atlas` with
+      // `atlasCells: 8`. `prism()` writes TILING uvs in world metres (u runs to
+      // `r * 6 * uvScale`, v to `h * uvScale`), and `patchProp`'s atlas remap put
+      // every one of them through a cell — so a 2.4 m signpost was surfaced with
+      // chopped-up fragments of a sponsor board, and once the remap stopped
+      // wrapping it would have become one flat clamped edge colour, which is worse.
+      // Measured by `.probe-tmp/mirror.ts`: 29 of `roadSign`'s uvs outside the
+      // cell, worst u = -0.048, v = 1.44. The post belongs on `this.metal` with the
+      // shared detail normal, exactly as `boardFrame` sits beside `sponsorBoard`.
+      // One extra draw call per circuit.
+      const post = this.builder();
+      post.prism(0, 0, 0, 0.08, 2.4, 6, 0x8f959d, { capBottom: true });
+      post.box(0, 2.6, -0.02, 0.78, 0.54, 0.04, 0x5c636b);
+      this.emit('roadSignPost', post.build('roadSignPost'), this.metal, anchors, { cull: 200 });
       const b = this.builder();
-      b.prism(0, 0, 0, 0.08, 2.4, 6, 0x8f959d, { capBottom: true });
       // v top-first (see `atlasRect()` note) so the sign face isn't flipped.
       b.plate(0, 2.6, 0.05, 1.5, 1.0, 0, 0xffffff, { uvRect: [0.05, 0.9, 0.95, 0.1] });
       this.emit('roadSign', b.build('roadSign'), this.atlas, anchors,
-        { cull: 200, atlasCells: 8 });
+        { cull: 200, atlasCells: 8, shadow: false });
     }
   }
 
@@ -3473,9 +3654,14 @@ export class Props implements ISubsystem {
       b.box(0, 0.62, 0.4, 0.92, 0.12, 2.3, 0x8d6f47, { shade: { top: 1.14 } });
       b.box(0, 0.95, 1.6, 0.72, 0.42, 0.7, 0xf4f0e4);
       b.prism(0, 0.7, -0.4, 0.055, 4.2, 5, 0xe6e2d6);
-      b.flap = 0.8;
-      b.plate(0.7, 2.6, -0.4, 1.4, 2.6, Math.PI * 0.5, 0xf6f3ea, { single: false });
-      b.flap = 0;
+      // The moored boat's sail was the same flat quad the `sailboat` recipe had:
+      // one `plate()` with a CONSTANT `flap` of 0.8, so all four vertices moved
+      // together and a 1.4 x 2.6 m rectangle swung as a board. `mastCloth` with
+      // camber, pinned on the mast and running aft (+Z is astern here — the prow
+      // quad is at -Z), gives it a belly, a graded flap and a boom to sit on.
+      b.tube(0, 1.42, -0.3, 0, 1.36, 2.2, 0.045, 4, 0xb8a98c);
+      b.mastCloth(0, 4.50, -0.35, 2.5, 3.1, Math.PI * 0.5, 0xf6f3ea,
+        5, 3, undefined, { double: true, bow: 0.42 });
       this.emit('boat', b.build('boat'), this.matteSway, anchors, { cull: CULL_MID });
     }
 
@@ -4544,6 +4730,8 @@ export class Props implements ISubsystem {
     let nearWorst = 0;
     let nearWorstType = '';
     let farCount = 0;
+    /** Props seated on the water plane rather than the seabed — see condition 5. */
+    let floated = 0;
     const NEAR_BAND = 40;
 
     for (const p of props) {
@@ -4579,15 +4767,29 @@ export class Props implements ISubsystem {
       if (
         surf !== undefined
         && Math.abs(surf.lat) > surf.corridor
-        && !surf.elevated
+        // Condition 4, now a distance rather than a flag — see `DECK_FRAME`.
+        && (!surf.elevated || Math.abs(surf.lat) > surf.corridor + DECK_FRAME)
         && !CORRIDOR_PROPS.has(key)
         && !PLINTH_PROPS.has(key)
       ) {
         // The ground, not the ground plus `up`: a prop authored to sit below
         // grade still needs the grade itself to be dry land.
         const ground = this.field.heightAt(p.position.x, p.position.z);
-        if (ground >= this.ctx.waterLevel) {
-          const seated = ground + surf.up;
+        // ---- CONDITION 5 USED TO GIVE UP HERE. -----------------------------
+        // Below the waterline the heightfield is a seabed and nothing stands on
+        // it, so the old code left Track's road-plane extrapolation alone and the
+        // file's own comment admitted the answer was wrong: "sea dressing wants
+        // the water plane, and nothing in this pass knows that". It does know —
+        // `ctx.waterLevel` is right there. Measured (`.probe-tmp/floating.ts`),
+        // leaving it cost coastal a `sailboat` hull 5.7 m above the sea, a run of
+        // 5 buoys 3.6-4.8 m above it, 5 palms 2.4-3.3 m, a lifeguard tower and 5
+        // umbrellas. A hull seated ON the water plane is right by construction —
+        // that is what floating means — and it is a strictly better answer than a
+        // plane extrapolated 74 m sideways off the road.
+        const onWater = ground < this.ctx.waterLevel;
+        const datum = onWater ? this.ctx.waterLevel : ground;
+        {
+          const seated = datum + surf.up;
           if (Math.abs(seated - y) > 1e-3) {
             const corr = Math.abs(seated - y);
             worstReseat = Math.max(worstReseat, corr);
@@ -4598,10 +4800,17 @@ export class Props implements ISubsystem {
             } else if (corr > 30) {
               farCount++;
             }
+            if (onWater) floated++;
             reseated++;
             y = seated;
           }
-          groundUp = surf.up;
+          // `groundUp` means "this anchor's offset is measured from the GROUND",
+          // and it is what licenses `clearAuthored` / `clearRoadSurface` to re-seat
+          // after a lateral push. A water-seated prop must NOT carry it: a push
+          // would then land the hull on the seabed, 28 m down, which is the exact
+          // failure the old condition 5 was written to avoid. Left undefined, both
+          // guards fall through their `heightAt` sanity check and leave it afloat.
+          if (!onWater) groundUp = surf.up;
         }
       }
       list.push({
@@ -4620,7 +4829,8 @@ export class Props implements ISubsystem {
         + ` (outside the road corridor); worst within ${NEAR_BAND} m of the road`
         + ` ${nearWorst.toFixed(2)} m${nearWorstType ? ` (${nearWorstType})` : ''}`
         + `; ${farCount} distant backdrop props corrected by more than 30 m`
-        + ` (expected — see collectAuthored)`,
+        + ` (expected — see collectAuthored)`
+        + `; ${floated} seated on the water plane`,
       );
     }
   }
@@ -4762,11 +4972,30 @@ export class Props implements ISubsystem {
         // `standBanner` uses, so the two banners carry different brands. A wider
         // banner (3.0 -> 3.4 m) because a square atlas cell stretched tall is the
         // other way to make a logo unreadable.
+        //
+        // ---- P0e, TWO CHANGES. -----------------------------------------------
+        // CONTENT: cells 2 and 6 were TURBO and DRIFT; the owner asked for
+        // CAPY LAB (cell 0) and FOXY KART (cell 7). Left banner reads CAPY LAB.
+        // MIRRORING: `double: true`. This gantry is a `SPANS_THE_ROAD` type, so
+        // `place()` yaws it off the TANGENT and local +Z points down-track, away
+        // from the driver. `banner()` emitted only a +Z sheet and
+        // `prop-atlas-cloth` is `DoubleSide`, so the driver read the back of it —
+        // the wordmark AND the caption under it both came out in mirror image.
+        // This is the fourth instance of the inside-out family in this file (every
+        // closed primitive in `box()`/`prism()`, `superShape()` in KartBodies, the
+        // grass colour attribute, the walls/tunnel/deck) and the first that was
+        // reported as a texture fault rather than a winding one.
+        //
+        // `cloth.flap = 1` below is dead and stays only as a marker: `banner()`
+        // OVERWRITES `this.flap` per row with `fy * fy` (5 distinct levels at
+        // segs = 4) and zeroes it on the way out, so these banners never had the
+        // rigid-translation defect the national flags had. Measured in
+        // `.probe-tmp/mirror.ts`.
         const cloth = this.builder();
         cloth.flap = 1;
         for (const [i, sx] of [-1, 1].entries()) {
           cloth.banner(sx * (halfSpan - 4.4), H - 0.1, 0.4, 3.4, 4.4, 0, 0xf4f2ec, 4,
-            atlasRect(i === 0 ? 2 : 6));
+            atlasRect(i === 0 ? 0 : 7), { double: true });
         }
         // A valance above them, in the truss colour, so the cloths read as hung
         // from the gantry rather than floating under it.
@@ -5166,10 +5395,36 @@ export class Props implements ISubsystem {
         b.box(0, 0.86, 0, 1.9, 0.07, 0.72, 0x9d7b4f, { shade: { top: 1.16 } });
         b.box(-1.3, 1.05, 0, 0.6, 0.24, 0.5, 0xdfe3e8);
         b.prism(0.15, 0.9, 0, 0.075, 5.6, 5, 0xd8dade, { taper: 0.6 });
+        // ---- THE SAILS WERE FLAT QUADS (section 0). --------------------------
+        // Two `plate(..., flapAcross: true)` calls, i.e. 4 vertices and 2 triangles
+        // each, with `aFlap` only ever 0 or 1 — the exact defect the national flags
+        // were rebuilt out of last round (see `mastCloth`), left behind here. A
+        // 2.1 x 4.6 m flat rectangle with a two-level flap cannot ripple and cannot
+        // hold a curve, so it read as a painted board bolted to a mast.
+        //
+        // `mastCloth` with `bow` gives the one thing a sail must have that a banner
+        // must not: CAMBER. The cloth bellies away from the chord, deepest a third
+        // of the way aft, and the normals are differentiated from the same camber
+        // so the shading follows the curve instead of reading as a tilted plane.
+        // `double` because a moored boat is seen from both bows across the bay.
+        // Main 6x4 + jib 5x3, both sheets: 156 triangles for the pair against 4,
+        // on a `CULL_FAR` prop that appears 1-2 times per circuit.
+        // Forestay and backstay, so the jib has something to be bent onto and the
+        // rig reads as a sloop rather than a pole with two boards beside it.
+        b.tube(0.15, 6.4, 0, 2.3, 1.0, 0, 0.035, 4, 0xb8bcc4);
+        b.tube(0.15, 6.4, 0, -2.25, 1.0, 0, 0.03, 4, 0xb8bcc4);
         const cloth = this.builder();
-        cloth.flap = 1;
-        cloth.plate(-0.85, 3.5, 0, 2.1, 4.6, Math.PI * 0.5, 0xf7f3ea, { flapAcross: true });
-        cloth.plate(1.15, 2.6, 0, 1.5, 2.9, Math.PI * 0.5, 0xffd23f, { flapAcross: true });
+        // BOTH SAILS ON THE SAME TACK. `yaw: PI` puts the in-plane axis on -X, so
+        // each cloth is pinned at its luff and runs AFT, and both bellies fall to
+        // -Z. Never express "aft" as a negative `w` at yaw 0: the positions would
+        // run -X while the written normal stayed +Z, which is precisely the
+        // inside-out fault the rest of this file is a monument to.
+        // Main: luff on the mast (x = 0.15), leech at x = -2.45.
+        cloth.mastCloth(0.12, 6.30, 0, 2.6, 4.6, Math.PI, 0xf7f3ea,
+          6, 4, undefined, { double: true, bow: 0.62 });
+        // Jib: luff on the forestay near the bow, leech just forward of the mast.
+        cloth.mastCloth(2.15, 4.60, 0, 2.0, 2.9, Math.PI, 0xffd23f,
+          5, 3, undefined, { double: true, bow: 0.34 });
         return { geo: b.build('sailboat'), cloth: cloth.build('sailboatCloth'), cull: CULL_FAR };
       }
 
@@ -5442,9 +5697,14 @@ export class Props implements ISubsystem {
         for (const sy of [-1, 1]) b.box(0, sy * 2.5, 0, 7.5, 0.16, 0.22, 0x1c2026);
         for (const sx of [-1, 1]) b.box(sx * 7.5, 0, 0, 0.16, 2.5, 0.22, 0x1c2026);
         const sign = this.builder();
-        // Plain 0..1 uvs + signCells: each holo ad in view shows a different
-        // sponsor rather than eight copies of the same one.
-        sign.plate(0, 0, 0, 14.6, 4.7, 0, 0xffffff, { uvRect: [0, 1, 1, 0] });
+        // Whole-cell uvs + signCells: each holo ad in view shows a different
+        // sponsor rather than eight copies of the same one. `CELL_FULL`, not a raw
+        // `[0,1,1,0]` — see the `clamp` note in `patchProp`; the exact 0 and 1 ends
+        // were folded onto each other and this 14.6 x 4.7 m panel rendered as one
+        // flat texel. Double-sided (no `single`), and `plate()`'s back face now
+        // carries a correctly mirrored u range, which matters here because a lat-0
+        // `holoAd` spans the road and the driver sees its BACK.
+        sign.plate(0, 0, 0, 14.6, 4.7, 0, 0xffffff, { uvRect: CELL_FULL });
         const glow = this.builder();
         glow.plate(0, 0, -0.05, 14.6, 4.7, 0, 0x2ef0ff, { single: true });
         for (const sy of [-1, 1]) glow.box(0, sy * 2.5, 0, 7.4, 0.05, 0.1, 0x8bf6ff);
@@ -5455,14 +5715,39 @@ export class Props implements ISubsystem {
       }
 
       case 'billboard': {
+        // ---- P0e: "a large red panel high above the ground with NO visible
+        // supporting structure". Two faults, and the structure was the second one.
+        // The posts stood at +-3.4 m under an 8.8 m face and STOPPED at 6.2 m,
+        // 0.6 m above the panel's bottom edge — so 4.8 m of an 11 m structure was
+        // cantilevered off nothing you could see, and from the road the panel read
+        // as detached. A real hoarding runs its stringers up the back of the whole
+        // face. The masts now reach 10.6 m (past the panel's 10.75 m top), stand at
+        // +-3.9 m, and carry two horizontal stringers plus a raked back-stay to
+        // ground. XZ extents are unchanged — the 8.8 m sign plate still sets the
+        // bounding box — so no clearance guard sees a different prop.
         const b = this.builder();
         for (const sx of [-1, 1]) {
-          b.prism(sx * 3.4, 0, 0, 0.24, 6.2, 8, 0x3d434a, { capBottom: true, taper: 0.8 });
-          b.tube(sx * 3.4, 4.2, 0, sx * 3.4, 6.0, -1.3, 0.13, 5, 0x3d434a);
+          b.prism(sx * 3.9, 0, 0, 0.26, 10.6, 8, 0x3d434a, { capBottom: true, taper: 0.62 });
+          // Raked back-stay from high on the mast down to a footing behind it.
+          b.tube(sx * 3.9, 7.4, 0, sx * 3.4, 0.1, -1.45, 0.13, 5, 0x3d434a);
+          b.box(sx * 3.4, 0.22, -1.45, 0.5, 0.22, 0.5, 0x2f343a, { shade: { top: 1.1 } });
+          b.box(sx * 3.9, 0.3, 0, 0.62, 0.3, 0.62, 0x2f343a, { shade: { top: 1.12 } });
         }
+        // Stringers: the horizontals the hoarding is actually bolted to.
+        for (const sy of [6.4, 10.0]) {
+          b.tube(-4.3, sy, -0.12, 4.3, sy, -0.12, 0.11, 4, 0x454c54);
+        }
+        // Maintenance catwalk under the face — the detail that says "billboard".
+        b.box(0, 5.5, -0.5, 4.2, 0.06, 0.34, 0x565e67, { shade: { top: 1.2 } });
         b.box(0, 8.3, 0.22, 4.6, 2.7, 0.16, 0x2b3036, { shade: { top: 1.1 } });
         const sign = this.builder();
-        sign.plate(0, 8.3, 0.05, 8.8, 4.9, 0, 0xffffff, { single: true, uvRect: [0, 1, 1, 0] });
+        // `CELL_FULL`, not `[0,1,1,0]`: this is THE panel the owner photographed
+        // floating over the volcano circuit as a flat red rectangle. The rect's 0
+        // and 1 ends were collapsed onto each other by the `fract()` in
+        // `patchProp`'s atlas remap, so an 8.8 x 4.9 m advertising face sampled a
+        // single texel of one sponsor cell — flat colour, no wordmark, no frame,
+        // and nothing to read it as a billboard by. See the `clamp` note there.
+        sign.plate(0, 8.3, 0.05, 8.8, 4.9, 0, 0xffffff, { single: true, uvRect: CELL_FULL });
         const glow = this.builder();
         // Two floodlight cans on the gantry, throwing up at the face.
         for (const sx of [-1, 1]) glow.box(sx * 2.2, 5.7, -0.5, 0.3, 0.1, 0.18, 0xfff0c8);
@@ -6849,8 +7134,14 @@ export class Props implements ISubsystem {
     // `mastCloth` grades `aFlap` across its own span, so the builder-level
     // `flap = 1` the old `plate(..., flapAcross)` call needed would flatten the
     // gradient to a constant. Left unset on purpose.
+    // `double`: a national flag is the one cloth in the file whose artwork is
+    // asymmetric enough that the reverse side has to be right too (the USA canton
+    // is in the top-LEFT — a tricolour would have hidden this forever). The +Z
+    // sheet reads correctly from the road, which is the side that matters and the
+    // side that was always correct; the -Z sheet is 36 triangles on one instance
+    // per circuit and means a flyover or a cinematic angle cannot catch it out.
     cloth.mastCloth(0.11, 0.56 + mastH - 1.4 + chh * 0.5, 0, cw, chh, 0, 0xffffff,
-      6, 3, atlasRect(cell));
+      6, 3, atlasRect(cell), { double: true });
     return {
       geo: b.build(`flagMast${cell}`), flag: cloth.build(`flagCloth${cell}`),
       cull: CULL_MID,

@@ -70,25 +70,97 @@ export const CROSS = {
   shoulderDrop: 0.34,
   /** World metres per asphalt texture tile. */
   roadTile: 6.0,
-  /** Guardrail height above the shoulder edge. */
+  /**
+   * Wall heights, metres **above the asphalt edge** — the datum a driver's eye
+   * actually sits above.
+   *
+   * These used to be measured from the wall's own FOOT, which is a different
+   * thing: the foot stands 0.12 m outboard of the shoulder's outer edge, where
+   * the shoulder smoothstep has already reached 1, so it sits exactly
+   * `crown + shoulderDrop = 0.50 m` below the asphalt edge on every station of
+   * every circuit. Half a metre of every barrier was therefore spent climbing
+   * back to road level and never seen. Measured with `.probe-tmp/wallscale.ts`
+   * before the change: a `railH: 0.62` guardrail stood **0.28 m** above the road
+   * edge (real Armco is 0.75 m), a `concreteH: 0.95` Jersey barrier **0.61 m**
+   * (real is 0.81-1.07 m), `woodH: 1.0` **0.66 m**, `fenceH: 2.5` **2.16 m**.
+   * The tall styles swallowed the same 0.50 m invisibly.
+   *
+   * `wallRise()` adds `WALL_FOOT_DROP` back, so these numbers now mean what they
+   * say. Nothing else in the file reads them directly.
+   */
   railH: 0.62,
-  /** Concrete barrier height. */
+  /** Concrete barrier height above the asphalt edge. */
   concreteH: 0.95,
-  /** Rock face height. */
+  /** Rock face height above the asphalt edge, at its tallest. */
   rockH: 6.5,
-  /** Building façade height (Environment builds the rest). */
+  /** Building façade height above the asphalt edge (Environment builds the rest). */
   buildingH: 9.0,
-  /** Chain-link fence height. */
+  /** Chain-link fence height above the asphalt edge. */
   fenceH: 2.5,
-  /** Energy rail height. */
+  /** Energy rail height above the asphalt edge. */
   energyH: 1.15,
-  /** Timber railing height. */
+  /** Timber railing height above the asphalt edge. */
   woodH: 1.0,
   /** Tunnel bore clearance above the crown. */
   tunnelH: 8.2,
   /** Bridge fascia depth. */
   deckDepth: 1.35,
 } as const;
+
+/**
+ * Metres the foot of a wall sits below the ASPHALT EDGE (not below the crown —
+ * the edge is already `CROSS.crown` under the crown, and double-counting that
+ * makes every wall 0.16 m taller than its authored number).
+ *
+ * Not a taste value and not an approximation — it is exact. A wall stands at
+ * `hw + kerbW + shoulder + WALL_STANDOFF`, and `surfaceHeight()` evaluates its
+ * shoulder smoothstep at `s = clamp01((shoulder + standoff) / shoulder) = 1`
+ * there for every shoulder width the circuits use, including 0. So the foot is
+ * always exactly one `shoulderDrop` below the edge, whatever the station.
+ * Verified against the built mesh: `.probe-tmp/wallscale.ts` reports a
+ * `guardrail` top at 0.620 m above the edge for `railH: 0.62`.
+ */
+const WALL_FOOT_DROP = CROSS.shoulderDrop;
+
+/**
+ * Metres the wall's foot stands outboard of the shoulder's outer edge.
+ *
+ * ⚠️ DUPLICATED IN `Track.wallHit` (`src/track/Track.ts`, `halfWidth + kw + sh +
+ * 0.12`) AND IN `buildCollisionGeometry` BELOW. The analytic wall collision is
+ * not built from this mesh, so if this number moves and Track's does not, karts
+ * bounce off an invisible plane offset from the wall they can see. That is why
+ * the "walls are too close" complaint is answered by battering the profile
+ * OUTWARD as it rises rather than by moving this: the foot — the only part that
+ * collides — stays exactly where the collision code expects it.
+ */
+const WALL_STANDOFF = 0.12;
+
+/**
+ * Height above the asphalt edge that an *enclosing* wall style (`rock`,
+ * `building`) is allowed on a straight, before the corner term raises it.
+ *
+ * 3.2 m is not a taste value either: it is the clamp `buildCollisionGeometry`
+ * already applies to every wall quad it bakes into the BVH (`Math.min(3.2,
+ * …)`), i.e. this file's existing judgement about how much wall is worth
+ * colliding with. Matching it means the visible wall and the BVH wall are the
+ * same object on a straight instead of one being twice the other.
+ *
+ * What it buys, measured: from the chase eye 2.33 m above the road, a 3.2 m wall
+ * 5.5 m away subtends 9 degrees, so the sky, the mountains and the rest of the
+ * circuit are visible over it. The 6.5 m rock face it replaces subtended
+ * **58 degrees at p50 and 89 at p95** on volcano — a corridor with a strip of
+ * sky.
+ */
+export const WALL_OPEN_H = 3.2;
+
+/**
+ * Curvature at which an enclosing wall on the OUTSIDE of a corner reaches its
+ * full authored height. 1/50 m — a 50 m radius, tighter than every corner on
+ * the six circuits except the hairpins, so the full-height wall is the exception
+ * the brief asks for ("a wall on the outside of a blind corner is allowed to be
+ * tall") rather than the default.
+ */
+const WALL_TALL_CURVATURE = 1 / 50;
 
 /**
  * Metres of lap behind the start line taken up by the twelve-kart grid. Must
@@ -350,6 +422,7 @@ const _s = makeSample();
 const _at = makeAttribs();
 const _v = new THREE.Vector3();
 const _n2 = new THREE.Vector3();
+const _archPrev = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _up = new THREE.Vector3(0, 1, 0);
@@ -409,6 +482,11 @@ export interface Station {
   shR: number;
   bank: number;
   curvature: number;
+  /**
+   * Signed curvature smoothed over a ~36 m window of arc length — the signal the
+   * wall massing keys off. See `smoothWallCurvature()`.
+   */
+  wallK: number;
   flags: number;
   surface: SurfaceType;
   shoulderSurface: SurfaceType;
@@ -469,9 +547,32 @@ function bakeRacingLine(spline: TrackSpline, ds: number[]): Float32Array {
   const raw = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     spline.sampleAtDistance(ds[i], _s);
-    const k = spline.curvatureAtDistance(ds[i]);
-    // Aim for the inside of the corner, proportional to how tight it is.
-    const inside = -Math.sign(k) * Math.min(0.62, Math.abs(k) * 26);
+    const k = _s.curvature;
+    /**
+     * Aim for the inside of the corner, proportional to how tight it is.
+     *
+     * ⚠️ THE SIGN WAS BACKWARDS AND THIS AIMED AT THE OUTSIDE.
+     *
+     * `TrackSpline` defines `curvature = (r'' . binormal) / |r'|^2` and `r''`
+     * points at the centre of curvature, which is on the INSIDE. So `k > 0`
+     * means the inside is at POSITIVE lat (the driver's right) and the offset
+     * must carry `k`'s own sign, not its negation. Measured with
+     * `.probe-tmp/cornersign.ts` against a three-sample circumcentre fit:
+     * `sign(racingLine) == sign(centreOfCurvature)` on **11 of 1225** corner
+     * stations across the six circuits before this change — the baked line hugged
+     * the outside of essentially every corner on every track.
+     *
+     * Two things read this. `BuiltTrack.racingLine` becomes
+     * `Track.racingLineAt()`, which `RaceDirector`'s autopilot and the homing
+     * shells in `src/items/Projectiles.ts` steer along. And `Station.line` is what
+     * the sweep below measures the tyre-polish gradient from, so the two darkened
+     * tracks were painted on the outside of every corner.
+     *
+     * `curvatureAtDistance()` was also wrong here: it returns `max |k|` over a
+     * window (used for the tessellation step) and is therefore UNSIGNED, so
+     * `Math.sign(k)` on it can only ever be +1. The signed value is on the sample.
+     */
+    const inside = Math.sign(k) * Math.min(0.62, Math.abs(k) * 26);
     raw[i] = inside * (_s.halfWidth - 2.2);
   }
   // Two smoothing passes over ~35 m — a real line is much smoother than the
@@ -496,6 +597,74 @@ function bakeRacingLine(spline: TrackSpline, ds: number[]): Float32Array {
   return src;
 }
 
+/**
+ * Metres of arc length either side of a station that its wall massing averages
+ * curvature over. A barrier is a BUILT STRUCTURE: it is put up in straight runs
+ * and long arcs, and whether a corner is blind is a property of a stretch of
+ * road, not of a point on it.
+ *
+ * Driving the height off the instantaneous `curvature` instead produced a
+ * wall-top cliff. Measured with `.probe-tmp/wallnoise.ts` before this pass:
+ * `|dk|` between ADJACENT rings reaches 2.9e-2 (more than the whole
+ * `WALL_TALL_CURVATURE` range), and `planRings` is allowed to place two rings
+ * 0.061 m apart when it snaps onto a control-point boundary, so the wall top
+ * stepped by up to **2.85 m between two rings 6.7 cm apart** — a vertical cliff
+ * in the top of the wall, at p99 0.49 m per ring.
+ *
+ * 18 m matches the ~30 m window `bakeRacingLine` smooths over, for the same
+ * reason.
+ */
+const WALL_K_WINDOW = 18;
+
+/**
+ * Arc-length-weighted, wrapped, triangular-window smoothing of the signed
+ * curvature, written into `Station.wallK`.
+ *
+ * Weighted by the arc length each station represents, not by station count:
+ * `planRings` puts rings 0.4 m apart in a hairpin and 1.7 m apart on a straight,
+ * so an unweighted mean would count the hairpin four times over and drag the
+ * straight either side of it upward.
+ */
+function smoothWallCurvature(stations: Station[], lapLength: number): void {
+  const n = stations.length;
+  if (n < 3) return;
+  const out = new Float32Array(n);
+  // Arc length each station owns: half the gap to each neighbour, wrapped.
+  const span = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const prev = stations[(i - 1 + n) % n].d;
+    const next = stations[(i + 1) % n].d;
+    let back = stations[i].d - prev;
+    let fwd = next - stations[i].d;
+    if (back < 0) back += lapLength;
+    if (fwd < 0) fwd += lapLength;
+    span[i] = Math.max(1e-3, (back + fwd) * 0.5);
+  }
+  for (let i = 0; i < n; i++) {
+    let acc = 0;
+    let wsum = 0;
+    for (let dir = -1; dir <= 1; dir += 2) {
+      let off = 0;
+      for (let k = dir === -1 ? 0 : 1; k < n; k++) {
+        const j = (i + dir * k + n * 2) % n;
+        // Distance from `i` to `j` measured the way we walked.
+        if (k > 0) {
+          const a = stations[(i + dir * (k - 1) + n * 2) % n].d;
+          let step = dir === 1 ? stations[j].d - a : a - stations[j].d;
+          if (step < 0) step += lapLength;
+          off += step;
+        }
+        if (off > WALL_K_WINDOW) break;
+        const w = (1 - off / WALL_K_WINDOW) * span[j];
+        acc += stations[j].curvature * w;
+        wsum += w;
+      }
+    }
+    out[i] = wsum > 1e-9 ? acc / wsum : stations[i].curvature;
+  }
+  for (let i = 0; i < n; i++) stations[i].wallK = out[i];
+}
+
 function buildStations(spline: TrackSpline): Station[] {
   const ds = planRings(spline);
   const line = bakeRacingLine(spline, ds);
@@ -517,6 +686,7 @@ function buildStations(spline: TrackSpline): Station[] {
       shR: _at.shoulderR,
       bank: _at.bank,
       curvature: _s.curvature,
+      wallK: _s.curvature,
       flags: _at.flags,
       surface: _at.surface,
       shoulderSurface: _at.shoulderSurface,
@@ -548,6 +718,8 @@ function buildStations(spline: TrackSpline): Station[] {
     const edge = Math.min(Math.abs(fwd), Math.abs(back));
     stations[i].dark = smoothstep(edge / 15);
   }
+
+  smoothWallCurvature(stations, spline.length);
 
   return stations;
 }
@@ -769,6 +941,168 @@ export function buildTrack(
   const wetNoise = (d: number, lat: number) =>
     clamp01(0.35 + 0.65 * Math.abs(Math.sin(d * 0.11 + lat * 0.31) * Math.cos(d * 0.037 - lat * 0.13)));
 
+  // ---- wall sweep ----------------------------------------------------------
+  /**
+   * `map.repeat` of the material a style will actually be drawn with, so the
+   * geometry can divide it back out and leave the NET texture coordinate equal
+   * to `worldMetres / WALL_TILE`.
+   *
+   * `RoadMaterial` owns those repeats and this builder must not fight them —
+   * it is not this file's to edit, and hard-coding a copy of the numbers would
+   * silently rot the first time one moved. Reading them keeps the world size
+   * right whatever they are. A material with no map (`energy` is
+   * `emissiveGlow`, which has none) reports 1.
+   */
+  const uvScaleOf = (style: WallStyle, tile: readonly [number, number]): [number, number] => {
+    const map = (mats.wall.get(style) as THREE.MeshStandardMaterial | undefined)?.map;
+    const rx = map && Math.abs(map.repeat.x) > 1e-6 ? map.repeat.x : 1;
+    const ry = map && Math.abs(map.repeat.y) > 1e-6 ? map.repeat.y : 1;
+    return [1 / (tile[0] * rx), 1 / (tile[1] * ry)];
+  };
+  const wallUvScale = new Map<WallStyle, [number, number]>();
+  const wallScaleFor = (style: WallStyle): [number, number] => {
+    let s = wallUvScale.get(style);
+    if (!s) { s = uvScaleOf(style, WALL_TILE[style] ?? WALL_TILE.guardrail); wallUvScale.set(style, s); }
+    return s;
+  };
+  /** Same treatment for the two non-`WallStyle` surfaces the sweep also emits. */
+  const repeatOfMat = (m: THREE.Material | undefined): [number, number] => {
+    const map = (m as THREE.MeshStandardMaterial | undefined)?.map;
+    return [
+      map && Math.abs(map.repeat.x) > 1e-6 ? map.repeat.x : 1,
+      map && Math.abs(map.repeat.y) > 1e-6 ? map.repeat.y : 1,
+    ];
+  };
+  const [tunnelRx, tunnelRy] = repeatOfMat(mats.tunnel);
+  const tunnelSu = 1 / (TUNNEL_TILE[0] * tunnelRx);
+  const tunnelSv = 1 / (TUNNEL_TILE[1] * tunnelRy);
+  const [deckRx, deckRy] = repeatOfMat(mats.deck);
+  const deckSu = 1 / (DECK_TILE[0] * deckRx);
+  const deckSv = 1 / (DECK_TILE[1] * deckRy);
+
+  /**
+   * Arc length along each wall's OWN path, per side, metres.
+   *
+   * The `u` axis cannot use the centreline's `d`: a wall 12 m outboard on the
+   * outside of a 50 m corner travels 24 % further per metre of centreline, and
+   * the texture stretched by exactly that factor. Measured before the change,
+   * `m/tile u` on the `rock` face varied from 0.48 m to 8.76 m **within a single
+   * circuit** (spread x18) — the two-sided `wob` displacement moved vertices
+   * laterally without touching their UVs, and the curvature term did the rest.
+   *
+   * Accumulated from the wall's actual foot position and never reset, so it is
+   * monotonic and continuous. A style change is a phase step in a place where
+   * the profile already steps, and the wall strips do not share vertices across
+   * a style boundary anyway.
+   */
+  const wallRun: [number, number] = [0, 0];
+  const wallFoot: Array<THREE.Vector3 | null> = [null, null];
+  const _foot = new THREE.Vector3();
+  const _profPrev = new THREE.Vector3();
+  const _prof = makeProfile();
+
+  const emitWalls = (
+    st: Station,
+    i: number,
+    d: number,
+    v2: number,
+    thisIsGap: boolean,
+  ): void => {
+    for (const side of [-1, 1] as const) {
+      const style = side < 0 ? st.wallL : st.wallR;
+      if (style === 'none' || thisIsGap) continue;
+      const si = side < 0 ? 0 : 1;
+      const wStrip = stripFor(walls, style);
+      let cache = prevWallRing.get(style);
+      if (!cache) { cache = [[], []]; prevWallRing.set(style, cache); }
+
+      const sh = side < 0 ? st.shL : st.shR;
+      const kw = kerbSuppressed(st.flags, side) ? 0 : CROSS.kerbW;
+      const lat = side * (st.hw + kw + sh + WALL_STANDOFF);
+      const baseH = surfaceHeight(lat, st.hw, sh, d, kw === 0);
+      const rise = wallRise(style, st.wallK, side);
+      const prof = buildProfile(style, rise, _prof);
+      const [su, sv] = wallScaleFor(style);
+
+      // Advance this side's own arc length by the distance its foot moved.
+      _foot.copy(st.pos).addScaledVector(st.bin, lat).addScaledVector(st.nrm, baseH);
+      const prevFoot = wallFoot[si];
+      if (prevFoot) wallRun[si] += _foot.distanceTo(prevFoot);
+      else wallFoot[si] = new THREE.Vector3();
+      wallFoot[si]!.copy(_foot);
+      const run = wallRun[si];
+
+      const ring: number[] = [];
+      // `v` is arc length UP THE WALL'S OWN SURFACE, accumulated in world space
+      // after every displacement. Using the nominal `h * rise` instead would miss
+      // the profile's lateral batter (2.4 m over 6.5 m on rock is 6.6 % of extra
+      // surface) and all of the `wob`, and the texture would compress by exactly
+      // that much wherever the face bulges.
+      let upM = 0;
+      let havePrev = false;
+      for (let k = 0; k < prof.n; k++) {
+        const ph = prof.h[k];
+        const outLat = lat + side * prof.o[k];
+        _v.copy(st.pos)
+          .addScaledVector(st.bin, outLat)
+          .addScaledVector(st.nrm, baseH + ph * rise);
+        let vDrift = 0;
+        if (style === 'rock') {
+          // Break the rock face up so it does not read as extruded card. ONE
+          // SIDED now (`0.5 + 0.5*sin`, not `sin`): the two-sided version pushed
+          // the face inboard of its own collision plane on half its stations,
+          // which is how 1.5 m of rock ended up over the asphalt.
+          const wob = 0.5 + 0.5
+            * (Math.sin(run * 0.21 + ph * 5.1) + Math.sin(run * 0.073 - ph * 2.3)) * 0.5;
+          _v.addScaledVector(st.bin, side * wob * (0.5 + ph * 1.6));
+          _v.addScaledVector(st.nrm, Math.sin(run * 0.13 + ph * 3.7) * 0.3 * ph);
+          // `makeRock`'s strata is a pure 7-band sine, which is exactly what
+          // makes a rock face read as coursed masonry. Drift the v origin slowly
+          // along the wall so the courses tilt and wander instead of ringing the
+          // whole circuit dead level. Amplitude is under one band.
+          vDrift = Math.sin(run * 0.021) * 0.9 + Math.sin(run * 0.0073 + 1.7) * 0.5;
+        }
+        if (havePrev) upM += _v.distanceTo(_profPrev);
+        _profPrev.copy(_v);
+        havePrev = true;
+        _n2.copy(st.bin).multiplyScalar(side * prof.nx[k])
+          .addScaledVector(st.nrm, prof.ny[k]).normalize();
+        const ao = (0.55 + 0.45 * clamp01(ph * 1.6)) * (1 - st.dark * 0.5);
+        ring.push(
+          wStrip.vertex(
+            _v, _n2,
+            run * su, (upM + vDrift) * sv,
+            0.5 + outLat / (st.hw * 2), v2,
+            ao, ao, ao,
+          ),
+        );
+      }
+      const a = cache[si];
+      if (a.length === prof.n && ring.length === prof.n) {
+        for (let k = 0; k < prof.n - 1; k++) {
+          // Winding follows the kerb/shoulder convention, which is the correct
+          // one: the mirrored sides need opposite index order to both face the
+          // road. These two branches used to be the other way round, which wound
+          // 100 % of every wall style against its own shading normal — see the
+          // note on `ProfilePoint`.
+          if (si === 0) wStrip.quad(a[k], ring[k], ring[k + 1], a[k + 1]);
+          else wStrip.quad(a[k], a[k + 1], ring[k + 1], ring[k]);
+        }
+      }
+      cache[si] = ring;
+
+      // instanced posts for guardrails and fences
+      if ((style === 'guardrail' || style === 'fence')
+        && i % postStride(style, low) === 0) {
+        _v.copy(st.pos).addScaledVector(st.bin, lat).addScaledVector(st.nrm, baseH);
+        _n2.copy(st.nrm);
+        _q.setFromUnitVectors(_up, _n2);
+        _sc.set(1, rise / CROSS.railH, 1);
+        postXf.push(new THREE.Matrix4().compose(_v.clone(), _q.clone(), _sc.clone()));
+      }
+    }
+  };
+
   // =========================================================================
   //  Sweep
   // =========================================================================
@@ -901,68 +1235,20 @@ export function buildTrack(
     }
 
     // ---------------- walls ----------------
-    for (const side of [-1, 1] as const) {
-      const style = side < 0 ? st.wallL : st.wallR;
-      if (style === 'none' || thisIsGap) continue;
-      const si = side < 0 ? 0 : 1;
-      const wStrip = stripFor(walls, style);
-      let cache = prevWallRing.get(style);
-      if (!cache) { cache = [[], []]; prevWallRing.set(style, cache); }
-
-      const sh = side < 0 ? st.shL : st.shR;
-      const kw = kerbSuppressed(st.flags, side) ? 0 : CROSS.kerbW;
-      const lat = side * (st.hw + kw + sh + 0.12);
-      const baseH = surfaceHeight(lat, st.hw, sh, d, kw === 0);
-      const height = wallHeight(style);
-      const prof = wallProfile(style);
-
-      const ring: number[] = [];
-      for (const pr of prof) {
-        const outLat = lat + side * pr.o;
-        _v.copy(st.pos)
-          .addScaledVector(st.bin, outLat)
-          .addScaledVector(st.nrm, baseH + pr.h * height);
-        if (style === 'rock') {
-          // Break the rock face up so it does not read as extruded card.
-          const wob = (Math.sin(d * 0.21 + pr.h * 5.1) + Math.sin(d * 0.073 - pr.h * 2.3)) * 0.5;
-          _v.addScaledVector(st.bin, side * wob * (0.5 + pr.h * 1.6));
-          _v.addScaledVector(st.nrm, Math.sin(d * 0.13 + pr.h * 3.7) * 0.3 * pr.h);
-        }
-        _n2.copy(st.bin).multiplyScalar(-side * pr.nx).addScaledVector(st.nrm, pr.ny).normalize();
-        const ao = (0.55 + 0.45 * clamp01(pr.h * 1.6)) * (1 - st.dark * 0.5);
-        ring.push(
-          wStrip.vertex(
-            _v, _n2,
-            d * 0.12, pr.h,
-            0.5 + outLat / (st.hw * 2), v2,
-            ao, ao, ao,
-          ),
-        );
-      }
-      const a = cache[si];
-      if (a.length === prof.length && ring.length === prof.length) {
-        for (let k = 0; k < prof.length - 1; k++) {
-          if (si === 0) wStrip.quad(a[k], a[k + 1], ring[k + 1], ring[k]);
-          else wStrip.quad(a[k], ring[k], ring[k + 1], a[k + 1]);
-        }
-      }
-      cache[si] = ring;
-
-      // instanced posts for guardrails and fences
-      if ((style === 'guardrail' || style === 'fence') && i % postStride(style, low) === 0) {
-        _v.copy(st.pos).addScaledVector(st.bin, lat).addScaledVector(st.nrm, baseH);
-        _n2.copy(st.nrm);
-        _q.setFromUnitVectors(_up, _n2);
-        _sc.set(1, height / CROSS.railH, 1);
-        postXf.push(new THREE.Matrix4().compose(_v.clone(), _q.clone(), _sc.clone()));
-      }
-    }
+    emitWalls(st, i, d, v2, thisIsGap);
 
     // ---------------- tunnel arch ----------------
     if (st.flags & TF.Tunnel) {
       const outer = st.hw + CROSS.kerbW + Math.max(st.shL, st.shR) + 0.6;
       const ring: number[] = [];
       const SEG = low ? 8 : 13;
+      // Arc length AROUND the bore, world metres, accumulated after the rib
+      // displacement. The bore is a half-ellipse of semi-axes `outer` (~12.6 m)
+      // and `tunnelH` (8.2 m), so `a * outer` overstates it by up to 53 % near
+      // the springing line — measured 2.60 m per tile against a 3.0 m target
+      // when the closed form was used.
+      let archS = 0;
+      let haveArch = false;
       for (let k = 0; k <= SEG; k++) {
         const a = (k / SEG) * Math.PI;
         const lat = -Math.cos(a) * outer;
@@ -972,6 +1258,9 @@ export function buildTrack(
         // ribbed lining
         const rib = 0.14 * Math.sin(d * 1.1) * Math.sin(a);
         _v.addScaledVector(_n2, rib);
+        if (haveArch) archS += _v.distanceTo(_archPrev);
+        _archPrev.copy(_v);
+        haveArch = true;
         // ---- P0d. Was `(0.2 + 0.55*sin^0.6) * (1 - dark*0.55)`: at the springing
         // line (a = 0) the lining's vertex colour was 0.20, and 0.09 once the
         // portal fade reached full — against a lining material that is already
@@ -981,11 +1270,23 @@ export function buildTrack(
         // floor is lifted and the interior fade halved so there is something for
         // the reveal lamps to fall on.
         const ao = (0.42 + 0.5 * Math.pow(Math.sin(a), 0.6)) * (1 - st.dark * 0.28);
-        ring.push(tunnel.vertex(_v, _n2, d * 0.1, k / SEG, 0.5 + lat / (st.hw * 2), v2, ao, ao, ao));
+        // World-locked, like the walls. `v` was `k / SEG` — a fraction of the
+        // arch — which put ONE texture repeat around the whole bore: measured
+        // 26.4 m per tile against 4.56 m along it, a 5.5x smear (aniso 0.181),
+        // on the surface a driver stares at for the length of a lava tube. `v` is
+        // now true world arc length AROUND the arch.
+        ring.push(tunnel.vertex(
+          _v, _n2,
+          d * tunnelSu, archS * tunnelSv,
+          0.5 + lat / (st.hw * 2), v2, ao, ao, ao,
+        ));
       }
       if (prevTunnelRing && prevTunnelRing.length === ring.length) {
         for (let k = 0; k < SEG; k++) {
-          tunnel.quad(prevTunnelRing[k], prevTunnelRing[k + 1], ring[k + 1], ring[k]);
+          // Reversed: the arch's `_n2` is authored pointing INTO the bore (which
+          // is right — it is the surface a driver sees) but the ring used to be
+          // wound so the front face pointed out of it, on 100 % of its triangles.
+          tunnel.quad(prevTunnelRing[k], ring[k], ring[k + 1], prevTunnelRing[k + 1]);
         }
       }
       prevTunnelRing = ring;
@@ -1009,7 +1310,15 @@ export function buildTrack(
             .addScaledVector(st.nrm, top - step * CROSS.deckDepth);
           _n2.copy(st.bin).multiplyScalar(side * (1 - step)).addScaledVector(st.nrm, -step).normalize();
           const ao = 0.34 + 0.5 * (1 - step);
-          ring[si].push(deck.vertex(_v, _n2, d * 0.16, step, 0.5, v2, ao, ao, ao));
+          // `v` was the bare `step` (0 / 0.35 / 1), i.e. one repeat down the whole
+          // fascia: 0.729 m per tile against 3.14 m along it, aniso 4.31. Now it
+          // is metres down the fascia, measured along the actual profile.
+          const downM = Math.hypot(inset, step * CROSS.deckDepth);
+          ring[si].push(deck.vertex(
+            _v, _n2,
+            d * deckSu, downM * deckSv,
+            0.5, v2, ao, ao, ao,
+          ));
         }
       }
       // flat soffit between the two sides
@@ -1019,8 +1328,13 @@ export function buildTrack(
           const b = ring[si];
           if (a.length === 3 && b.length === 3) {
             for (let k = 0; k < 2; k++) {
-              if (si === 0) deck.quad(a[k], a[k + 1], b[k + 1], b[k]);
-              else deck.quad(a[k], b[k], b[k + 1], a[k + 1]);
+              // Reversed, same defect as the barriers: `_n2` is authored
+              // outward-and-down, correct for the face you see from off the
+              // track, but these 8 fascia triangles per ring were wound so the
+              // front face pointed back into the bridge box. The 2 SOFFIT
+              // triangles below were always correct and are untouched.
+              if (si === 0) deck.quad(a[k], b[k], b[k + 1], a[k + 1]);
+              else deck.quad(a[k], a[k + 1], b[k + 1], b[k]);
             }
           }
         }
@@ -1038,12 +1352,56 @@ export function buildTrack(
     }
   }
 
-  // close the loop on the road ribbon
+  // ---- close the loop on the road ribbon ----------------------------------
+  /**
+   * Stitch the last ring to a DUPLICATE of ring 0 emitted at `d = L`, not to
+   * ring 0 itself.
+   *
+   * Ring 0's vertices carry `apxUv2.y = 0` and `uv.y = 0`, because that is what
+   * `d = 0` means. Stitching the final quad back to them made `apxUv2.y` fall
+   * from ~0.999 to 0 across a single 1.7 m quad, so `dFdx(vApxUv2.y)` there was
+   * three orders of magnitude larger than anywhere else on the ribbon and the
+   * asphalt's `uv.y` wrapped mid-quad — a dark band right across the
+   * start/finish line, which `RoadMaterial`'s `apxSeam` derivative test exists
+   * only to hide. The duplicate sits at exactly the same world position (the road
+   * band never touches the rumble, so `surfaceHeight` is identical at `d = 0` and
+   * `d = L`) and carries `apxUv2.y = 1` and `uv.y = L / roadTile`, which is what
+   * a closed ribbon's last ring should say.
+   *
+   * The one thing that is not bit-identical across the seam is `TF.Wet`'s noise,
+   * which is a function of `d` and is not periodic in `L`. No circuit authors
+   * `TF.Wet` across its start line; if one ever does, the seam will show as a
+   * gloss step rather than as a black band.
+   */
   if (prevRoadRing && !gapAt(n - 1) && !gapAt(0)) {
-    const first: number[] = [];
-    for (let k = 0; k <= ROAD_SPANS; k++) first.push(k);
+    const st0 = stations[0];
+    const closeRing: number[] = [];
+    for (const t of roadParam) {
+      const lat = t * st0.hw;
+      const sh = lat < 0 ? st0.shL : st0.shR;
+      const noKerb = kerbSuppressed(st0.flags, lat < 0 ? -1 : 1);
+      const h = surfaceHeight(lat, st0.hw, sh, 0, noKerb);
+      _v.copy(st0.pos).addScaledVector(st0.bin, lat).addScaledVector(st0.nrm, h);
+      const dl = surfaceSlopeLat(lat, st0.hw, sh, 0, noKerb);
+      _n2.copy(st0.nrm).addScaledVector(st0.bin, -dl).normalize();
+      shadeRoad(st0, lat, tmpCol);
+      const off = Math.abs(lat - st0.line);
+      const trackA = Math.exp(-Math.pow((off - 0.85) / 2.35, 2));
+      const trackB = Math.exp(-Math.pow((off + 0.85) / 2.35, 2));
+      const polish = clamp01(Math.max(trackA, trackB) * 1.05);
+      const wet = st0.flags & TF.Wet ? wetNoise(L, lat) : 0;
+      closeRing.push(
+        road.vertex(
+          _v, _n2,
+          lat / CROSS.roadTile, L / CROSS.roadTile,
+          0.5 + lat / (st0.hw * 2), 1.0,
+          tmpCol.r, tmpCol.g, tmpCol.b,
+          polish, wet, 0,
+        ),
+      );
+    }
     for (let k = 0; k < ROAD_SPANS; k++) {
-      road.quad(prevRoadRing[k], prevRoadRing[k + 1], first[k + 1], first[k]);
+      road.quad(prevRoadRing[k], prevRoadRing[k + 1], closeRing[k + 1], closeRing[k]);
     }
   }
 
@@ -1105,7 +1463,14 @@ export function buildTrack(
     disposables.push(postGeo);
     drawCalls++;
     vertices += postGeo.attributes.position.count * postXf.length;
-    triangles += ((postGeo.getIndex()?.count ?? 0) / 3) * postXf.length;
+    // `makePostGeometry()` returns an `ExtrudeGeometry`, which is NON-indexed, so
+    // `getIndex()` is null and `?? 0` used to score every instanced post as zero
+    // triangles. Coastal reported 69146 while actually submitting 84716 — 15570
+    // triangles of guardrail post, 18 % of the track row, invisible to the §5b
+    // budget check. Fall back to the vertex count when there is no index.
+    const postIdx = postGeo.getIndex();
+    const postTris = (postIdx ? postIdx.count : postGeo.attributes.position.count) / 3;
+    triangles += postTris * postXf.length;
   }
 
   // ---- boost pads ----------------------------------------------------------
@@ -1315,67 +1680,176 @@ export function buildTrack(
 }
 
 // ---------------------------------------------------------------------------
-// Wall profiles — (lateral offset, height fraction, normal)
+// Wall profiles
 // ---------------------------------------------------------------------------
 
-interface ProfilePoint { o: number; h: number; nx: number; ny: number }
+/**
+ * One point on a wall's cross-section.
+ *
+ * ⚠️ `nx` / `ny` USED TO BE AUTHORED HERE, AND THAT IS WHY 10 % OF EVERY
+ *    GUARDRAIL WAS BLACK.
+ *
+ * The sweep builds the shading normal as `outward * -nx + up * ny`, where
+ * `outward` is `binormal * side`. For that to agree with the surface it
+ * describes, the pair has to satisfy
+ *
+ *     (-nx, ny)  ∝  (-Δh_metres, Δo)
+ *
+ * across each segment — i.e. **`ny` must carry the same sign as `Δo`**: a face
+ * that recedes from the road as it rises looks road-and-DOWN, one that leans out
+ * looks road-and-UP. Hand-authored tables do not keep that invariant. The
+ * `guardrail` W-section had `ny: +0.65` on a corrugation whose `o` moves
+ * *toward* the road, and `.probe-tmp/road-black-audit.ts` measured
+ * **781 of 7770 facets (10 %)** with a vertex normal more than 90 degrees from
+ * their own face. Those facets are unlit from every angle and no material
+ * setting reaches them — the profile was the bug.
+ *
+ * So the normal is no longer authored. `buildProfile()` derives it from the
+ * `(o, h)` polyline, length-weighted across each vertex's two adjacent
+ * segments, which makes the defect unrepresentable.
+ *
+ * SIGN OF `o`: **metres AWAY from the road.** The sweep computes
+ * `outLat = lat + side * o` with `|lat|` growing outward, so a positive `o`
+ * batters the face back from the traffic and a negative one overhangs it. Every
+ * profile in the table used to be authored negative, which is how volcano's
+ * 6.5 m rock face — `o: -2.4` at its top, plus a two-sided `wob` worth another
+ * 2.1 m — ended up with geometry measured **1.50 m INSIDE the asphalt**, over
+ * the racing line, on a road whose collision wall is 3.07 m further out.
+ */
+interface ProfilePoint {
+  /** Metres away from the road. Never negative: negative overhangs the traffic. */
+  o: number;
+  /** Fraction of the wall's rise. */
+  h: number;
+}
 
-const PROFILES: Record<WallStyle, ProfilePoint[]> = {
+/** A profile with its derived per-vertex normals, in (outward, up). */
+interface Profile {
+  o: Float32Array;
+  h: Float32Array;
+  /** Outward component of the shading normal (negative = faces the road). */
+  nx: Float32Array;
+  ny: Float32Array;
+  n: number;
+}
+
+const PROFILE_PTS: Record<WallStyle, ProfilePoint[]> = {
   none: [],
-  // W-section beam on a short post: two corrugations so it catches highlights
+  // W-section beam on a short post: two corrugations so it catches highlights.
+  // The corrugations now protrude by being LESS set back than their neighbours,
+  // so nothing leans over the road.
   guardrail: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.2 },
-    { o: 0.0, h: 0.42, nx: 1, ny: 0 },
-    { o: -0.13, h: 0.6, nx: 0.75, ny: 0.65 },
-    { o: 0.02, h: 0.78, nx: 1, ny: 0.1 },
-    { o: -0.13, h: 0.95, nx: 0.7, ny: -0.7 },
-    { o: 0.0, h: 1.0, nx: 0.4, ny: 0.92 },
+    { o: 0.10, h: 0.0 },
+    { o: 0.00, h: 0.42 },
+    { o: 0.13, h: 0.60 },
+    { o: 0.00, h: 0.78 },
+    { o: 0.13, h: 0.95 },
+    { o: 0.20, h: 1.0 },
   ],
-  // Jersey barrier: kick, slope, vertical, capped
+  // Jersey barrier: vertical kick, the 55-degree traffic-face slope, then the
+  // near-vertical upper face. A real barrier's face leans AWAY as it rises.
   concrete: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.1 },
-    { o: -0.05, h: 0.13, nx: 0.92, ny: 0.38 },
-    { o: -0.22, h: 0.55, nx: 0.85, ny: 0.5 },
-    { o: -0.28, h: 0.92, nx: 1, ny: 0.05 },
-    { o: -0.36, h: 1.0, nx: 0.5, ny: 0.86 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.05, h: 0.13 },
+    { o: 0.22, h: 0.55 },
+    { o: 0.28, h: 0.92 },
+    { o: 0.36, h: 1.0 },
   ],
   energy: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.2 },
-    { o: -0.04, h: 0.35, nx: 1, ny: 0 },
-    { o: -0.04, h: 0.8, nx: 1, ny: 0 },
-    { o: -0.1, h: 1.0, nx: 0.6, ny: 0.8 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.04, h: 0.35 },
+    { o: 0.04, h: 0.8 },
+    { o: 0.1, h: 1.0 },
   ],
   building: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.05 },
-    { o: -0.08, h: 0.06, nx: 1, ny: 0.2 },
-    { o: -0.1, h: 0.5, nx: 1, ny: 0 },
-    { o: -0.1, h: 1.0, nx: 1, ny: 0 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.08, h: 0.06 },
+    { o: 0.1, h: 0.5 },
+    { o: 0.1, h: 1.0 },
   ],
+  // Cut rock face, battered back the way a real one is. 2.4 m of batter over the
+  // full rise: at the 3.2 m an open station now builds, that is 1.2 m of extra
+  // sky per side; at full height on a corner it is the whole 2.4 m.
   rock: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.1 },
-    { o: -0.5, h: 0.18, nx: 0.9, ny: 0.3 },
-    { o: -1.2, h: 0.45, nx: 0.95, ny: 0.15 },
-    { o: -1.6, h: 0.72, nx: 0.9, ny: 0.3 },
-    { o: -2.4, h: 1.0, nx: 0.7, ny: 0.6 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.5, h: 0.18 },
+    { o: 1.2, h: 0.45 },
+    { o: 1.6, h: 0.72 },
+    { o: 2.4, h: 1.0 },
   ],
   fence: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0 },
-    { o: 0.0, h: 0.5, nx: 1, ny: 0 },
-    { o: 0.0, h: 1.0, nx: 1, ny: 0 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.0, h: 0.5 },
+    { o: 0.0, h: 1.0 },
   ],
   wood: [
-    { o: 0.0, h: 0.0, nx: 1, ny: 0.2 },
-    { o: 0.0, h: 0.34, nx: 1, ny: 0 },
-    { o: -0.06, h: 0.62, nx: 1, ny: 0.1 },
-    { o: -0.06, h: 1.0, nx: 0.5, ny: 0.86 },
+    { o: 0.0, h: 0.0 },
+    { o: 0.0, h: 0.34 },
+    { o: 0.06, h: 0.62 },
+    { o: 0.06, h: 1.0 },
   ],
 };
 
-function wallProfile(style: WallStyle): ProfilePoint[] {
-  return PROFILES[style] ?? PROFILES.guardrail;
+/**
+ * Derive the shading normals for a profile from its own polyline.
+ *
+ * Per segment the outward normal is `(-Δh, Δo)` normalised — perpendicular to
+ * the segment, pointing at the road. Each vertex takes the length-weighted mean
+ * of its adjacent segments, so a long flat run dominates a short chamfer and the
+ * result reads as a smooth surface with a crease where the table has one.
+ *
+ * `Δh` is converted to metres with `rise` because `h` is a fraction: the same
+ * `(o, h)` table on a 0.62 m guardrail and a 6.5 m rock face describes two very
+ * differently-angled surfaces, and a fraction-space normal would be wrong on
+ * both. `rise` varies per station now, so this is rebuilt per station — it is 6
+ * points of arithmetic, not a texture bake.
+ */
+function buildProfile(style: WallStyle, rise: number, out: Profile): Profile {
+  const pts = PROFILE_PTS[style] ?? PROFILE_PTS.guardrail;
+  const n = pts.length;
+  out.n = n;
+  if (n === 0) return out;
+  for (let i = 0; i < n; i++) {
+    out.o[i] = pts[i].o;
+    out.h[i] = pts[i].h;
+    out.nx[i] = 0;
+    out.ny[i] = 0;
+  }
+  for (let k = 0; k < n - 1; k++) {
+    const dO = pts[k + 1].o - pts[k].o;
+    const dH = (pts[k + 1].h - pts[k].h) * rise;
+    // Segment normal (-dH, dO), unnormalised; its length IS the segment length,
+    // which is exactly the weight we want.
+    const sx = -dH;
+    const sy = dO;
+    out.nx[k] += sx; out.ny[k] += sy;
+    out.nx[k + 1] += sx; out.ny[k + 1] += sy;
+  }
+  for (let i = 0; i < n; i++) {
+    const len = Math.hypot(out.nx[i], out.ny[i]);
+    if (len > 1e-9) { out.nx[i] /= len; out.ny[i] /= len; }
+    else { out.nx[i] = -1; out.ny[i] = 0; }
+  }
+  return out;
 }
 
-/** Collision + visual height of each wall style, metres. */
+function makeProfile(): Profile {
+  const CAP = 8;
+  return {
+    o: new Float32Array(CAP), h: new Float32Array(CAP),
+    nx: new Float32Array(CAP), ny: new Float32Array(CAP),
+    n: 0,
+  };
+}
+
+/**
+ * Authored height of each wall style, metres above the asphalt edge.
+ *
+ * This is the CEILING, and it is what `Track.wallHit` reads to decide how high
+ * the analytic collision plane reaches. `wallRise()` is what the geometry
+ * actually gets built to, and it is never taller than this plus
+ * `WALL_FOOT_DROP`, so the collision envelope stays a superset of the mesh.
+ */
 export function wallHeight(style: WallStyle): number {
   switch (style) {
     case 'guardrail': return CROSS.railH;
@@ -1388,6 +1862,104 @@ export function wallHeight(style: WallStyle): number {
     default: return 0;
   }
 }
+
+/**
+ * The two styles tall enough to enclose the road. Everything else is a barrier
+ * you see over by design and is built to its full authored height everywhere.
+ */
+function isEnclosing(style: WallStyle): boolean {
+  return style === 'rock' || style === 'building';
+}
+
+/**
+ * Metres of wall actually built, measured from the wall's own FOOT. The single
+ * definition — the visual sweep and `buildCollisionGeometry` both call it, so
+ * the wall you see and the wall the BVH answers for cannot drift apart.
+ *
+ * ============================ WHY THIS EXISTS ============================
+ * Wall height used to be `wallHeight(style)` and nothing else: a pure function
+ * of the style, identical at every station of every circuit. Measured with
+ * `.probe-tmp/wallscale.ts`, the wall-top height above the road came out with a
+ * max/min spread of **x1.00** for every style on every circuit — constant to
+ * three decimal places. That is the shape of the bug the owner is looking at.
+ *
+ * There is no authored height to honour: `SplineNodeSpec` carries `wallL` /
+ * `wallR` (the style) and nothing else, so a designer can say "rock face here"
+ * but not "and keep it low along the straight". What IS authored, and what this
+ * reads, is the corner: `curvature > 0` means the centre of curvature lies to
+ * the driver's RIGHT (verified against the geometry rather than the doc comment
+ * — `.probe-tmp/cornersign.ts` agrees with a three-sample circumcentre fit on
+ * 1043 of 1046 corner stations across the six circuits, the three misses being
+ * inflections where |k| ~ 0). So `side * curvature < 0` is the OUTSIDE of the
+ * corner, which is where a tall blind wall belongs, and `> 0` is the apex, where
+ * one is just a wall in the driver's face.
+ *
+ * `smoothstep` rather than a linear ramp so the wall top has no crease, and the
+ * result is a continuous function of arc length because `curvature` is.
+ */
+export function wallRise(style: WallStyle, curvature: number, side: -1 | 1): number {
+  const ceiling = wallHeight(style);
+  if (ceiling <= 0) return 0;
+  const aboveEdge = isEnclosing(style)
+    ? WALL_OPEN_H + (Math.max(WALL_OPEN_H, ceiling) - WALL_OPEN_H)
+      * smoothstep(clamp01(-side * curvature / WALL_TALL_CURVATURE))
+    : ceiling;
+  return aboveEdge + WALL_FOOT_DROP;
+}
+
+/**
+ * World size of one texture tile on a wall, metres — `(along, up)`.
+ *
+ * ================ WHY THIS IS IN METRES AND NOT IN REPEATS ================
+ * The wall UV used to be `(d * 0.12, pr.h)`. The `v` axis was a **height
+ * fraction**, so one texture repeat covered the whole wall however tall it was,
+ * and the world size of a texel was therefore a function of the wall's height.
+ * Measured across the six circuits with `.probe-tmp/wallscale.ts`, metres per
+ * texture repeat in `v`: `wood` 1.00, `concrete` 1.03, `guardrail` 1.04,
+ * `energy` 1.16, `fence` 2.08, `building` **5.63**, `rock` **7.17**, the tunnel
+ * lining **26.4**. The `u` axis was world-proportional but ignored each
+ * material's own `repeat`, landing anywhere between 1.39 m and 9.66 m per tile.
+ * Net texel aspect ratio ranged from 0.18 to 8.29 — square texels nowhere.
+ *
+ * What the owner is looking at: `makeBrick()` authors 4 stretchers by 8 courses
+ * per tile, so at 3.47 m x 5.63 m per tile a brick came out **0.868 m x
+ * 0.703 m** against a real 0.225 x 0.075 — 3.9x too wide, 9.4x too tall. On
+ * volcano it is `makeRock()`, which authors 6 voronoi fracture cells per axis
+ * and a 7-band `sin` strata field: at 5.77 m x 7.17 m that is a **0.96 m** block
+ * and a **1.02 m** course. Regular courses a metre across, warm-tinted by the
+ * generator's iron staining, read as red brick. They are the same defect.
+ *
+ * So tile at a fixed world size, the way `makeFacade()` in `src/world/Props.ts`
+ * does it (`tileMetres`, recipes set `uvScale = 1 / tileMetres`). Each entry
+ * below is the generator's own authored feature count times the real-world size
+ * of that feature — derived, not tuned:
+ *
+ *  | style       | generator            | content per tile      | real feature      |
+ *  |-------------|----------------------|-----------------------|-------------------|
+ *  | building    | `makeBrick`          | 4 stretchers x 8 crs  | 0.225 x 0.075 m   |
+ *  | rock        | `makeRock`           | 6 fracture cells, 7 strata | 0.70 / 0.43 m |
+ *  | concrete    | `makeConcrete`       | 3 macro stain cells   | 0.67 m            |
+ *  | guardrail   | `makeMetalPanel`     | 3 x 3 riveted plates  | 0.60 m plate      |
+ *  | wood        | `makeWoodPlank`      | 6 boards along v      | 0.15 m board      |
+ *  | fence       | `chainLink`          | 12 diamonds per axis  | 0.075 m mesh (3") |
+ *  | energy      | `emissiveGlow`       | no map at all         | — (kept locked)   |
+ *
+ * `none` never reaches the sweep but is present so the lookup is total.
+ */
+export const WALL_TILE: Record<WallStyle, readonly [number, number]> = {
+  none: [1, 1],
+  guardrail: [1.8, 1.8],
+  concrete: [2.0, 2.0],
+  energy: [2.0, 2.0],
+  building: [0.9, 0.6],
+  rock: [4.2, 3.0],
+  fence: [0.9, 0.9],
+  wood: [2.4, 0.9],
+};
+
+/** Tunnel lining and bridge fascia use the rock / concrete sets respectively. */
+export const TUNNEL_TILE = WALL_TILE.rock;
+export const DECK_TILE = WALL_TILE.concrete;
 
 function postStride(style: WallStyle, low: boolean): number {
   const base = style === 'fence' ? 5 : 3;
@@ -1447,6 +2019,26 @@ function buildCollisionGeometry(spline: TrackSpline, stations: Station[]): THREE
   let firstRing: number[] | null = null;
   const cache = makeAttribs();
 
+  /**
+   * `Station.wallK` at an arbitrary arc length, linearly interpolated. The
+   * collision mesh walks a uniform 3 m grid rather than the visual ring plan, so
+   * it has to look the smoothed curvature up rather than read it off a station —
+   * and it must be the SAME number, or the BVH wall is a different height from
+   * the one on screen.
+   */
+  let kCursor = 0;
+  const wallKAt = (dd: number): number => {
+    const m = stations.length;
+    if (m === 0) return 0;
+    if (kCursor >= m) kCursor = 0;
+    while (kCursor > 0 && stations[kCursor].d > dd) kCursor--;
+    while (kCursor < m - 1 && stations[kCursor + 1].d <= dd) kCursor++;
+    const a = stations[kCursor];
+    const b = stations[Math.min(m - 1, kCursor + 1)];
+    const w = Math.max(1e-4, b.d - a.d);
+    return a.wallK + (b.wallK - a.wallK) * clamp01((dd - a.d) / w);
+  };
+
   for (let i = 0; i <= N; i++) {
     const d = (i / N) * L;
     spline.sampleAtDistance(d % L, _s);
@@ -1496,9 +2088,14 @@ function buildCollisionGeometry(spline: TrackSpline, stations: Station[]): THREE
         if (style === 'none') continue;
         const sh = side < 0 ? cache.shoulderL : cache.shoulderR;
         const kw = kerbSuppressed(cache.flags, side) ? 0 : CROSS.kerbW;
-        const lat = side * (hw + kw + sh + 0.12);
+        const lat = side * (hw + kw + sh + WALL_STANDOFF);
         const base = surfaceHeight(lat, hw, sh, _s.distance, kw === 0);
-        const hgt = Math.min(3.2, wallHeight(style));
+        // Same `wallRise()` the visual sweep uses, off the same smoothed
+        // curvature, so the BVH wall and the wall you can see are the same
+        // object. It used to be `Math.min(3.2, wallHeight(style))`, which on a
+        // 6.5 m rock face baked a 3.2 m collision quad under a 6.5 m mesh;
+        // `WALL_OPEN_H` is that same 3.2 m promoted to the visual contract.
+        const hgt = wallRise(style, wallKAt(_s.distance), side);
         _v.copy(_s.position).addScaledVector(_s.binormal, lat).addScaledVector(_s.normal, base);
         const a = addV(_v);
         _v.addScaledVector(_s.normal, hgt);

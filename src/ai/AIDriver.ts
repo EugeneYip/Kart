@@ -29,7 +29,7 @@
  */
 
 import * as THREE from 'three';
-import type { KartState } from '@/core/Types';
+import type { KartState, WallHit } from '@/core/Types';
 import { DriftStage, ItemType, SurfaceType } from '@/core/Types';
 import { clamp, clamp01, damp, lerp, sign, smoothstep } from '@/core/MathUtils';
 import {
@@ -65,8 +65,61 @@ export const STEER = {
   lookaheadMax: 28,
   /** Overall pure-pursuit gain. */
   ppGain: 1.15,
-  /** Yaw authority estimate, rad/s at full lock, low speed. */
+  /**
+   * Yaw authority estimate, rad/s at full lock, low speed. Fallback only, used
+   * when `setChassis()` has never been called and we do not know the kart's own
+   * `turnRate`. See `authority*` below.
+   */
   yawAuthority: 2.6,
+  /**
+   * ⚠️ THE STEERING MODEL — this is where "the AI repeatedly crashes into walls
+   * at turns" came from, and it was not a skill setting.
+   *
+   * Pure pursuit computes a required path curvature κ and converts it to a steer
+   * command by DIVIDING by the chassis' yaw authority at the current speed. Get
+   * that divisor wrong and every steer command is wrong by the same ratio — the
+   * loop cannot notice, because it has no other estimate to compare against.
+   *
+   * The old model was `2.6 · (0.55 + 0.45/(1 + 0.04 v))`: a constant 2.6 for
+   * every kart on the grid, with a gentle `1/(1+kv)` falloff that bottomed out at
+   * 55 % of full authority. The physics uses a SQUARE falloff and scales by the
+   * kart's own `turnRate` (2.10–3.06 rad/s across the roster). Measured
+   * open-loop, full lock, on the real `PhysicsWorld`
+   * (`.probe-tmp/yawcurve.ts`, and `yawlin.ts` confirms yaw is linear in steer to
+   * within 0.4 %, so the full-lock value IS the gain the divisor wants):
+   *
+   *     v (m/s)      5     10     15     20     25     28     32     36
+   *     nova      1.564  1.380  1.245  1.143  1.065  1.031  1.014  1.002
+   *     blitz     1.453  1.252  1.106  0.998  0.917  0.878  0.845  0.833
+   *     old est.  2.405  2.266  2.161  2.080  2.015  1.982  1.943  1.910
+   *     ratio     1.5x   1.6x   1.7x   1.8x   1.9x   1.9-2.3x     1.9-2.3x
+   *
+   * So at racing speed the AI believed it had roughly TWICE the yaw it has, and
+   * commanded roughly half the steer a corner needed. The only thing left to make
+   * up the difference was the PD term on lateral error, at `kP = 0.062` per
+   * metre — which closes the loop only once the kart is ~4–9 m off its line. That
+   * is precisely what the field did: measured, 100 % of AI wall contacts happened
+   * with |lateral error| > 4 m, mean 8.8 m, while not drifting, with no mistake in
+   * flight and no avoidance bias. The authored racing line keeps 2.78–6.00 m from
+   * every barrier on all three circuits (`.probe-tmp/lineclear.ts`), so a kart
+   * 8.8 m off the line is in the wall by construction.
+   *
+   * `authority = turnRate · (floor + gain/(1 + (v/ref)²)) · safety`, fitted to the
+   * table above: within 0.01 of `nova` from 5 to 36 m/s. `safety` is deliberately
+   * BELOW 1 so the residual error is on the side of commanding slightly too much
+   * steer — the deadband and the PD term trim an over-command harmlessly, whereas
+   * an under-command is the bug above.
+   */
+  authorityFloor: 0.34,
+  authorityGain: 0.28,
+  authorityRef: 14,
+  authoritySafety: 0.95,
+  /**
+   * A committed drift buys extra yaw (`KartTuning.driftTurnBonus`, 0.28–0.62), so
+   * the divisor is larger while sliding. Modelled as a flat bonus rather than read
+   * per-kart: it only has to stop the controller sawing at the drift transition.
+   */
+  driftAuthorityBonus: 1.3,
   /** Speed used when the kart is nearly stationary, m/s. */
   minPursuitSpeed: 6,
   /** PD on lateral error: proportional term, steer units per metre. */
@@ -146,6 +199,35 @@ export const SPEED = {
   cornerHandling: 0.07,
   cornerTraction: 0.04,
   cornerMin: 0.93,
+  /**
+   * ⚠️ GRIP IS NOT THE LIMIT — STEERING IS.
+   *
+   * `RacingLine` builds its speed profile from `v = sqrt(latAccel/κ)` with
+   * `latAccel = 30 m/s²`. The tyre model would allow that (`PHYS.latAccel` is 55),
+   * but the chassis cannot ASK for it: yaw authority falls off with speed, so the
+   * lateral acceleration actually available is `v · yaw(v)`, measured
+   * (`.probe-tmp/yawcurve.ts`):
+   *
+   *     v (m/s)      5     10     15     20     25     28     32     36
+   *     nova       7.8   13.8   18.7   22.9   26.6   28.9   32.4   36.1
+   *     blitz      7.3   12.5   16.6   20.0   22.9   24.6   27.0   29.9
+   *
+   * So 30 m/s² is reachable only above ~28.5 m/s on `nova` and not at all below
+   * 36 m/s on `blitz`. Every corner slower than that, the line asks for a speed
+   * the chassis physically cannot turn at — the kart arrives at full lock and
+   * runs wide, which is the residual after the steering model was fixed.
+   *
+   * The cap is applied PER DRIVER rather than by lowering the line's `latAccel`,
+   * for two reasons: the line is shared by the whole grid, and solving it against
+   * each kart's own `turnRate` makes cornering ability track the roster's handling
+   * spread (2.10–3.06 rad/s, a 46 % range) instead of `cornerAbility`'s 7 %. That
+   * ADDS authored differentiation — "Blitz corners like a fridge" becomes true in
+   * the numbers — rather than flattening the field.
+   *
+   * `v ≤ yaw(v)/κ` is monotone on both sides, so three fixed-point steps converge.
+   */
+  yawLimitMargin: 0.97,
+  yawLimitIterations: 3,
   /**
    * How much of the roster's authored top-speed spread the AI drives to.
    *
@@ -260,6 +342,64 @@ export const AVOID = {
   rearRange: 16,
 } as const;
 
+/**
+ * WALL PROXIMITY — the term that was missing entirely.
+ *
+ * Nothing in the AI ever asked the track where the barriers are. There was no
+ * steering term that pushed away from a wall, and no term that survived the
+ * bounce, so a kart that arrived at a corner wide simply kept arriving at that
+ * corner wide: measured on `neonMetropolis`, one kart made 73 wall contacts in a
+ * 3-lap race, 17 of them inside the same 40 m of road.
+ *
+ * `ITrackService.collideWalls(position, radius)` is a plane test in the road's own
+ * frame — no mesh, no raycast (see `Track.collideWalls`) — so two probes per kart
+ * per tick is affordable for eleven karts. Both probes are needed:
+ *
+ *   • the LEAD probe looks `leadSeconds` of travel up the road and steers away
+ *     before the contact happens, which is what stops the corner-entry hit;
+ *   • the NOW probe reports contact that is already happening, which is what
+ *     survives the bounce — without it the lead probe goes quiet the instant the
+ *     kart is against the barrier (the wall is no longer *ahead* of it) and the
+ *     controller goes straight back to aiming at a line on the far side of it.
+ */
+export const WALL = {
+  /** Seconds of travel to the lead probe. */
+  leadSeconds: 0.42,
+  leadMin: 3.5,
+  leadMax: 14,
+  /** Added to the chassis half-width for the probe sphere, metres. */
+  leadMargin: 1.5,
+  /** …and for the contact-now probe. Small: this one asks "am I touching?". */
+  nowMargin: 0.22,
+  /** Lateral push away from a lead-probe wall at full depth, metres. */
+  leadStrength: 3.4,
+  /** …and from a wall we are already against. Deliberately stronger. */
+  nowStrength: 4.6,
+  /** Cap on the wall term alone, metres. Outranks the avoidance cap. */
+  maxBias: 5.5,
+  /** Half-life of the wall bias, seconds. Short — this is a reflex. */
+  halfLife: 0.1,
+  /**
+   * Speed the target is scaled to while a wall is dead ahead and we are pointed
+   * at it. A kart that is about to understeer into a barrier should lift; this is
+   * the smallest amount of "slow down" that breaks the limit cycle without
+   * touching the pace ladder, and it only fires when a barrier is actually inside
+   * the lead probe.
+   */
+  speedCut: 0.82,
+  /**
+   * Height above the road plane at which the lead probe is placed, metres. A kart
+   * sits ~0.45 m up; `Track.collideWalls` gates on the query being inside the
+   * barrier's vertical band, so this has to be a road-relative height, not the
+   * kart's raw world y projected forwards.
+   */
+  probeHeight: 0.45,
+  /** `-forward·normal` above which we count as pointed INTO the wall. */
+  noseInDot: 0.12,
+  /** Continuous contact longer than this counts as pinned — see RECOVER. */
+  pinSeconds: 0.9,
+} as const;
+
 export const RECOVER = {
   stuckSpeed: 1.6,
   stuckSeconds: 1.5,
@@ -272,6 +412,42 @@ export const RECOVER = {
   /** Exit conditions. */
   exitAlignment: 0.55,
   exitSpeed: 4.0,
+  /**
+   * ARC-PROGRESS STUCK TEST — the honest one.
+   *
+   * `stuckSpeed` alone cannot see the failure the owner reported. A kart grinding
+   * along a barrier, or shuttling in and out of the same corner, has plenty of
+   * speed: measured over 260 s × 11 karts × 3 circuits, `stuckTimer` never once
+   * reached `stuckSeconds` while two karts on `volcanoRush` completed ZERO laps in
+   * the whole race and one on `neonMetropolis` spent 29 s off the road. Speed is
+   * not progress. Progress is progress.
+   *
+   * So: unwrap arc length along the racing line and require real metres of it.
+   * `arcWindow` seconds of travel must yield at least `arcMetres`, which at the
+   * slowest authored pace (~24 m/s) is under 4 % of what a driving kart covers —
+   * it can only fire on something genuinely pathological.
+   */
+  arcWindow: 2.0,
+  arcMetres: 8.0,
+  /** Seconds of clean racing needed to earn full `composure`. */
+  composureSeconds: 6.0,
+  /** Samples kept over `arcWindow`. Ring buffer, allocated once. */
+  arcSamples: 16,
+  /**
+   * Shortest a recovery may last. Without it the machine flaps: measured on
+   * `volcanoRush`, one kart entered `realign`, passed the exit test on the very
+   * next tick (it was pointing forwards at 28 m/s, which is all the exit asks
+   * for), returned to `race`, and drove off the road again — 76 times in one race.
+   * Recovery has to be allowed to actually do something before it is graded.
+   */
+  minSeconds: 0.55,
+  /**
+   * Consecutive stuck entries before the driver gives up and asks to be
+   * respawned. Decays at `streakDecay` per second, so three in a row means three
+   * inside ~15 s, not three in a race.
+   */
+  streakForRespawn: 3,
+  streakDecay: 0.2,
 } as const;
 
 export const ITEMS = {
@@ -334,10 +510,18 @@ export interface ChassisFacts {
   handling: number;
   /** 0..1 traction stat. */
   traction: number;
+  /**
+   * `tuning.turnRate` — chassis yaw rate at full lock, low speed, rad/s. The
+   * roster spans 2.10–3.06, and the steering model divides by it, so a driver
+   * that does not know its own value steers a 2.10 kart as if it were a 3.06 one.
+   */
+  turnRate: number;
+  /** `tuning.halfExtents.x` — chassis half-width, metres. Sizes the wall probe. */
+  radius: number;
 }
 
 export function defaultChassis(): ChassisFacts {
-  return { maxSpeed: 28.4, handling: 0.55, traction: 0.55 };
+  return { maxSpeed: 28.4, handling: 0.55, traction: 0.55, turnRate: 2.6, radius: 0.72 };
 }
 
 /** A thing on the road the AI should not hit. */
@@ -362,9 +546,25 @@ export function createHazard(): AIHazard {
   };
 }
 
+/**
+ * The one thing the AI needs from the track service: a swept-sphere query against
+ * the barriers. Declared structurally rather than as `ITrackService` so a harness
+ * can hand in a stub, and so this file keeps compiling whatever else the track
+ * service grows.
+ */
+export interface WallProbe {
+  collideWalls(position: THREE.Vector3, radius: number): WallHit;
+}
+
 /** Everything a driver may read about the world, owned by AIManager. */
 export interface DriverWorld {
   line: RacingLine;
+  /**
+   * Barrier queries. Optional so an existing harness still compiles; when it is
+   * absent the wall-avoidance reflex is simply off, and `AIManager` always
+   * supplies it in the real game.
+   */
+  walls?: WallProbe | null;
   karts: readonly KartState[];
   hazards: readonly AIHazard[];
   hazardCount: number;
@@ -422,6 +622,14 @@ export interface AIDebugState {
   blocking: number;
   /** The cruise ceiling this driver works to, m/s. */
   speedCap: number;
+  /** Metres of lateral push currently coming from the wall reflex. */
+  wallBias: number;
+  /** Deepest barrier penetration the reflex saw this tick, metres. */
+  wallDepth: number;
+  /** Seconds of continuous barrier contact. */
+  wallTouch: number;
+  /** Times the honest stuck test has fired for this driver. */
+  stuckEpisodes: number;
 }
 
 /** The subset of the item system the AI touches. Resolved at runtime. */
@@ -452,6 +660,7 @@ const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _rel = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
+const _wallPt = new THREE.Vector3();
 
 export class AIDriver {
   readonly kartId: number;
@@ -482,6 +691,11 @@ export class AIDriver {
   private speedCap: number = SPEED.fieldReference;
   /** Median top speed of the grid, m/s. Set by AIManager. */
   private fieldRef: number = SPEED.fieldReference;
+  /** Cached `chassis.turnRate × STEER.authoritySafety`. */
+  private yawBase: number = STEER.yawAuthority * STEER.authoritySafety;
+  /** Cached wall probe radii, metres. */
+  private wallLeadRadius = 0.72 + WALL.leadMargin;
+  private wallNowRadius = 0.72 + WALL.nowMargin;
 
   // ---- reusable query objects -------------------------------------------
   private readonly near: NearestResult = createNearestResult();
@@ -490,6 +704,8 @@ export class AIDriver {
   private readonly targetSample: LineSample = createLineSample();
   private readonly farWindow: CurvatureWindow = createCurvatureWindow();
   private readonly nearWindow: CurvatureWindow = createCurvatureWindow();
+  /** Own sample object for the wall lead probe — see `updateWallAvoid`. */
+  private readonly wallSample: LineSample = createLineSample();
   private readonly lookaheadPoint = new THREE.Vector3();
 
   // ---- steering state ----------------------------------------------------
@@ -510,6 +726,14 @@ export class AIDriver {
 
   // ---- avoidance ---------------------------------------------------------
   private avoidBias = 0;
+  /** Lateral push away from a barrier, metres. See `WALL`. */
+  private wallBias = 0;
+  /** Multiplier the wall reflex is currently applying to the target speed. */
+  private wallSpeedScale = 1;
+  /** Seconds of continuous barrier contact. */
+  private wallTouch = 0;
+  /** Deepest barrier penetration seen this tick, metres. Debug only. */
+  private wallDepth = 0;
   private blockBias = 0;
   private weavePhase = 0;
   /** Seconds spent actively covering the kart behind. */
@@ -538,6 +762,25 @@ export class AIDriver {
   private recoverTotal = 0;
   private offTrackTotal = 0;
   private backwardsTotal = 0;
+  /** Lifetime recovery seconds — `recoverTotal` is only the current episode. */
+  private recoverLifetime = 0;
+  /** Ring buffer of unwrapped arc length, metres. See `RECOVER.arcWindow`. */
+  private readonly arcRing = new Float64Array(RECOVER.arcSamples);
+  private arcRingFilled = 0;
+  private arcRingHead = 0;
+  private arcSampleTimer = 0;
+  /** Unwrapped distance travelled along the line since `reset()`, metres. */
+  private arcTravelled = 0;
+  private arcPrev = -1;
+  /** Seconds of "no meaningful arc progress". The honest stuck signal. */
+  private noProgressTimer = 0;
+  /** Lifetime counters, for probes and the debug overlay. */
+  private stuckEpisodes = 0;
+  private wallContacts = 0;
+  /** Decaying count of recent stuck entries. See `RECOVER.streakForRespawn`. */
+  private stuckStreak = 0;
+  /** Seconds of uninterrupted ordinary racing. Feeds `composure`. */
+  private settledFor = 0;
 
   // ---- items -------------------------------------------------------------
   private items: ItemAccess = NULL_ITEMS;
@@ -599,6 +842,10 @@ export class AIDriver {
       mistakes: 0,
       blocking: 0,
       speedCap: SPEED.fieldReference,
+      wallBias: 0,
+      wallDepth: 0,
+      wallTouch: 0,
+      stuckEpisodes: 0,
     };
     // After `debug` exists — it writes into it.
     this.applyChassis();
@@ -646,6 +893,8 @@ export class AIDriver {
     this.chassis.maxSpeed = facts.maxSpeed > 1 ? facts.maxSpeed : 28.4;
     this.chassis.handling = clamp01(facts.handling);
     this.chassis.traction = clamp01(facts.traction);
+    this.chassis.turnRate = facts.turnRate > 0.5 ? facts.turnRate : STEER.yawAuthority;
+    this.chassis.radius = facts.radius > 0.2 ? facts.radius : 0.72;
     this.applyChassis();
   }
 
@@ -670,6 +919,21 @@ export class AIDriver {
     const own = this.chassis.maxSpeed;
     this.speedCap = Math.min(own, lerp(this.fieldRef, own, SPEED.chassisWeight));
     this.debug.speedCap = this.speedCap;
+    this.yawBase = this.chassis.turnRate * STEER.authoritySafety;
+    this.wallLeadRadius = this.chassis.radius + WALL.leadMargin;
+    this.wallNowRadius = this.chassis.radius + WALL.nowMargin;
+  }
+
+  /**
+   * Yaw rate this chassis can actually produce at `speed`, rad/s. Fitted to an
+   * open-loop measurement of the real `PhysicsWorld` — see `STEER.authority*`,
+   * which is also where the bug this replaced is written up.
+   */
+  private yawAuthorityAt(speed: number, drifting: boolean): number {
+    const r = speed / STEER.authorityRef;
+    const g = STEER.authorityFloor + STEER.authorityGain / (1 + r * r);
+    const a = this.yawBase * g;
+    return drifting ? a * STEER.driftAuthorityBonus : a;
   }
 
   /** The cruise ceiling this driver is working to, m/s. */
@@ -719,6 +983,58 @@ export class AIDriver {
   get recoverySeconds(): number {
     return this.recoverTotal;
   }
+  /** Total recovery seconds over the whole race, not just this episode. */
+  get recoveryLifetime(): number {
+    return this.recoverLifetime;
+  }
+  /** Times the arc-progress / wall-pin tests fired. The "repeatedly" counter. */
+  get stuckEpisodeCount(): number {
+    return this.stuckEpisodes;
+  }
+  /**
+   * True when recovery has been tried and tried and is not working — the caller
+   * should respawn this kart. The old gate was `recoverySeconds > 5.5`, which a
+   * driver that keeps *exiting* recovery successfully and then re-entering it two
+   * seconds later never reaches: measured, a kart that spent 146 s of a 260 s race
+   * making no progress never once asked for a respawn, because no single recovery
+   * episode lasted 5.5 s.
+   */
+  get wantsRespawn(): boolean {
+    return (
+      this.stuckStreak >= RECOVER.streakForRespawn ||
+      this.recoverTotal > RECOVER.giveUpSeconds
+    );
+  }
+  /**
+   * 0..1 — how well this driver is coping right now. 1 means it has strung
+   * `RECOVER.composureSeconds` of ordinary racing together; 0 means it is in
+   * recovery, pinned to a barrier, deep off the road, or has just been stuck.
+   *
+   * `Rubberband` reads this so it stops pushing a driver that is already over its
+   * limit. Without it, being lost maximises risk, and risk keeps you lost — see the
+   * COMPOSURE note in `Rubberband.ts`.
+   */
+  get composure(): number {
+    if (this.mode !== 'race' && this.mode !== 'grid') return 0;
+    return clamp01(this.settledFor / RECOVER.composureSeconds);
+  }
+
+  /** Cleared by the caller once it has honoured `wantsRespawn`. */
+  clearRespawnRequest(): void {
+    this.stuckStreak = 0;
+    this.recoverTotal = 0;
+    this.noProgressTimer = 0;
+    this.arcRingFilled = 0;
+    this.wallTouch = 0;
+  }
+  /** Barrier contacts the wall reflex has seen. */
+  get wallContactCount(): number {
+    return this.wallContacts;
+  }
+  /** Seconds of continuous barrier contact right now. */
+  get wallTouchSeconds(): number {
+    return this.wallTouch;
+  }
   get currentMode(): DriveMode {
     return this.mode;
   }
@@ -733,6 +1049,21 @@ export class AIDriver {
     this.steerSmooth = 0;
     this.speedIntegral = 0;
     this.avoidBias = 0;
+    this.wallBias = 0;
+    this.wallSpeedScale = 1;
+    this.wallTouch = 0;
+    this.wallDepth = 0;
+    this.wallContacts = 0;
+    this.arcRingFilled = 0;
+    this.arcRingHead = 0;
+    this.arcSampleTimer = 0;
+    this.arcTravelled = 0;
+    this.arcPrev = -1;
+    this.noProgressTimer = 0;
+    this.stuckEpisodes = 0;
+    this.stuckStreak = 0;
+    this.settledFor = 0;
+    this.recoverLifetime = 0;
     this.blockBias = 0;
     this.blockTime = 0;
     this.blockRest = 0;
@@ -833,6 +1164,14 @@ export class AIDriver {
       this.personality,
     );
 
+    // --- barriers, BEFORE recovery -----------------------------------------
+    // `updateRecovery` reads `wallTouch` as one of its trapped tests, and
+    // `driveRecovery` reads `wallBias` to steer off whatever it is leaning on. If
+    // this ran after the recovery branch (which returns early) both would freeze
+    // at their last racing values for the whole recovery — i.e. the kart would try
+    // to drive out of a wall it no longer believes is there.
+    this.updateWallAvoid(dt, world, st, absSpeed);
+
     // --- recovery state machine (may take over completely) ----------------
     this.updateRecovery(dt, world, st, absSpeed);
     if (this.mode === 'reverse' || this.mode === 'realign') {
@@ -860,6 +1199,12 @@ export class AIDriver {
     const room = Math.max(0.8, this.aheadSample.halfWidth - 1.35);
     const totalLat = clamp(this.aheadSample.lateral + bias, -room, room);
     bias = totalLat - this.aheadSample.lateral;
+    // The wall term is added AFTER the road-width clamp on purpose. Everything
+    // above is a preference and must stay on the road; this one is a barrier that
+    // physically exists, and clamping a push away from it against the same road
+    // width that put us next to it is how you get a kart that leans on a rail for
+    // a whole lap.
+    bias += this.wallBias;
     this.lastLineLateral = this.aheadSample.lateral;
 
     this.lookaheadPoint
@@ -877,7 +1222,7 @@ export class AIDriver {
     // rate into a steer command using the physics' speed-dependent authority.
     const kappa = (2 * Math.sin(alpha)) / L;
     const vRef = Math.max(STEER.minPursuitSpeed, absSpeed);
-    const authority = STEER.yawAuthority * (0.55 + 0.45 / (1 + absSpeed * 0.04));
+    const authority = this.yawAuthorityAt(absSpeed, st.drifting);
     let steerRaw = (kappa * vRef) / Math.max(0.4, authority);
     steerRaw *= STEER.ppGain;
 
@@ -1119,6 +1464,84 @@ export class AIDriver {
   }
 
   // -------------------------------------------------------------------------
+  //  Tactics — barriers
+  // -------------------------------------------------------------------------
+
+  /**
+   * The wall reflex. Two swept-sphere queries: one where we will be in
+   * `WALL.leadSeconds`, one where we are now. See the `WALL` block for why both.
+   *
+   * Zero allocation: `_wallPt` is module scope, and `collideWalls` writes into the
+   * track's own shared result object (which is why every field is read out before
+   * the second query — the first result is invalidated by it).
+   */
+  private updateWallAvoid(
+    dt: number,
+    world: DriverWorld,
+    st: KartState,
+    absSpeed: number,
+  ): void {
+    const probe = world.walls;
+    this.wallSpeedScale = 1;
+    this.wallDepth = 0;
+    if (!probe) {
+      this.wallBias = damp(this.wallBias, 0, WALL.halfLife, dt);
+      this.wallTouch = 0;
+      return;
+    }
+
+    let target = 0;
+    let noseIn = 0;
+
+    // --- lead probe: the wall we are about to arrive at --------------------
+    //
+    // Projecting `lead` metres straight along `_fwd` walks off the road plane on a
+    // gradient — 12 m on a 10 % descent is 1.2 m of vertical error, and
+    // `Track.collideWalls` rejects any query more than 0.55 m below the barrier
+    // base or 0.7 m above its top, so on the hilly circuit the probe was silently
+    // missing every guardrail it was meant to see. Take the lateral position from
+    // the kart's own heading and the HEIGHT from the line at that arc distance.
+    const lead = clamp(absSpeed * WALL.leadSeconds, WALL.leadMin, WALL.leadMax);
+    world.line.sampleAhead(this.near.t, lead, this.wallSample, this.variant);
+    _wallPt.copy(st.position).addScaledVector(_fwd, lead);
+    _tmp.subVectors(_wallPt, this.wallSample.position);
+    const vertical = _tmp.dot(this.wallSample.normal);
+    _wallPt.addScaledVector(this.wallSample.normal, WALL.probeHeight - vertical);
+    const ahead = probe.collideWalls(_wallPt, this.wallLeadRadius);
+    if (ahead.hit && ahead.depth > 1e-4) {
+      const depth = ahead.depth;
+      // `normal` points OUT of the wall, so it is already the escape direction.
+      const side = ahead.normal.dot(_right);
+      noseIn = -ahead.normal.dot(_fwd);
+      this.wallDepth = depth;
+      const w = clamp01(depth / WALL.leadMargin);
+      target += sign(side) * w * WALL.leadStrength;
+      if (noseIn > WALL.noseInDot) {
+        // Pointed at it as well as near it: lift.
+        this.wallSpeedScale = lerp(1, WALL.speedCut, clamp01(noseIn * 2) * w);
+      }
+    }
+
+    // --- contact-now probe: the term that survives the bounce -------------
+    _wallPt.copy(st.position);
+    const now = probe.collideWalls(_wallPt, this.wallNowRadius);
+    if (now.hit && now.depth > 1e-4) {
+      const depth = now.depth;
+      const side = now.normal.dot(_right);
+      if (depth > this.wallDepth) this.wallDepth = depth;
+      const w = clamp01(0.45 + depth / WALL.nowMargin);
+      target += sign(side) * w * WALL.nowStrength;
+      if (this.wallTouch === 0) this.wallContacts++;
+      this.wallTouch += dt;
+    } else {
+      this.wallTouch = 0;
+    }
+
+    target = clamp(target, -WALL.maxBias, WALL.maxBias);
+    this.wallBias = damp(this.wallBias, target, WALL.halfLife, dt);
+  }
+
+  // -------------------------------------------------------------------------
   //  Speed
   // -------------------------------------------------------------------------
 
@@ -1161,6 +1584,46 @@ export class AIDriver {
     const s = st.surface;
     if (s !== SurfaceType.Road && s !== SurfaceType.Boost && s !== SurfaceType.Metal) {
       v *= SPEED.offRoadTargetMul;
+    }
+
+    // A barrier inside the lead probe, with the nose pointed at it. Lifting here
+    // is what turns "hit the same corner every lap" into "run that corner wide and
+    // lose two tenths", which is the behaviour the weakest drivers should show.
+    //
+    // It also has to license the BRAKE. `lineLimited` exists so a kart does not
+    // throw a mushroom away braking on a straight, but its test is "is the racing
+    // line slower than my cruise cap", and a kart carried over its cap by a hill or
+    // a boost fails that test and has `c.brake` forced to zero — so on a fast
+    // descent it could not slow down for anything at all. A wall in the lead probe
+    // is not a straight.
+    if (this.wallSpeedScale < 1) {
+      v *= this.wallSpeedScale;
+      this.lineLimited = true;
+    }
+
+    // The steering limit. See SPEED.yawLimitMargin — this is a hard physical
+    // ceiling, not a preference, so it is applied last and it overrides `pace`.
+    // `nearWindow.peak` is one tick stale (`updateDrift` refreshes it after this
+    // runs) but it reaches ~0.8 s of travel rather than the braking lead's ~0.4 s,
+    // which is what matters on a fast descent where the two samples either side of
+    // the kart are both nearly straight and the corner is still coming.
+    const kappa = Math.max(
+      Math.abs(this.hereSample.curvature),
+      Math.abs(this.targetSample.curvature),
+      this.nearWindow.peak,
+    );
+    if (kappa > 1e-4) {
+      let vy = v;
+      for (let i = 0; i < SPEED.yawLimitIterations; i++) {
+        const a = this.yawAuthorityAt(vy, st.drifting) * SPEED.yawLimitMargin;
+        const next = a / kappa;
+        vy = next < v ? next : v;
+      }
+      if (vy < v) {
+        v = vy;
+        // The binding constraint is now a CORNER, so braking for it is correct.
+        this.lineLimited = true;
+      }
     }
 
     // Countdown: hold still, then feather the throttle for a rocket start.
@@ -1393,6 +1856,55 @@ export class AIDriver {
   //  Recovery
   // -------------------------------------------------------------------------
 
+  /**
+   * Unwrapped arc length along the line, metres, monotonic while driving forwards.
+   *
+   * Deliberately derived from `near.distance` rather than `KartState.progress`:
+   * `progress` is owned by the RaceDirector, and a driver whose progress is never
+   * updated (a harness, a mode with no director, a bug elsewhere) must not conclude
+   * it has been stuck for the entire race.
+   */
+  private updateArc(dt: number, world: DriverWorld, absSpeed: number): void {
+    const L = Math.max(1, world.lapLength);
+    // `near.t` rather than `near.distance`: `t` is the shared station
+    // parameterisation, identical across line variants, whereas `distance` is the
+    // arc length of whichever path is currently selected. Switching from `optimal`
+    // to `outside` steps `distance` by the two paths' local arc difference, which
+    // would look like several metres of progress that never happened — and a
+    // variant switch is allowed every 0.6 s.
+    const here = (this.near.t - Math.floor(this.near.t)) * L;
+    if (this.arcPrev < 0) {
+      this.arcPrev = here;
+    } else {
+      let d = here - this.arcPrev;
+      // Wrap: the only jumps of more than half a lap in one tick are the lap line.
+      if (d < -L * 0.5) d += L;
+      else if (d > L * 0.5) d -= L;
+      this.arcPrev = here;
+      this.arcTravelled += d;
+    }
+
+    this.arcSampleTimer += dt;
+    const period = RECOVER.arcWindow / RECOVER.arcSamples;
+    if (this.arcSampleTimer < period) return;
+    this.arcSampleTimer = 0;
+    this.arcRing[this.arcRingHead] = this.arcTravelled;
+    this.arcRingHead = (this.arcRingHead + 1) % RECOVER.arcSamples;
+    if (this.arcRingFilled < RECOVER.arcSamples) {
+      this.arcRingFilled++;
+      return;
+    }
+    // Oldest sample is the one we are about to overwrite next.
+    const oldest = this.arcRing[this.arcRingHead];
+    const advanced = this.arcTravelled - oldest;
+    if (advanced < RECOVER.arcMetres) {
+      this.noProgressTimer += RECOVER.arcWindow;
+    } else {
+      this.noProgressTimer = 0;
+    }
+    void absSpeed;
+  }
+
   private updateRecovery(
     dt: number,
     world: DriverWorld,
@@ -1413,6 +1925,25 @@ export class AIDriver {
         this.offTrackTimer += dt;
         this.offTrackTotal += dt;
       } else this.offTrackTimer = 0;
+      if (this.stuckStreak > 0) {
+        this.stuckStreak = Math.max(0, this.stuckStreak - RECOVER.streakDecay * dt);
+      }
+      // Composure: ordinary racing builds it, trouble of any kind zeroes it.
+      const troubled =
+        this.mode !== 'race' ||
+        this.noProgressTimer > 0 ||
+        this.wallTouch > WALL.pinSeconds ||
+        this.offTrackTimer > RECOVER.offTrackSeconds * 0.5 ||
+        offRoadDepth > 2.5;
+      this.settledFor = troubled ? 0 : this.settledFor + dt;
+      if (st.stunned) {
+        // A spin-out is not being stuck. Reset the window rather than let a 2 s
+        // stun in a pack accumulate into a false positive.
+        this.noProgressTimer = 0;
+        this.arcRingFilled = 0;
+      } else {
+        this.updateArc(dt, world, absSpeed);
+      }
     }
 
     if (this.mode === 'grid') {
@@ -1424,8 +1955,20 @@ export class AIDriver {
       const trapped =
         this.stuckTimer > RECOVER.stuckSeconds ||
         this.wrongWayTimer > RECOVER.wrongWaySeconds ||
-        this.offTrackTimer > RECOVER.offTrackSeconds;
+        this.offTrackTimer > RECOVER.offTrackSeconds ||
+        // The two the old machine could not see. Either one on its own is a
+        // limit cycle: no arc progress means nothing is being achieved, and a
+        // barrier held for a second means the kart is leaning on it, not racing.
+        this.noProgressTimer > 0 ||
+        this.wallTouch > WALL.pinSeconds;
       if (trapped) {
+        if (this.noProgressTimer > 0 || this.wallTouch > WALL.pinSeconds) {
+          this.stuckEpisodes++;
+          this.stuckStreak += 1;
+        }
+        this.noProgressTimer = 0;
+        this.arcRingFilled = 0;
+        this.wallTouch = 0;
         // If we are pointing roughly the right way, just drive back; only
         // reverse when we are genuinely wedged or facing backwards.
         this.mode = alignment < 0.25 || this.stuckTimer > RECOVER.stuckSeconds ? 'reverse' : 'realign';
@@ -1441,18 +1984,26 @@ export class AIDriver {
     // In recovery.
     this.modeTimer += dt;
     this.recoverTotal += dt;
+    this.recoverLifetime += dt;
     if (this.mode === 'reverse' && this.modeTimer > RECOVER.reverseSeconds) {
       this.mode = 'realign';
       this.modeTimer = 0;
     } else if (this.mode === 'realign') {
       const back = Math.abs(this.near.lateralFromCentre) < this.near.halfWidth * 0.85;
-      if (alignment > RECOVER.exitAlignment && back && absSpeed > RECOVER.exitSpeed) {
+      const settled = this.modeTimer > RECOVER.minSeconds;
+      if (settled && alignment > RECOVER.exitAlignment && back && absSpeed > RECOVER.exitSpeed) {
         this.mode = 'race';
         this.modeTimer = 0;
         this.stuckTimer = 0;
         this.wrongWayTimer = 0;
         this.offTrackTimer = 0;
         this.recoverTotal = 0;
+        // Clear the arc window as well. It kept filling during the recovery, and a
+        // recovery covers very little ground by design — so without this the first
+        // racing tick reads a stale "no progress" and dives straight back into
+        // recovery, which is the flap `minSeconds` exists to prevent.
+        this.noProgressTimer = 0;
+        this.arcRingFilled = 0;
       } else if (this.modeTimer > RECOVER.realignSeconds) {
         // Try reversing again — maybe we are jammed against a wall.
         this.mode = 'reverse';
@@ -1464,9 +2015,15 @@ export class AIDriver {
   private driveRecovery(dt: number, world: DriverWorld, st: KartState): void {
     const c = this.control;
     const line = world.line;
-    // Aim at a point comfortably up the line, on the centre of the road.
     line.sampleAhead(this.near.t, this.mode === 'reverse' ? 10 : 14, this.aheadSample, 'optimal');
-    this.lookaheadPoint.copy(this.aheadSample.position);
+    // Aim at the CENTRE OF THE ROAD, not at the racing line. The racing line is
+    // the fastest way round; the centreline is the point furthest from both
+    // barriers, and a kart in recovery has already proved it cannot be trusted
+    // with the fast one. `sample.lateral` is the line's own offset from the
+    // centreline, so subtracting it along the binormal lands on the centre.
+    this.lookaheadPoint
+      .copy(this.aheadSample.position)
+      .addScaledVector(this.aheadSample.binormal, -this.aheadSample.lateral);
 
     _rel.subVectors(this.lookaheadPoint, st.position);
     _rel.addScaledVector(_up, -_rel.dot(_up));
@@ -1482,6 +2039,12 @@ export class AIDriver {
     } else {
       c.accel = 1;
       c.brake = 0;
+      // Still touching something while trying to drive out of it: steer off the
+      // barrier as well as toward the centre. Without this a kart nose-in to a
+      // wall aims 14 m up the road, which points straight through the wall.
+      if (this.wallBias !== 0) {
+        steerRaw = clamp(steerRaw + clamp(this.wallBias * 0.22, -0.7, 0.7), -1, 1);
+      }
     }
     c.drift = false;
     this.steerSmooth = damp(this.steerSmooth, steerRaw, 0.08, dt);
@@ -1748,6 +2311,10 @@ export class AIDriver {
     d.lap = st ? st.lap : 0;
     d.mistake = this.error.mistakeKind;
     d.mistakes = this.error.mistakeCount;
+    d.wallBias = this.wallBias;
+    d.wallDepth = this.wallDepth;
+    d.wallTouch = this.wallTouch;
+    d.stuckEpisodes = this.stuckEpisodes;
     this.lapWatch = world.elapsed;
   }
 }

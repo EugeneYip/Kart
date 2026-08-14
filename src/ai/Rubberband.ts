@@ -88,6 +88,31 @@ export const RUBBERBAND = {
   rivalFullDistance: 150,
   rivalSpeedMulMax: 1.045,
   rivalSpeedMulMin: 0.95,
+
+  /**
+   * ⚠️ COMPOSURE — the band must not push a driver that is already failing.
+   *
+   * "Modulate risk, not speed" is right, but it has a runaway in it that shipped:
+   * a driver that falls a long way behind gets `risk = 1.0`, and risk makes it
+   * commit to the overtaking line, brake later and drift corners it would grip.
+   * If the reason it is behind is that it cannot get round a particular corner,
+   * every one of those is the wrong prescription — so it falls further behind, so
+   * risk stays pinned at 1.0, so it never gets round the corner. Positive feedback.
+   *
+   * Measured on `volcanoRush`, 260 s, 12 karts, seed 12345: the `rival` kart
+   * completed ZERO laps and spent 91 s off the road, entering the stuck state 74
+   * times. With `setEnabled(false)` on the band and nothing else changed, the same
+   * kart on the same seed lapped in 48.83 s with zero stuck episodes. The band was
+   * the whole defect.
+   *
+   * So the band now asks how the driver is COPING. A racer in recovery, or one that
+   * has just been stuck, gets its risk and speed bonus scaled toward neutral until
+   * it has strung `composureSeconds` of ordinary racing together. A racer that is
+   * behind because it is slower still gets the full band — which is the case the
+   * band exists for.
+   */
+  strugglingRiskFloor: 0.1,
+  composureSeconds: 6.0,
 } as const;
 
 /** Per-CC skill profiles. 50cc is genuinely bad; 200cc is genuinely scary. */
@@ -207,6 +232,13 @@ export class Rubberband {
    * @param racePosition 1-based current position
    * @param isRival      true for the `rival` personality (tighter band)
    * @param dt           fixed step, for the smoothing
+   * @param out          reused output, never allocated here
+   * @param composure    0..1 — how well this driver is coping. 1 = racing
+   *                     normally, 0 = in recovery or just stuck. Anything below 1
+   *                     scales the band's push toward neutral. See
+   *                     `RUBBERBAND.composureSeconds` for why this exists; it is
+   *                     not a nicety, it is the fix for a runaway that cost one
+   *                     kart an entire race.
    */
   evaluate(
     kartId: number,
@@ -215,6 +247,7 @@ export class Rubberband {
     isRival: boolean,
     dt: number,
     out: BandOutput,
+    composure = 1,
   ): BandOutput {
     let targetSpeed = 1;
     let targetRisk = 0;
@@ -261,6 +294,19 @@ export class Rubberband {
         targetSpeed = 1 + (mul - 1) * x;
         targetRisk = RUBBERBAND.aheadRiskMin * x * (leading ? 1 : 0.6);
       }
+    }
+
+    // Composure gate. Only the PUSH is scaled: a negative risk (consolidate) and a
+    // sub-1 speed multiplier are the band asking a driver to calm down, which is
+    // exactly what a struggling driver should keep doing.
+    const cope = clamp01(composure);
+    if (cope < 1) {
+      if (targetRisk > 0) {
+        targetRisk = RUBBERBAND.strugglingRiskFloor + (targetRisk - RUBBERBAND.strugglingRiskFloor) * cope;
+        if (targetRisk < 0) targetRisk = 0;
+      }
+      if (targetSpeed > 1) targetSpeed = 1 + (targetSpeed - 1) * cope;
+      aggression *= cope;
     }
 
     targetSpeed = clamp(targetSpeed, RUBBERBAND.speedMulMin, RUBBERBAND.speedMulMax);

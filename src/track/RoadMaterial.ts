@@ -505,62 +505,47 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
 
   // ---- walls --------------------------------------------------------------
   /**
-   * ⚠️ EVERY BARRIER IS `DoubleSide` + `flipVertexNormals`, AND NEITHER IS A
-   *    STYLE CHOICE. Removing either one puts a black or missing barrier back.
+   * ⚠️ THE `flipVertexNormals` REPAIR THAT USED TO LIVE HERE IS GONE, BECAUSE
+   *    THE GEOMETRY IT COMPENSATED FOR IS FIXED.
    *
-   * `TrackBuilder`'s wall sweep winds its strips so the front face points AWAY
-   * from the road while the authored vertex normals (`ProfilePoint.nx/ny`) point
-   * AT it. Measured with `.probe-tmp/road-black-audit.ts` on all three circuits:
-   * 90–100 % of the triangles of `trackWall_guardrail / _rock / _building /
-   * _concrete / _wood / _energy / _fence` have `dot(faceNormal, vertexNormal)
-   * < 0`, 0 % of their front faces point at a driver's eye, and 100 % of their
-   * vertex normals do. Roughly 19–23 k triangles per circuit — the entire
-   * barrier ribbon.
+   * History, because the shape of it is worth keeping: `TrackBuilder`'s wall
+   * sweep used to wind its strips so the front face pointed AWAY from the road
+   * while the authored vertex normals pointed AT it. 90–100 % of the triangles of
+   * `trackWall_guardrail / _rock / _building / _concrete / _wood / _energy /
+   * _fence` measured `dot(faceNormal, vertexNormal) < 0` — the entire barrier
+   * ribbon, 19–23 k triangles per circuit. Under `FrontSide` the visible side was
+   * back-face culled, so you could look straight through the guardrail at the
+   * terrain behind it; `DoubleSide` drew it but `normal *= faceDirection` in
+   * `normal_fragment_begin` then turned the stored normal outward on the
+   * back-facing fragment, so it drew BLACK. Two consequences, and the second is
+   * why `DoubleSide` alone was not enough and a normal flip had to go with it.
    *
-   * Two separate consequences, and they need two separate fixes:
+   * `TrackBuilder`'s wall winding now follows the same convention as the kerb and
+   * shoulder strips (which were always right), and the profile normals are
+   * DERIVED from the `(o, h)` polyline instead of hand-authored, so they cannot
+   * disagree with it. `.probe-tmp/road-black-audit.ts` measures 0 % raw inversion
+   * on every wall style on every circuit. A blanket flip on top of that would
+   * invert CORRECT normals — which is exactly what the audit reported, as
+   * `INSIDE-OUT 100%`, in the window between the two halves of this change.
    *
-   *  1. Under `FrontSide` the visible side is the BACK face, so every barrier
-   *     was back-face culled from the track. You could look straight through the
-   *     guardrail at the terrain and props behind it — which is very likely what
-   *     P0g/G3 ("driving close to the edges, the visuals are affected by
-   *     off-track decorations or terrain") is actually describing. `DoubleSide`
-   *     draws it. A thin, open barrier you can be knocked to either side of
-   *     wants to be two-sided anyway.
-   *
-   *  2. `DoubleSide` alone is NOT enough, and this is the subtle half.
-   *     `normal_fragment_begin` does `normal *= faceDirection`, which assumes
-   *     the invariant above. On a back-facing fragment `faceDirection` is -1, so
-   *     the inward-pointing stored normal is turned OUTWARD — away from the
-   *     driver. The barrier would go from invisible to visible-and-black.
-   *     `flipVertexNormals` restores `dot(faceNormal, vertexNormal) > 0`, and
-   *     `faceDirection` then resolves correctly from BOTH sides.
-   *
-   * `fence` was already `DoubleSide`, which is why it was the only barrier style
-   * that rendered at all — but by (2) it was rendering unlit, which is the
-   * control that proves the diagnosis.
-   *
-   * ROOT CAUSE is the `wStrip.quad(...)` index order in `TrackBuilder` (owned
-   * elsewhere; reported). When that is fixed, drop every `flipVertexNormals`
-   * call here in the same commit and keep `DoubleSide`. The audit probe asserts
-   * the pairing and fails if only one side of it changes.
+   * `DoubleSide` STAYS, and it is not a repair: a thin, open barrier you can be
+   * knocked to either side of wants to be two-sided. `shadowSide` stays pinned
+   * for the reason below.
    */
   const wall = new Map<WallStyle, THREE.Material>();
   /**
-   * Barrier strips: two-sided, and normals repaired to match the winding.
+   * Barrier strips: two-sided.
    *
-   * `shadowSide` is pinned so that switching `side` does NOT quietly change what
-   * these cast into the shadow map. three maps
+   * `shadowSide` is pinned so that `side` cannot quietly change what these cast
+   * into the shadow map. three maps
    * `shadowSide = { FrontSide: BackSide, BackSide: FrontSide, DoubleSide: DoubleSide }`
-   * when `material.shadowSide` is null, so going FrontSide -> DoubleSide would
-   * have moved every barrier from casting its far face to casting both — which on
-   * a thin, open strip is exactly how you buy self-shadowing acne. The barriers'
-   * shadows were not part of the complaint, so they stay bit-identical to before
-   * and this fix changes only whether the surface is drawn and lit.
+   * when `material.shadowSide` is null, so leaving it null under `DoubleSide`
+   * would cast BOTH faces — which on a thin, open strip is exactly how you buy
+   * self-shadowing acne.
    */
   const barrier = (m: THREE.Material): THREE.Material => {
     m.side = THREE.DoubleSide;
     m.shadowSide = THREE.BackSide;
-    MX.flipVertexNormals(m);
     return m;
   };
 
@@ -678,92 +663,78 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
   energy.roughness = 0.25;
   energy.metalness = 0.4;
   owned.push(energy);
-  // Same inverted winding as every other barrier — see the block comment above.
-  // The emissive term survived the cull; the lit base colour did not.
   wall.set('energy', barrier(energy));
   wall.set('none', concreteWall); // never instantiated, keeps lookups total
 
   // ---- tunnel / deck / boost ---------------------------------------------
   /**
-   * ⚠️ THE BORE'S NORMALS ARE REPAIRED HERE, AND THAT IS WHY TUNNELS ARE NOT
-   *    BLACK ANY MORE.
+   * ⚠️ `side: FrontSide`, AND THAT IS THE WHOLE REPAIR NOW — the `BackSide` +
+   *    `flipVertexNormals` pair that used to be here is gone with the geometry
+   *    defect it compensated for.
    *
-   * `TrackBuilder`'s arch sweep authors `_n2` pointing INTO the bore (correct
-   * for the surface a driver sees) but winds the ring so the front face points
-   * OUT of it — `.probe-tmp/road-black-audit.ts` measures 2208/2208 triangles
-   * with `dot(faceNormal, vertexNormal) < 0` on every circuit. `side: BackSide`
-   * is right (the interior IS the back face), but `FLIP_SIDED` then negates the
-   * stored normal on the assumption that it agreed with the winding, turning the
-   * lining's normals outward: `dotNL <= 0` for every light inside or above the
-   * bore, so the direct term is zero and the lining renders on ambient alone.
-   * Measured through the shipping AgX + `day` grade: sRGB8 3 -> 0 on coastal,
-   * 10 -> 0 on neon, 11 -> 0 on volcano — 81-87 % of the radiance.
+   * History: the arch sweep authored `_n2` pointing INTO the bore (correct — it
+   * is the surface a driver sees) but wound the ring so the front face pointed
+   * OUT of it, on 2208/2208 triangles of every circuit. `side: BackSide` drew the
+   * right surface, but `FLIP_SIDED` then negated the stored normal on the
+   * assumption that it agreed with the winding, turning the lining's normals
+   * outward: `dotNL <= 0` for every light inside or above the bore, so the direct
+   * term was zero and the lining rendered on ambient alone. Measured through the
+   * shipping AgX + `day` grade: sRGB8 3 -> 0 on coastal, 10 -> 0 on neon,
+   * 11 -> 0 on volcano — 81-87 % of the radiance. P0d had already fought the same
+   * symptom from the albedo end.
    *
-   * P0d already fought this symptom from the wrong end: `TrackBuilder.shadeRoad`
-   * and the arch's own vertex-colour floor were both lifted because "a bore you
-   * cannot see the floor of is not moody, it is a hole". The albedo was never the
-   * problem. This is.
+   * `TrackBuilder` now winds the ring so the FRONT face points into the bore, so
+   * the interior is the front face and `FrontSide` is both correct and the cheap
+   * option — a bore is a closed shell and its outside is inside solid rock.
    *
-   * Same deal as the barriers: when the arch winding is fixed in `TrackBuilder`,
-   * delete this call in the same commit.
+   * `shadowSide` is pinned to what three would have derived from the old
+   * `BackSide` (`{ BackSide: FrontSide }`), so this change alters what is DRAWN
+   * and LIT without touching what the bore casts into the shadow map.
    */
   const tunnel = MX.standardFromPbr(cloneSet(TX.makeRock(mid), ownedTex), {
     name: 'apx-tunnel',
     repeat: new THREE.Vector2(2.2, 1.4),
     color: 0x8f8a83,
     roughness: 1,
-    side: THREE.BackSide,
+    side: THREE.FrontSide,
     vertexColors: true,
     anisotropy: quality.anisotropy,
     detail: { scale: 3, strength: 0.75 },
   });
-  MX.flipVertexNormals(tunnel);
+  tunnel.shadowSide = THREE.FrontSide;
   owned.push(tunnel);
 
   /**
-   * ⚠️ `DoubleSide` + `flatShading` — AND `flipVertexNormals` WOULD BE WRONG HERE.
+   * ⚠️ THE `DoubleSide` + `flatShading` PAIR IS GONE. It was a repair, not a
+   *    look, and the fascia gets its authored smooth normal ramp back.
    *
-   * The bridge deck is the one piece of `TrackBuilder` geometry whose winding is
-   * inverted on only PART of itself, which is why it survived the barrier and
-   * tunnel sweep. Per bridge ring the builder emits ten triangles:
+   * History, and the part worth remembering: the bridge deck was the one piece of
+   * `TrackBuilder` geometry whose winding was inverted on only PART of itself,
+   * which is why it survived the barrier and tunnel sweep. Per bridge ring the
+   * builder emits ten triangles — 8 FASCIA (two quads per side over the three
+   * profile steps), which were all wound so the front face pointed back INTO the
+   * bridge box, and 2 SOFFIT, which were correct. 8/10 = the 80 % the probe
+   * reported, so `flipVertexNormals` could not be the repair: it would have fixed
+   * the fascia and broken the soffit.
    *
-   *   * 8 FASCIA triangles (two quads per side, over the three profile steps).
-   *     `.probe-tmp/road-black-audit.ts` measures every one of them with
-   *     `dot(faceNormal, vertexNormal) < 0`: `_n2` is authored outward+down,
-   *     correct for the surface you see from off the track, but `deck.quad(...)`
-   *     winds them so the front face points back INTO the bridge box. Under
-   *     `FrontSide` the outward side is therefore back-face culled, and the side
-   *     that does get drawn is shaded with a normal pointing away from it.
-   *   * 2 SOFFIT triangles (the flat span between the two sides), which are
-   *     CORRECT.
-   *
-   * 8/10 = the 80 % the probe reports. So `flipVertexNormals` cannot be the
-   * repair: it would fix the fascia and break the soffit.
-   *
-   * `flatShading` fixes both at once, and this is the part worth remembering.
-   * With `FLAT_SHADED` three drops `vNormal` entirely and builds the shading
-   * normal in `normal_fragment_begin` as
-   * `normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) )` — from
-   * the WINDING and the screen-space orientation, never from the geometry's
+   * `flatShading` fixed both at once, because with `FLAT_SHADED` three drops
+   * `vNormal` entirely and builds the shading normal in `normal_fragment_begin`
+   * as `normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) )` —
+   * from the WINDING and the screen-space orientation, never from the geometry's
    * `normal` attribute. That vector points at the camera for whichever face is
-   * being rasterised, on both sides, so a flat-shaded surface **cannot** be unlit
-   * by a wrong vertex normal. (Verified in three@0.185.1: the FLAT_SHADED branch
-   * also deliberately skips the `DOUBLE_SIDED` `normal *= faceDirection`, because
-   * the derivative normal has already flipped, and the `tbn` that
+   * rasterised, so a flat-shaded surface CANNOT be unlit by a wrong vertex
+   * normal. (three@0.185.1: the FLAT_SHADED branch also deliberately skips the
+   * `DOUBLE_SIDED` `normal *= faceDirection`, and the `tbn` that
    * `addDetailNormal` writes into is built outside that branch, so the detail
-   * normal still applies.)
+   * normal still applied.) `DoubleSide` was the other half — flat shading made
+   * the fascia lit, but the winding decided whether it was DRAWN.
    *
-   * `DoubleSide` is the other half: flat shading makes the fascia lit, but it is
-   * the winding that decides whether it is DRAWN at all, and from outside the
-   * bridge the outward face is the back one.
-   *
-   * The cost is that the fascia's authored 3-step normal ramp becomes two facets
-   * per side. On a concrete bridge edge that is a wash at worst.
-   *
-   * ROOT CAUSE is the `deck.quad(...)` index order in `TrackBuilder`'s
-   * "bridge fascia / deck underside" block (owned elsewhere; reported). When it
-   * is fixed, drop `flatShading` and `DoubleSide` together — the audit probe
-   * asserts the pairing and fails if only one side of it moves.
+   * The fascia's 8 triangles per ring are now wound with their own normals, so
+   * `FrontSide` draws the outward face you see from off the track, the soffit's
+   * downward-facing pair is unchanged and still correct, and the authored 3-step
+   * normal ramp survives instead of collapsing into two flat facets per side.
+   * `shadowSide` is left to three's default, which for `FrontSide` derives
+   * `BackSide` — bit-identical to the pin that used to be here.
    */
   const deck = MX.standardFromPbr(cloneSet(TX.makeConcrete(mid), ownedTex), {
     name: 'apx-deck',
@@ -771,14 +742,10 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
     color: 0x9aa0a8,
     roughness: 0.95,
     vertexColors: true,
-    side: THREE.DoubleSide,
-    flatShading: true,
+    side: THREE.FrontSide,
     anisotropy: quality.anisotropy,
     detail: { scale: 3, strength: 0.5 },
   });
-  // Same reason as `barrier()`: keep the shadow-map side exactly what it was
-  // before the visibility fix. See the note there.
-  deck.shadowSide = THREE.BackSide;
   owned.push(deck);
 
   const boost = MX.emissiveGlow(0x33c6ff, 2.4, { base: 0x06121c, name: 'apx-boost' });

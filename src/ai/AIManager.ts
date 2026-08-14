@@ -103,6 +103,13 @@ function tractionFromGrip(grip: number): number {
   return clamp01((grip - 9.6) / 9.2);
 }
 
+/** `tuning.halfExtents.x` if it looks like a vector, else the fallback. */
+function readHalfWidth(v: unknown, fallback: number): number {
+  if (!v || typeof v !== 'object') return fallback;
+  const x = (v as Record<string, unknown>).x;
+  return typeof x === 'number' && x > 0.2 && x < 3 ? x : fallback;
+}
+
 // ---------------------------------------------------------------------------
 //  Reflection helpers — no `any`, no per-tick cost (results are cached).
 // ---------------------------------------------------------------------------
@@ -225,6 +232,10 @@ export class AIManager implements ISubsystem {
     this.world = {
       // `line` is filled in by init(); a placeholder keeps the type honest.
       line: null as unknown as RacingLine,
+      // `Track` implements `collideWalls`, which is all `WallProbe` asks for. This
+      // is what lets a driver steer away from a barrier instead of discovering it
+      // by hitting it — see the `WALL` block in AIDriver.
+      walls: track,
       karts: this.states,
       hazards: this.hazardPool,
       hazardCount: 0,
@@ -414,6 +425,16 @@ export class AIManager implements ISubsystem {
     c.maxSpeed = typeof r.maxSpeed === 'number' && r.maxSpeed > 1 ? r.maxSpeed : 28.4;
     c.handling = typeof r.handling === 'number' ? clamp01(r.handling) : 0.55;
     c.traction = typeof r.grip === 'number' ? tractionFromGrip(r.grip) : 0.55;
+    // `turnRate` is the divisor in the AI's steering model, so getting it from the
+    // chassis rather than assuming a constant is the difference between commanding
+    // the right steer angle and commanding half of it. If physics does not publish
+    // it, reconstruct it from `handling` the same way `buildTuning` does
+    // (2.1 + handling − 0.14·weight); the weight term is at most 0.14 rad/s.
+    c.turnRate =
+      typeof r.turnRate === 'number' && r.turnRate > 0.5
+        ? r.turnRate
+        : 2.03 + c.handling;
+    c.radius = readHalfWidth(r.halfExtents, 0.72);
     d.setChassis(c);
     d.setFieldReference(this.fieldRef);
   }
@@ -616,18 +637,31 @@ export class AIManager implements ISubsystem {
         d.personality.matchesPlayer > 0.5,
         dt,
         this.band,
+        // Do not push a driver that is not coping. See the COMPOSURE note in
+        // Rubberband.ts — this argument is the fix for a runaway in which a lost
+        // kart got maximum risk precisely because it was lost.
+        d.composure,
       );
       const ctrl = d.step(dt, w, this.band);
       this.sendControl(st.id, ctrl);
 
       // Long-term stuck: ask for a respawn rather than sit there forever.
-      if (d.recoverySeconds > 5.5 && this.respawnFn) {
+      //
+      // `d.wantsRespawn` replaces a `recoverySeconds > 5.5` test that could not
+      // fire for the failure it existed to catch — a driver that keeps escaping
+      // recovery and re-entering it never accumulates 5.5 s in one episode. See
+      // `AIDriver.wantsRespawn`.
+      //
+      // `clearRespawnRequest()` rather than `reset()`: a full reset wipes the
+      // lifetime counters a probe (and the debug overlay) reads to detect exactly
+      // this situation, which is how it stayed invisible.
+      if (d.wantsRespawn && this.respawnFn) {
         try {
           this.respawnFn.call(this.physicsSource, st.id);
         } catch {
           /* physics may not support it */
         }
-        d.reset();
+        d.clearRespawnRequest();
       }
     }
   }
@@ -866,6 +900,10 @@ export class AIManager implements ISubsystem {
     backwardsSeconds: number;
     recoverySeconds: number;
     inRecovery: number;
+    /** Times the arc-progress / wall-pin tests fired across the field. */
+    stuckEpisodes: number;
+    /** Barrier contacts the wall reflex saw across the field. */
+    wallContacts: number;
   } {
     let miniTurbos = 0;
     let attempts = 0;
@@ -875,6 +913,8 @@ export class AIManager implements ISubsystem {
     let rec = 0;
     let inRec = 0;
     let enabled = 0;
+    let stuck = 0;
+    let walls = 0;
     for (const d of this.drivers.values()) {
       if (!d.enabled) continue;
       enabled++;
@@ -883,7 +923,9 @@ export class AIManager implements ISubsystem {
       boost += d.boostSecondsEarned;
       off += d.offTrackSeconds;
       back += d.backwardsSeconds;
-      rec += d.recoverySeconds;
+      rec += d.recoveryLifetime;
+      stuck += d.stuckEpisodeCount;
+      walls += d.wallContactCount;
       if (d.currentMode === 'reverse' || d.currentMode === 'realign') inRec++;
     }
     return {
@@ -896,6 +938,8 @@ export class AIManager implements ISubsystem {
       backwardsSeconds: back,
       recoverySeconds: rec,
       inRecovery: inRec,
+      stuckEpisodes: stuck,
+      wallContacts: walls,
     };
   }
 

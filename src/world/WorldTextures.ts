@@ -108,6 +108,21 @@ export interface PathStation {
   tanBank: number;
   /** arc length from the start line, metres */
   s: number;
+  /**
+   * Off-road shoulder width outside the kerb, left / right, metres. OPTIONAL:
+   * absent for any producer that does not publish it, in which case the bake
+   * assumes `SH_FALLBACK`.
+   *
+   * The bake needs these because the terrain has to sit under the whole DRAWN
+   * road — asphalt + kerb + shoulder — and the shoulder is the widest and most
+   * variable part of it (0-9 m authored, with four 24 m nodes). Without them the
+   * seam is right to within about 0.2 m instead of exactly right; see
+   * `roadSurfaceOffset`. `Track` already has the numbers: they are
+   * `SplineAttribs.shoulderL / shoulderR`, which `Environment.stationFrom()`
+   * receives on its sample and currently drops on the floor.
+   */
+  shoulderL?: number;
+  shoulderR?: number;
 }
 
 /** What `roadVerge` measured at a point. */
@@ -823,14 +838,64 @@ const INF = 1e9;
 export const EDGE_RANGE = 24;
 
 /**
- * Kerb width outside the asphalt edge. This is `CROSS.kerbW` from TrackBuilder,
- * restated rather than imported so the terrain bake does not pull the whole
- * track-mesh builder (and MeshBVH) into the world-texture module graph. If the
- * kerb ever changes, `.probe-tmp/edgeview.ts` reports grass on the asphalt again.
+ * THE DRAWN ROAD CROSS-SECTION, restated from `CROSS` / `surfaceHeight()` in
+ * TrackBuilder rather than imported so the terrain bake does not pull the whole
+ * track-mesh builder (and MeshBVH) into the world-texture module graph. If any
+ * of these change, `.probe-tmp/terrecon.ts` reports the seam stepping again and
+ * `.probe-tmp/edgeview.ts` reports grass on the asphalt.
+ *
+ * `KERB_W` was already restated here. The other three were not, and their
+ * absence was a defect in its own right — see `roadSurfaceOffset` below.
  */
 const KERB_W = 1.55;
+/** Crown: metres of drop from the centreline plane to the asphalt edge. */
+const CROWN = 0.16;
+/** Further drop from the asphalt edge to the OUTER edge of the shoulder. */
+const SHOULDER_DROP = 0.34;
+/**
+ * Shoulder width assumed when a station does not publish one.
+ *
+ * Authored shoulders run 0-9 m (a handful of 24 m), median ~3. The error this
+ * constant can cause is deliberately asymmetric: guessing too WIDE leaves the
+ * terrain slightly high and puts a visible lip along the road, guessing too
+ * NARROW leaves it slightly low, which is under the shoulder mesh and therefore
+ * invisible. 3 m is the median, and at that value no authored width produces a
+ * lip except the twelve `sh: 0` nodes (0.18 m, down from 0.34 m).
+ */
+const SH_FALLBACK = 3;
 /** Width of the grass-mask ramp back to full density, metres. */
 const GRASS_RAMP = 3.4;
+
+/**
+ * Height of the DRAWN road surface relative to the banked centreline plane, at
+ * a lateral offset `u` metres from the centreline. Always <= 0.
+ *
+ * WHY THE BAKE NEEDS THIS AT ALL. The stamp used to pull the terrain to the bare
+ * banked plane, `st.py + cross * tanBank`, and hold it dead flat out to 2.2 m
+ * past the ASPHALT edge. But the road that gets drawn is not a plane and does
+ * not end at the asphalt: it crowns down `CROWN` to the asphalt edge, carries a
+ * kerb, and then falls a further `SHOULDER_DROP` across a shoulder up to 9 m
+ * wide. So the terrain sat `CROWN + SHOULDER_DROP - SINK = 0.34 m` ABOVE the
+ * outer edge of the drawn shoulder — a lip of ground standing proud of the road
+ * along both sides of every metre of every circuit, emerging from under the
+ * shoulder mesh about a third of the way across it and burying the rest of the
+ * authored verge. Measured (`.probe-tmp/terrecon.ts`, `seam`): p50 -0.2 m
+ * against the centreline plane on five of six circuits, which is +0.30 m against
+ * the surface actually drawn there, on 3812 of 3812 station-sides.
+ *
+ * The kerb is deliberately NOT followed up: it is a raised strip the terrain
+ * must stay under, not a shape the ground takes. Across the kerb this returns
+ * the asphalt-edge height, so the terrain passes `SINK + kerbH` below the kerb
+ * top.
+ */
+function roadSurfaceOffset(u: number, hw: number, sh: number): number {
+  if (u <= hw) {
+    const t = hw > 1e-3 ? u / hw : 0;
+    return -CROWN * t * t;
+  }
+  const s = clamp01(sh > 1e-3 ? (u - hw - KERB_W) / sh : 1);
+  return -CROWN - SHOULDER_DROP * (s * s * (3 - 2 * s));
+}
 
 export class TerrainField {
   readonly extent: number;
@@ -1017,11 +1082,42 @@ export class TerrainField {
     const dist = this.roadDistance;
     const roadH = new Float32Array(n);
     const halfW = new Float32Array(n);
+    /**
+     * Radius, from the centreline, of the band that stays dead flat under the
+     * road: asphalt + kerb + shoulder + `FLAT_PAD`. Kept separately from
+     * `halfW` because the two answer different questions — `halfW` is the
+     * asphalt edge, which is what the surfacing SDF and the grass mask key off,
+     * and moving that would drag the dirt/grass boundary 5 m outboard.
+     */
+    const flatW = new Float32Array(n);
+    /**
+     * PLAN-SPACE distance to the nearest carriageway, and its half-width, with the
+     * stack guard NOT applied — the only two arrays the grass kill mask uses.
+     *
+     * `dist` cannot do this job. It is the distance to the nearest carriageway
+     * that the guard accepted, i.e. the one that shaped the ground, and under a
+     * flyover that is the road 38 m BELOW the deck. So the deck's own corridor
+     * appeared nowhere in the mask and grass grew through the surface the player
+     * was driving on: 16 of 616 station-sides on volcano before this revision, and
+     * 60 once the embankment cone started rejecting the helix over a wider area.
+     * 58 of those 60 were 10-52 m under the deck and invisible, which is how the
+     * residual was justified last round — but one was in the tarmac, and "mostly
+     * invisible" is not a property worth preserving.
+     *
+     * Whether a blade belongs is a question about where a road is DRAWN, in plan,
+     * at any height. That is this field. The cost is that the ground directly
+     * under a flyover is bald in the deck's plan footprint, which is the road's
+     * own shadow and reads as such.
+     */
+    const maskDist = new Float32Array(n).fill(INF);
+    const maskHalfW = new Float32Array(n);
     dist.fill(INF);
 
     // ---- stamp the road corridor -------------------------------------------
     const R = 74; // metres of influence
     const rTex = Math.ceil(R / mpt);
+    /** Metres past the outer edge of the DRAWN road that stay dead flat. */
+    const FLAT_PAD = 1.2;
 
     /**
      * WHICH carriageway owns the ground under a texel.
@@ -1037,23 +1133,50 @@ export class TerrainField {
      * mouth — which is the "portal buried in a hillside" report. The natural
      * terrain there is 11.5 m BELOW the road: there is no hill at all.
      *
-     * So: first pass records the LOWEST road height whose corridor actually
-     * covers each texel; the stamp then ignores any station riding more than
-     * `STACK_V` above it. A flyover stops paving the ground it flies over,
-     * while ordinary cut-and-fill embankments — where only one carriageway
-     * reaches the texel — are bit-for-bit unchanged.
+     * So: first pass records the LOWEST plausible GROUND height at each texel;
+     * the stamp then ignores any station riding more than `STACK_V` above it. A
+     * flyover stops paving the ground it flies over, while ordinary cut-and-fill
+     * embankments are unchanged.
      *
-     * `STACK_V` has to clear the height a single carriageway varies by inside
-     * its own reach: 12 m + half-width at volcano's steepest ~15 % grade is
-     * about 3.6 m, so 7 m is ample margin without admitting a flyover.
+     * "LOWEST PLAUSIBLE GROUND", NOT "LOWEST ROAD", AND THAT DISTINCTION IS THE
+     * WHOLE OF THIS PASS. The first version of it recorded `min(st.py)` over a
+     * hard disc of radius `halfWidth + 12`, and a flat minimum over a hard disc
+     * is wrong at both ends:
+     *
+     *  · INSIDE, it rejects roads that are not flyovers at all. Coastal spirals
+     *    over itself at t=0.71 with only **8.67 m** between the two decks. The
+     *    lower one set `groundPy`, 8.67 > `STACK_V`, so the guard threw out the
+     *    deck the player was actually driving on: `roadH` came from a station
+     *    11.96 m away instead of 5.23 m, the ground under the upper deck was
+     *    stamped 5.7 m BELOW it, and the corridor mask was 12 m off-centre —
+     *    which is exactly the 3-of-646 grass leak left over on coastal.
+     *  · OUTSIDE, the disc edge is a cliff. Volcano's helix is rejected within
+     *    21.5 m of the lava tube and accepted at 21.6 m, so the +38.8 m mesa was
+     *    not removed, it was slotted: measured (`.probe-tmp/terrecon.ts`) a
+     *    **39.7 m wall with a 17-18 m/m gradient, 13-14 m outside the asphalt
+     *    edge**, on 33 of 616 station-sides.
+     *
+     * Both go away if `groundPy` is the lower envelope of an EMBANKMENT CONE
+     * instead: a road may have climbed `STACK_RAMP` metres per metre outside its
+     * own asphalt edge, so ground `d` metres from a station could plausibly be as
+     * low as `st.py + STACK_RAMP * (d - halfWidth)`. Two decks 8.67 m apart and
+     * 20 m apart in plan are then one hillside (allowance 3.9 m + `STACK_V`);
+     * a deck 38 m over a tube 3.5 m away in plan cannot be (allowance 0), and is
+     * still rejected at every distance out to the full 74 m of influence — so
+     * there is no disc edge left to make a cliff at.
+     *
+     * `STACK_RAMP = 0.45` is a 24° hillside. `STACK_V = 7` on top of it covers
+     * what a single carriageway varies by within its own reach (about 3.6 m at
+     * volcano's steepest ~15 % grade).
      */
     const STACK_V = 7;
+    const STACK_RAMP = 0.45;
     const groundPy = new Float32Array(n).fill(INF);
     for (let si = 0; si < this.stations.length; si++) {
       const st = this.stations[si];
-      // Only where this road's own corridor lands, not the full 74 m influence:
-      // the question is "does this carriageway pave this texel", not "is it near".
-      const reach = st.halfWidth + 12;
+      // The full influence radius, so the cone has decided the whole region the
+      // stamp below can reach and no boundary between the two survives.
+      const reach = R;
       const reachTex = Math.ceil(reach / mpt);
       const cx = (st.px - this.originX) / mpt;
       const cz = (st.pz - this.originZ) / mpt;
@@ -1065,15 +1188,86 @@ export class TerrainField {
         const ddz = this.originZ + (ty + 0.5) * mpt - st.pz;
         for (let tx = x0; tx <= x1; tx++) {
           const ddx = this.originX + (tx + 0.5) * mpt - st.px;
-          if (ddx * ddx + ddz * ddz > reach * reach) continue;
+          const dd2 = ddx * ddx + ddz * ddz;
+          if (dd2 > reach * reach) continue;
           const i = ty * res + tx;
-          if (st.py < groundPy[i]) groundPy[i] = st.py;
+          // The embankment cone: inside its own asphalt the road IS the ground,
+          // and outside it the ground may have climbed at STACK_RAMP.
+          const cand = st.py + STACK_RAMP * Math.max(0, Math.sqrt(dd2) - st.halfWidth);
+          if (cand < groundPy[i]) groundPy[i] = cand;
         }
       }
     }
 
-    for (let si = 0; si < this.stations.length; si++) {
+    /**
+     * WHERE A BANKED CARRIAGEWAY STOPS BEING A HILLSIDE.
+     *
+     * `tanBank` arrives clamped to ±0.9 by `Environment.stationFrom()` "so a
+     * near-vertical binormal cannot produce a stamped cliff". It stops the cliff
+     * and replaces it with a cone. Neon's anti-gravity wall ride is authored
+     * `bank: 84` and measures 87-89° over t=0.550-0.587, i.e. a true cross-slope
+     * of about 9.5 — so the terrain was stamped at the clamp, 0.9, a 42° slope,
+     * and held there dead flat out to 2.2 m past the asphalt edge before blending
+     * over 30 m more. That mounds roughly 12 m of dirt up the tower face on the
+     * high side and cuts the same depth out of the low side. Measured
+     * (`.probe-tmp/terrview.ts`): the lower third of the frame is 100 % ground at
+     * the worst right-edge poses, 92 % at p90 over the 58 banked-past-40° poses,
+     * up to 96 % of the road-ahead sightlines are hidden by it, and **the chase
+     * camera is inside the terrain at 27 of 620 edge poses**. That last one is
+     * not a matter of interpretation.
+     *
+     * A heightfield cannot express a 88° carriageway, and pretending otherwise is
+     * worse than declining: there is exactly one height it can honestly put
+     * beside a wall, and that is the height of the wall's BASE. So past `WALL_LO`
+     * the stamp stops following the bank outward and holds the whole corridor at
+     * the carriageway's low edge, `-|halfWidth * tanBank|`, fading in over the
+     * remaining range so the bank transition (46° in, 34° out on neon) stays
+     * continuous. Below `WALL_LO` — tan 38°, steeper than every genuinely
+     * ground-borne bank on the six circuits, the steepest being neon's 25° — this
+     * is a no-op and the bowl still follows the road exactly.
+     */
+    const WALL_LO = 0.78, WALL_HI = 0.90;
+
+    const nSt = this.stations.length;
+    for (let si = 0; si < nSt; si++) {
       const st = this.stations[si];
+      const shL = st.shoulderL ?? SH_FALLBACK;
+      const shR = st.shoulderR ?? SH_FALLBACK;
+      const atb = Math.abs(st.tanBank);
+      const wall = atb <= WALL_LO ? 0 : smootherstep((atb - WALL_LO) / (WALL_HI - WALL_LO));
+      // Depth of the carriageway's LOW edge below the centreline. Past the clamp
+      // the true cross-slope is unknown but at least 42°, and neon's wall ride
+      // measures 84-89°, so at full gate the low edge is essentially the whole
+      // drawn half-width straight down — 12.75 m there. Taking the shallower
+      // `halfWidth * tanBank` instead left the shelf 3.4 m up the wall, standing
+      // on the bottom of the carriageway (`.probe-tmp/terrecon.ts` on-road +3.56 m).
+      const corridorW = st.halfWidth + KERB_W + Math.max(shL, shR);
+      const shallow = atb * st.halfWidth;
+      const lowEdge = -(shallow + wall * (corridorW - shallow));
+      /**
+       * ALONG-ARC INTERPOLATION OF THE PLANE.
+       *
+       * The stamp is nearest-station, and the stations are ~7 m apart, so the
+       * plane it lays down is piecewise CONSTANT along the road. That is fine on
+       * a flat straight and wrong exactly where the road is interesting: on
+       * neon's approach to the wall ride the bank goes 24° -> 31° between two
+       * consecutive stations, and a 0.16 difference in cross-slope over 10 m of
+       * lateral offset is 1.6 m of height. Measured before this: the two worst
+       * remaining station-sides on the circuit, ground standing 2.1-2.5 m over
+       * the drawn road at t=0.62 and t=0.85, with no flyover and no wall
+       * anywhere near — just the bank changing faster than the station table
+       * samples it.
+       *
+       * So `py` and `tanBank` are lerped toward whichever neighbour the texel
+       * lies toward, by its projection on the tangent. Both neighbours agree at
+       * the midpoint, so the field stays continuous. Deliberately only the
+       * height plane: `dist`, `halfW` and the mask keep the station-nearest
+       * semantics they have always had, so nothing downstream of them moves.
+       */
+      const sPrev = this.stations[(si - 1 + nSt) % nSt];
+      const sNext = this.stations[(si + 1) % nSt];
+      const lenPrev = Math.hypot(st.px - sPrev.px, st.pz - sPrev.pz) || 1;
+      const lenNext = Math.hypot(sNext.px - st.px, sNext.pz - st.pz) || 1;
       const cx = (st.px - this.originX) / mpt;
       const cz = (st.pz - this.originZ) / mpt;
       const x0 = Math.max(0, Math.floor(cx - rTex));
@@ -1089,21 +1283,43 @@ export class TerrainField {
           const d2 = ddx * ddx + ddz * ddz;
           if (d2 > R * R) continue;
           const i = ty * res + tx;
+          const d = Math.sqrt(d2);
+          // Plan-space corridor first, and deliberately BEFORE both rejections:
+          // the grass mask asks where a road is drawn, not which road made the
+          // ground. See `maskDist`.
+          if (d < maskDist[i]) { maskDist[i] = d; maskHalfW[i] = st.halfWidth; }
           if (d2 >= dist[i] * dist[i]) continue;
           // A carriageway flying over a lower one does not pave the ground.
           if (st.py > groundPy[i] + STACK_V) continue;
-          const d = Math.sqrt(d2);
           dist[i] = d;
           const cross = ddx * st.bx + ddz * st.bz;
-          roadH[i] = st.py + cross * st.tanBank;
+          const sh = cross < 0 ? shL : shR;
+          const along = ddx * st.tx + ddz * st.tz;
+          const nb = along >= 0 ? sNext : sPrev;
+          const u = Math.min(1, Math.abs(along) / (along >= 0 ? lenNext : lenPrev));
+          const pyI = st.py + (nb.py - st.py) * u;
+          const tbI = st.tanBank + (nb.tanBank - st.tanBank) * u;
+          const lift = cross * tbI;
+          // Terrain target: the DRAWN surface, not the bare banked plane.
+          roadH[i] = pyI + lift + (lowEdge - lift) * wall
+            + roadSurfaceOffset(Math.abs(cross), st.halfWidth, sh);
           halfW[i] = st.halfWidth;
+          flatW[i] = st.halfWidth + KERB_W + sh + FLAT_PAD;
         }
       }
     }
 
     // ---- height + road blend ------------------------------------------------
     const SINK = 0.16;   // terrain sits this far under the road surface
-    const INNER = 2.2;   // metres past the road edge that stay dead flat
+    /**
+     * Metres past the ASPHALT edge that the surfacing SDF calls "the road edge".
+     * This is a material boundary, not a height one: the dirt/wear bands in
+     * Terrain's fragment shader are measured from it. Deliberately unchanged at
+     * 2.2 m while the HEIGHT blend moved out to the drawn shoulder — they used to
+     * share one number, and widening the shared one would have dragged the whole
+     * dirt transition 5 m outboard on every circuit.
+     */
+    const SDF_INNER = 2.2;
     const BAND = 30.0;   // blend distance back to natural terrain
     const edgeSdf = new Float32Array(n);
     let lo = INF, hi = -INF;
@@ -1126,9 +1342,16 @@ export class TerrainField {
           const wander =
             (fbm2D(wx * 0.085, wz * 0.085, 2, this.seed + 404) - 0.5) * 2.6 +
             (fbm2D(wx * 0.021, wz * 0.021, 2, this.seed + 811) - 0.5) * 3.4;
-          const edge = halfW[i] + INNER + wander;
-          sdf = edge - d;
-          const w = 1 - smootherstep((d - edge) / BAND);
+          sdf = halfW[i] + SDF_INNER + wander - d;
+          // The flat band now ends past the drawn SHOULDER, not 2.2 m past the
+          // asphalt. It used to end 4.4-7.5 m inside the road that gets drawn, so
+          // the terrain started climbing away from the road surface while still
+          // underneath the shoulder mesh: measured on coastal the ground was up to
+          // 1.9 m BELOW the road plane at the shoulder's outer edge (a mesh
+          // overhanging a void) and on neon up to 3.9 m ABOVE it (a bank of dirt
+          // standing where the verge should be). Same wander, so the boundary is
+          // still irregular rather than an exact offset of the centreline.
+          const w = 1 - smootherstep((d - (flatW[i] + wander)) / BAND);
           if (w > 0) h = h + (roadH[i] - SINK - h) * w;
         }
         this.height[i] = h;
@@ -1164,7 +1387,10 @@ export class TerrainField {
         const i = ty * res + tx;
         const h = this.height[i];
         const d = dist[i];
-        const hw = halfW[i] || 11;
+        // The grass mask reads the PLAN-space corridor, guard-free; everything
+        // else here reads the grounded one. See `maskDist`.
+        const mDist = maskDist[i];
+        const mHw = maskHalfW[i] || 11;
 
         // GRASS KILL MASK. `data.r` has exactly one consumer — the blade shader
         // in Foliage.ts, which keeps a blade when `rnd·0.92 < (1 − mask)·…`. So
@@ -1187,8 +1413,9 @@ export class TerrainField {
         // the leak is a bake-resolution artefact, so the margin is sized by the
         // bake resolution rather than by a constant that silently stops working
         // when the tier changes `metresPerTexel` from 2.4 to 5.0.
-        const grassPlateau = hw + KERB_W + mpt;
-        const roadMask = d < INF ? clamp01((grassPlateau + GRASS_RAMP - d) / GRASS_RAMP) : 0;
+        const grassPlateau = mHw + KERB_W + mpt;
+        const roadMask = mDist < INF
+          ? clamp01((grassPlateau + GRASS_RAMP - mDist) / GRASS_RAMP) : 0;
         const ao = clamp01(1 - (blur[i] - h) * 0.085);
         const moist = clamp01(
           fbm2D(wx * 0.0034, wz * 0.0034, 4, this.seed + 1201) * 1.25 - 0.12,
