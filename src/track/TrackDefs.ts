@@ -432,13 +432,28 @@ const VOLCANO_NODES: SplineNodeSpec[] = [
   // ---- V5 the crater rim. 167 deg of banked right at R 67 m along the lip.
   //      No wall on the outside — that side is the crater. 8 m shoulder is
   //      all you get before the drop.
-  { p: [247.6, 42.00, -320.6], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none', tag: 'CRATER RIM' },
-  { p: [271.9, 43.14, -329.0], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
-  { p: [297.6, 44.29, -326.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
-  { p: [320.1, 45.43, -314.3], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
-  { p: [335.6, 46.57, -293.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
-  { p: [341.4, 47.71, -268.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
-  { p: [336.6, 48.86, -243.5], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'none' },
+  // ---- CRATER RIM. `wallR` is a GUARDRAIL, not 'none'.
+  //
+  // It was 'none' for 110 m of arc (540-650 m), with the left wall at 16.5 m and
+  // nothing whatever on the right. Measured consequence, from a real 12-kart race:
+  // one AI kart drove off the unprotected side, respawned, and repeated on a ~3 s
+  // cycle for the entire 260 s race — **zero laps completed, 91 s spent off-road,
+  // and ZERO wall contacts**, because there was nothing there to hit. It is the
+  // last of the karts that could not finish a lap.
+  //
+  // The drop past the edge is only 0.4 m, so this was never a cliff — karts simply
+  // ran wide onto dirt and got lost. A guardrail rather than 'rock' on purpose: it
+  // sits at hw + shR = 19.5 m, so eight metres of dirt is still there to be used
+  // and abused, and a rail is low enough to keep the crater visible, which is the
+  // whole point of the corner. Rock here would rebuild the slot canyon the owner
+  // complained about.
+  { p: [247.6, 42.00, -320.6], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail', tag: 'CRATER RIM' },
+  { p: [271.9, 43.14, -329.0], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
+  { p: [297.6, 44.29, -326.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
+  { p: [320.1, 45.43, -314.3], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
+  { p: [335.6, 46.57, -293.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
+  { p: [341.4, 47.71, -268.8], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
+  { p: [336.6, 48.86, -243.5], hw: 11.5, bank: 15, shL: 4, shR: 8, shoulderSurface: S.Dirt, wallL: 'rock', wallR: 'guardrail' },
 
   // ---- V6 the lava field. A long left whose ENTIRE inside is drivable loose
   //      rock (24 m of it) — cut the corner for a shorter line at 62 % speed.
