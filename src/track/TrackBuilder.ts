@@ -981,6 +981,24 @@ export function buildTrack(
   const deckSv = 1 / (DECK_TILE[1] * deckRy);
 
   /**
+   * Per-vertex-track arc-length accumulators for the two swept surfaces whose
+   * cross-section is wide enough that the centreline's `d` is the wrong `u`.
+   * `TUNNEL_SEG_MAX` covers the `ultra` segment count (13, so 14 ring points).
+   */
+  const TUNNEL_SEG_MAX = 14;
+  const tunnelRun = new Float64Array(TUNNEL_SEG_MAX);
+  const _tunnelPrev: THREE.Vector3[] = [];
+  for (let k = 0; k < TUNNEL_SEG_MAX; k++) _tunnelPrev.push(new THREE.Vector3());
+  let tunnelSeen = false;
+  const DECK_STEPS = [0, 0.35, 1] as const;
+  const deckRun = new Float64Array(2 * DECK_STEPS.length);
+  const _deckPrev: THREE.Vector3[] = [];
+  for (let k = 0; k < deckRun.length; k++) _deckPrev.push(new THREE.Vector3());
+  let deckSeen = false;
+  /** The soffit's own two vertices from the previous bridge ring. */
+  const prevSoffit: [number, number] = [0, 0];
+
+  /**
    * Arc length along each wall's OWN path, per side, metres.
    *
    * The `u` axis cannot use the centreline's `d`: a wall 12 m outboard on the
@@ -1010,8 +1028,30 @@ export function buildTrack(
   ): void => {
     for (const side of [-1, 1] as const) {
       const style = side < 0 ? st.wallL : st.wallR;
-      if (style === 'none' || thisIsGap) continue;
       const si = side < 0 ? 0 : 1;
+      /**
+       * ⚠️ INVALIDATE EVERY OTHER STYLE'S RING FOR THIS SIDE BEFORE ANYTHING CAN
+       *    STITCH TO IT. `prevWallRing` is keyed by STYLE and used to be never
+       *    cleared, so a break in a run of one style did not break the strip:
+       *
+       *  - a side that goes `'rock'` -> `'none'` -> `'rock'` (volcano's lava-field
+       *    shortcut, where the inside is deliberately open) stitched the two rock
+       *    runs straight together across the opening,
+       *  - a `TF.Gap` station `continue`d before touching the cache, so the wood
+       *    railing bridged volcano's 20 m COLLAPSED SPAN — a handrail across the
+       *    jump the player is meant to fly over.
+       *
+       * Measured with `.probe-tmp/wallspan.ts` before this: **242 wall triangles
+       * across the six circuits with an edge longer than 8 m, the worst a 602 m
+       * guardrail sliver on coastal** — single quads spanning most of a lap.
+       *
+       * This is the same invalidation the shoulder strip has always done for its
+       * per-surface cache a few lines up.
+       */
+      for (const [key, c] of prevWallRing) {
+        if (key !== style || thisIsGap) { c[si].length = 0; }
+      }
+      if (style === 'none' || thisIsGap) continue;
       const wStrip = stripFor(walls, style);
       let cache = prevWallRing.get(style);
       if (!cache) { cache = [[], []]; prevWallRing.set(style, cache); }
@@ -1261,6 +1301,16 @@ export function buildTrack(
         if (haveArch) archS += _v.distanceTo(_archPrev);
         _archPrev.copy(_v);
         haveArch = true;
+        // Along-bore arc length AT THIS ARCH POSITION, not the centreline's. The
+        // lining springs from +-12.6 m, so on the lava tube's curve the haunch on
+        // the outside travels ~22 % further per centreline metre than the crown
+        // does: with `u = d`, `.probe-tmp/wallregress.ts` measured a p99 of
+        // 5.14 m per tile against a declared 4.2. One accumulator per arch index
+        // is the same trick the wall foot uses, applied across the sweep instead
+        // of along it.
+        if (tunnelRun.length <= k) break;
+        if (tunnelSeen) tunnelRun[k] += _v.distanceTo(_tunnelPrev[k]);
+        _tunnelPrev[k].copy(_v);
         // ---- P0d. Was `(0.2 + 0.55*sin^0.6) * (1 - dark*0.55)`: at the springing
         // line (a = 0) the lining's vertex colour was 0.20, and 0.09 once the
         // portal fade reached full — against a lining material that is already
@@ -1277,10 +1327,11 @@ export function buildTrack(
         // now true world arc length AROUND the arch.
         ring.push(tunnel.vertex(
           _v, _n2,
-          d * tunnelSu, archS * tunnelSv,
+          tunnelRun[k] * tunnelSu, archS * tunnelSv,
           0.5 + lat / (st.hw * 2), v2, ao, ao, ao,
         ));
       }
+      tunnelSeen = true;
       if (prevTunnelRing && prevTunnelRing.length === ring.length) {
         for (let k = 0; k < SEG; k++) {
           // Reversed: the arch's `_n2` is authored pointing INTO the bore (which
@@ -1292,6 +1343,11 @@ export function buildTrack(
       prevTunnelRing = ring;
     } else {
       prevTunnelRing = null;
+      // Each bore restarts at u = 0. Nothing stitches across the break, so the
+      // phase step is invisible, and not resetting would carry a lap's worth of
+      // arc length into the next tunnel's texture offset for no reason.
+      tunnelRun.fill(0);
+      tunnelSeen = false;
     }
 
     // ---------------- bridge fascia / deck underside ----------------
@@ -1303,7 +1359,8 @@ export function buildTrack(
         const kw = kerbSuppressed(st.flags, side) ? 0 : CROSS.kerbW;
         const lat = side * (st.hw + kw + sh + 0.1);
         const top = surfaceHeight(lat, st.hw, sh, d, kw === 0);
-        for (const step of [0, 0.35, 1]) {
+        for (let sj = 0; sj < DECK_STEPS.length; sj++) {
+          const step = DECK_STEPS[sj];
           const inset = step * 0.55;
           _v.copy(st.pos)
             .addScaledVector(st.bin, lat - side * inset)
@@ -1314,14 +1371,57 @@ export function buildTrack(
           // fascia: 0.729 m per tile against 3.14 m along it, aniso 4.31. Now it
           // is metres down the fascia, measured along the actual profile.
           const downM = Math.hypot(inset, step * CROSS.deckDepth);
+          // And `u` is this fascia line's OWN arc length, not the centreline's,
+          // for the same reason the tunnel haunch needs one: the fascia sits at
+          // +-12 m, and on volcano's R 54 m spiral the outer edge runs 22 % longer
+          // per centreline metre. Measured p99 2.83 m per tile against a declared
+          // 2.0 before this. Six accumulators — two sides by three profile steps.
+          const slot = si * DECK_STEPS.length + sj;
+          if (deckSeen) deckRun[slot] += _v.distanceTo(_deckPrev[slot]);
+          _deckPrev[slot].copy(_v);
           ring[si].push(deck.vertex(
             _v, _n2,
-            d * deckSu, downM * deckSv,
+            deckRun[slot] * deckSu, downM * deckSv,
             0.5, v2, ao, ao, ao,
           ));
         }
       }
-      // flat soffit between the two sides
+      deckSeen = true;
+      /**
+       * The flat soffit gets its OWN vertices, and that is a fix, not a tidy-up.
+       *
+       * It used to reuse the fascia's step-1 vertices. All four corners of the
+       * soffit quad therefore carried the same `v` (the fascia's `step`, or after
+       * the world-locking pass the same `downM`), so the quad's UV was DEGENERATE —
+       * zero extent in `v`, det(J) = 0 — and the concrete was smeared as a single
+       * line across the whole span. Every bridge underside in the game, including
+       * the one volcano's spiral passes 20 m beneath.
+       *
+       * Its own pair of vertices lets both axes be world metres: `u` along the
+       * bridge (the centreline's `d`, which is right for a slab centred on the
+       * road, and which the fascia's per-edge accumulators cannot supply because
+       * the two sides' arc lengths diverge by 44 % on a R 54 m spiral), and `v`
+       * across the span.
+       */
+      const soffit: [number, number] = [0, 0];
+      for (const side of [-1, 1] as const) {
+        const si = side < 0 ? 0 : 1;
+        const sh = side < 0 ? st.shL : st.shR;
+        const kw = kerbSuppressed(st.flags, side) ? 0 : CROSS.kerbW;
+        const lat = side * (st.hw + kw + sh + 0.1);
+        const top = surfaceHeight(lat, st.hw, sh, d, kw === 0);
+        const inner = lat - side * 0.55;
+        _v.copy(st.pos)
+          .addScaledVector(st.bin, inner)
+          .addScaledVector(st.nrm, top - CROSS.deckDepth);
+        _n2.copy(st.nrm).multiplyScalar(-1);
+        soffit[si] = deck.vertex(
+          _v, _n2,
+          d * deckSu, inner * deckSv,
+          0.5, v2, 0.34, 0.34, 0.34,
+        );
+      }
+
       if (prevDeckRing) {
         for (const si of [0, 1]) {
           const a = prevDeckRing[si];
@@ -1332,23 +1432,21 @@ export function buildTrack(
               // outward-and-down, correct for the face you see from off the
               // track, but these 8 fascia triangles per ring were wound so the
               // front face pointed back into the bridge box. The 2 SOFFIT
-              // triangles below were always correct and are untouched.
+              // triangles below were always correct and keep their winding.
               if (si === 0) deck.quad(a[k], b[k], b[k + 1], a[k + 1]);
               else deck.quad(a[k], a[k + 1], b[k + 1], b[k]);
             }
           }
         }
-        const a0 = prevDeckRing[0][2];
-        const a1 = prevDeckRing[1][2];
-        const b0 = ring[0][2];
-        const b1 = ring[1][2];
-        if (a0 !== undefined && a1 !== undefined && b0 !== undefined && b1 !== undefined) {
-          deck.quad(a0, b0, b1, a1);
-        }
+        deck.quad(prevSoffit[0], soffit[0], soffit[1], prevSoffit[1]);
       }
       prevDeckRing = ring;
+      prevSoffit[0] = soffit[0];
+      prevSoffit[1] = soffit[1];
     } else {
       prevDeckRing = null;
+      deckRun.fill(0);
+      deckSeen = false;
     }
   }
 
