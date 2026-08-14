@@ -107,12 +107,18 @@ export const RUBBERBAND = {
    *
    * So the band now asks how the driver is COPING. A racer in recovery, or one that
    * has just been stuck, gets its risk and speed bonus scaled toward neutral until
-   * it has strung `composureSeconds` of ordinary racing together. A racer that is
-   * behind because it is slower still gets the full band — which is the case the
-   * band exists for.
+   * it has strung enough ordinary racing together. A racer that is behind because it
+   * is slower still gets the full band — which is the case the band exists for.
+   *
+   * The window itself lives in `RECOVER.composureSeconds` in AIDriver.ts, because
+   * `AIDriver.composure` is what computes it. There used to be a duplicate
+   * `composureSeconds` here that nothing read, and it cost a measurement: a probe
+   * that reintroduced the defect by zeroing THIS copy reported numbers
+   * bit-identical to the control, and the only reason that was caught rather than
+   * believed is that "identical to four decimal places" is not what a real
+   * behavioural difference looks like.
    */
   strugglingRiskFloor: 0.1,
-  composureSeconds: 6.0,
 } as const;
 
 /** Per-CC skill profiles. 50cc is genuinely bad; 200cc is genuinely scary. */
@@ -236,7 +242,7 @@ export class Rubberband {
    * @param composure    0..1 — how well this driver is coping. 1 = racing
    *                     normally, 0 = in recovery or just stuck. Anything below 1
    *                     scales the band's push toward neutral. See
-   *                     `RUBBERBAND.composureSeconds` for why this exists; it is
+   *                     the COMPOSURE note in `RUBBERBAND` for why this exists; it is
    *                     not a nicety, it is the fix for a runaway that cost one
    *                     kart an entire race.
    */
