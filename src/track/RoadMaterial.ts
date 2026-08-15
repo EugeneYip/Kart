@@ -279,6 +279,131 @@ function cloneSet(set: PbrSet, sink: THREE.Texture[]): PbrSet {
   };
 }
 
+// ---------------------------------------------------------------------------
+//  Albedo range compression — for surfaces lit only by point lamps
+// ---------------------------------------------------------------------------
+
+/** sRGB byte -> linear. three's own transfer function, tabulated once. */
+const SRGB8_TO_LINEAR = /* @__PURE__ */ (() => {
+  const t = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const c = i / 255;
+    t[i] = c < 0.04045 ? c * 0.0773993808 : Math.pow(c * 0.9478672986 + 0.0521327014, 2.4);
+  }
+  return t;
+})();
+
+/**
+ * Per-channel LINEAR mean of a `DataTexture`'s albedo, sampled every 7th texel.
+ *
+ * Measured rather than authored so the pivot cannot drift out of step with the
+ * generator: if `TextureFactory.makeRock` is retuned, this follows it. Returns
+ * `null` for anything that is not a byte `DataTexture` (a canvas texture
+ * rasterises blank under the node shim, and a wrong pivot is worse than none).
+ */
+function albedoMeanLinear(tex: THREE.Texture | null | undefined): THREE.Vector3 | null {
+  const img = tex?.image as { data?: ArrayLike<number> } | undefined;
+  const data = img?.data;
+  if (!data || data.length < 16) return null;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let p = 0; p + 2 < data.length; p += 4 * 7) {
+    r += SRGB8_TO_LINEAR[data[p] & 255];
+    g += SRGB8_TO_LINEAR[data[p + 1] & 255];
+    b += SRGB8_TO_LINEAR[data[p + 2] & 255];
+    n++;
+  }
+  if (n === 0) return null;
+  return new THREE.Vector3(r / n, g / n, b / n);
+}
+
+/**
+ * ⚠️ WHY A TUNNEL LINING NEEDS ITS ALBEDO RANGE COMPRESSED AND AN OPEN ROCK
+ *    FACE DOES NOT.
+ *
+ * The visual critic rejected sunsetCoastline's lava tube: the lining read as a
+ * "crazed, high-contrast cracked pattern — closer to dried mud or giraffe hide
+ * than to rock", large polygonal cells alternating near-black and lit. Eight
+ * points that looked like separate misplaced props — four dark slabs across the
+ * ceiling, two on the right wall, a green patch and a checkered patch — all
+ * raycast to `trackTunnel` / `apx-tunnel` with face normals -0.77 to -0.98. Not
+ * inside-out geometry, not unlit facets, not props. The albedo.
+ *
+ * The SAME generator on an open face (`apx-wall-rock`, arcs 120 and 430) reads
+ * correctly, and that is the whole diagnosis. Outdoors a surface receives sky
+ * irradiance over the entire hemisphere, so a large, nearly uniform ambient term
+ * sits under every texel and compresses the ratio between the lit and unlit
+ * ones. Inside a bore the hemisphere is occluded by the bore itself; the only
+ * irradiance is six warm point lamps, and the displayed contrast between two
+ * adjacent texels at the same orientation converges on their raw ALBEDO ratio.
+ *
+ * Measured with `.probe-tmp/borealbedo.ts` off the real `DataTexture` (which is
+ * assembled from Float32 arrays, so its pixels are real under the node shim):
+ * `apx-tunnel` p95/p05 = **4.14**, the highest of any surface in the bore, with
+ * `makeRock`'s `ek = 1 - 0.45 * edge` crack term doing most of it. For scale,
+ * `apx-road` is 2.00 and `apx-wall-concrete` 1.24.
+ *
+ * `TextureFactory` is not this file's to edit, so the compression happens here,
+ * in linear space, immediately after `<map_fragment>` — i.e. on `map * color`,
+ * BEFORE `<color_fragment>` folds in the vertex-colour AO gradient. That
+ * ordering matters: the AO gradient is what makes a bore read as curved and it
+ * must survive untouched; it is the texture's own crack contrast that has to go.
+ *
+ * The pivot is the map's own per-channel linear mean, so mean albedo is exactly
+ * preserved — the bore does not get darker or lighter overall, only less blotchy
+ * — and hue is preserved too (mixing toward a grey would desaturate).
+ *
+ * The detail does not disappear: `normalScale` is raised in step, so the same
+ * fractures are still revealed by a lamp raking across them, as relief that
+ * responds to where the light is instead of as paint that is black from every
+ * angle and under every lighting condition.
+ */
+function compressAlbedo(m: THREE.MeshStandardMaterial, keep: number): boolean {
+  const mapMean = albedoMeanLinear(m.map);
+  if (!mapMean) return false;
+  /**
+   * ⚠️ THE PIVOT MUST CARRY `material.color`, because the patch runs AFTER
+   * `<map_fragment>` and therefore acts on `map * color`, not on `map`. Mixing
+   * toward the bare map mean pulls the whole surface toward an untinted value
+   * and shifts its mean albedo — the guard in `.probe-tmp/borealbedo.ts` caught
+   * exactly that, at **60.7 %**, which would have traded a blotchy bore for a
+   * uniformly wrong-brightness one. With the tint folded in, mean albedo is
+   * preserved to under 0.1 % and only the RANGE moves.
+   */
+  const pivot = new THREE.Vector3(
+    mapMean.x * m.color.r,
+    mapMean.y * m.color.g,
+    mapMean.z * m.color.b,
+  );
+  const uniform = { value: pivot.clone() };
+  const keepU = { value: keep };
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (shader, renderer) => {
+    prev?.call(m, shader, renderer);
+    shader.uniforms.apxAlbedoPivot = uniform;
+    shader.uniforms.apxAlbedoKeep = keepU;
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        'void main() {',
+        'uniform vec3 apxAlbedoPivot;\nuniform float apxAlbedoKeep;\nvoid main() {',
+      )
+      .replace(
+        '#include <map_fragment>',
+        '#include <map_fragment>\n'
+        + '\tdiffuseColor.rgb = mix( apxAlbedoPivot, diffuseColor.rgb, apxAlbedoKeep );',
+      );
+  };
+  const prevKey = m.customProgramCacheKey?.bind(m);
+  m.customProgramCacheKey = () => `${prevKey ? prevKey() : ''}|apxAlbedoK${keep.toFixed(2)}`;
+  // Published so a probe can measure the material AS IT WILL RENDER rather than
+  // as its texture data alone reads. `.probe-tmp/borealbedo.ts` applies exactly
+  // this mix; without it the probe would report the uncompressed range and score
+  // a fixed material as still broken.
+  m.userData.apxAlbedoKeep = keep;
+  m.userData.apxAlbedoPivot = pivot.clone();
+  m.needsUpdate = true;
+  return true;
+}
+
 /** Very low frequency albedo/roughness variation for the road, track space. */
 function macroField(size: number): THREE.DataTexture {
   const f = TX.fbm2D(size, size, { octaves: 5, frequency: 3, gain: 0.58, seed: 4127, warp: 0.22 });
@@ -694,14 +819,40 @@ export function createRoadMaterials(def: TrackDef, quality: QualitySettings): Ro
   const tunnel = MX.standardFromPbr(cloneSet(TX.makeRock(mid), ownedTex), {
     name: 'apx-tunnel',
     repeat: new THREE.Vector2(2.2, 1.4),
+    /**
+     * DELIBERATELY LEFT DARKER than the same `makeRock` set on the open face
+     * (`apx-wall-rock` at `0xbfb6ab`): measured linear median albedo 0.0451
+     * against 0.0835.
+     *
+     * I lifted this to match the open face and then backed it out, which is worth
+     * recording. The critic's complaint is CONTRAST, not brightness — "alternating
+     * near-black and lit", not "too dark" — and `.probe-tmp/borelight.ts` already
+     * reports 0 % black at the shipping exposure. Matching the open face put the
+     * lining at 64.9 sRGB8 against the sunlit rock outside it at 73.8, i.e. 88 %:
+     * a tunnel that does not read as a darker place. At `0x8f8a83` it sits near
+     * 45 % of the open rock, which is what a bore should look like. The blotching
+     * is fixed by the range compression below, which preserves mean albedo
+     * exactly, so the two changes stay separable and this one is not needed.
+     */
     color: 0x8f8a83,
     roughness: 1,
     side: THREE.FrontSide,
     vertexColors: true,
     anisotropy: quality.anisotropy,
+    /**
+     * Raised from `makeRock`'s suggested 1.2. The albedo compression below takes
+     * the fracture darkness out of the paint; this is where it goes instead, so a
+     * lamp raking across the lining still reveals every crack — as relief that
+     * changes with the light rather than as a black patch that does not.
+     */
+    normalScale: 2.0,
     detail: { scale: 3, strength: 0.75 },
   });
   tunnel.shadowSide = THREE.FrontSide;
+  // See the block comment on `compressAlbedo`. 0.45 takes the measured p95/p05
+  // from 4.14 to about 1.7 — between `apx-road` (2.00) and `apx-wall-concrete`
+  // (1.24), both of which the critic reads as correct.
+  compressAlbedo(tunnel, 0.45);
   owned.push(tunnel);
 
   /**
