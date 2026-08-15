@@ -50,18 +50,29 @@ export const CHARACTERS: readonly CharacterDef[] = [
   {
     id: 'foxy',
     name: 'Foxy',
-    tagline: 'Never loses grip, never wins a drag race.',
+    tagline: 'Fastest on the grid, and she still never loses grip.',
     bodyId: 'standard',
     tyreId: 'slick',
     color: 0xe4761f,
     secondaryColor: 0xf3e3cb,
     glowColor: 0x4fc8f0,
-    // The corner-exit specialist. Deliberately NOT Vex (who has 1.0 handling and
-    // bad traction) and NOT Pip (who has 0.24 speed and 0.96 accel): Foxy has
-    // real traction, a real top speed, and the second-best mini-turbo on the
-    // roster, but average acceleration — so she wins by never making a mistake,
-    // not by recovering from one.
-    stats: { speed: 0.52, accel: 0.58, weight: 0.2, handling: 0.72, traction: 0.78, miniTurbo: 0.84 },
+    // `speed: 1.0` — the owner asked for Foxy's Speed bar to read 5, and
+    // `toMenuStats` is `s.speed * 5`, so 1.0 is the value that shows 5.0. It was
+    // 0.52, which displayed as 2.5.
+    //
+    // A deliberate owner decision, and less disruptive than it sounds: the speed
+    // bars now run foxy 5.0, blitz 4.8, strata 4.3, torque 3.9, then a gap to
+    // zephyr 3.0. She is top by one notch over a rival who was already at 0.96,
+    // not an outlier.
+    //
+    // Her costs are unchanged and still real: the lowest weight on the grid (0.2),
+    // so she is shoved around in every contact, and accel 0.58, which keeps her
+    // ordinary off the line and after a hit. The old tagline said she "never wins a
+    // drag race", which this directly contradicts, so it changed too.
+    //
+    // No other character's stats were touched. If the grid feels lopsided after
+    // this, the fix is a deliberate balance pass, not a quiet nerf hidden here.
+    stats: { speed: 1.0, accel: 0.58, weight: 0.2, handling: 0.72, traction: 0.78, miniTurbo: 0.84 },
     driverId: 'fox',
     flake: 0.45,
   },

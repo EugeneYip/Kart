@@ -772,15 +772,24 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'crowdStand', t: 0.60, lat: -26 },
       { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.656 },
       // ---- the mountain side ----------------------------------------------
-      // Backdrop. The prop is 240 m across, and `roadOverhang` judges an anchor
-      // on its eight BOX CORNERS, so `lat` has to clear the road by more than the
-      // half-extent or the road-surface guard shoves it (measured: at lat 420 one
-      // instance was pushed 4.32 m and logged a warning). Beyond 540 every corner
-      // is outside the whole 431 x 512 m footprint.
-      { type: 'mountainRidge', t: 0.70, lat: 560, scale: 1.15 },
-      { type: 'mountainRidge', t: 0.775, lat: 700, scale: 1.35 },
-      { type: 'mountainRidge', t: 0.86, lat: 545, scale: 1.0 },
-      { type: 'mountainRidge', t: 0.10, lat: -640, scale: 1.25 },
+      // FOUR `mountainRidge` CONES REMOVED at the owner's request: "there are many
+      // strange pyramid structures in the background that need to be removed", and
+      // separately "care must be taken to avoid a desert-like feeling".
+      //
+      // They were the backdrop for this side of the lap — t 0.70/0.775/0.86 at lat
+      // 545-700 and one at t 0.10, lat -640. Taipei genuinely sits in a basin ringed
+      // by mountains, so the instinct was sound, but a low-poly cone at 390 m reads
+      // as a dune rather than a peak, and four of them in a sunset palette is
+      // exactly the desert the owner does not want.
+      //
+      // The horizon does not go empty: the ring landform is `Mountains`, a separate
+      // Environment mesh built from the terrain field, not these props. These were
+      // additional cones standing in front of it.
+      //
+      // They were also the props behind Taipei's 153 m prop re-seat correction —
+      // `lat: 700` applied along a BANKED binormal buys 700 * sin(13.5 deg) = 164 m
+      // of spurious altitude, which the re-seater then had to undo. Removing them
+      // retires that whole class of warning on this circuit.
       // 13 m tall and 4 m across: at lat 22 these were among the worst occluders
       // through the one right-hander (`.probe-tmp/sightline.ts`), so they sit back
       // on the bank where a hillside tree belongs.
