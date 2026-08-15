@@ -500,7 +500,13 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.006, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.022, lat: 27 },
-      { type: 'balloonArch', t: 0.048, lat: 0, up: 9 },
+      // `up: 0`, not 9. The recipe's two ballast blocks are built at local
+      // y = 0..0.6, so the arch's origin IS ground level — `up: 9` lifted the whole
+      // 22 m span nine metres into the air and left its feet 8.45 m above the
+      // tarmac. Measured on all four circuits that carry one: 8.44-8.45 m of clear
+      // air under the ballast. This is the owner's "balloons that appear
+      // unnaturally suspended in the air", and it was authored, not computed.
+      { type: 'balloonArch', t: 0.048, lat: 0, up: 0 },
       // Downtown behind the stands. `skyscraper` and `towerBlock` are the
       // existing city recipes; the first is folded into `buildCity`'s own
       // InstancedMesh by `takeAuthored`, so it costs no draw call at all.
@@ -640,7 +646,7 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.008, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.026, lat: 27 },
-      { type: 'balloonArch', t: 0.052, lat: 0, up: 9 },
+      { type: 'balloonArch', t: 0.052, lat: 0, up: 0 },
       { type: 'skyscraper', t: 0.012, lat: 88, step: 0.022, end: 0.10, mirror: true, scale: 1.45 },
       { type: 'towerBlock', t: 0.016, lat: 44, step: 0.015, end: 0.105, mirror: true },
       { type: 'streetLamp', t: 0.022, lat: 17, step: 0.018, end: 0.105, mirror: true },
@@ -763,7 +769,7 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.007, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.024, lat: 27 },
-      { type: 'balloonArch', t: 0.05, lat: 0, up: 9 },
+      { type: 'balloonArch', t: 0.05, lat: 0, up: 0 },
       { type: 'skyscraper', t: 0.012, lat: 92, step: 0.021, end: 0.115, mirror: true, scale: 1.5 },
       { type: 'towerBlock', t: 0.016, lat: 45, step: 0.015, end: 0.12, mirror: true },
       { type: 'streetLamp', t: 0.02, lat: 17, step: 0.017, end: 0.12, mirror: true },

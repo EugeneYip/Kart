@@ -556,7 +556,13 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'grandstand', t: 0.005, lat: -27, up: 0, scale: 1.15 },
       { type: 'grandstand', t: 0.03, lat: -27, up: 0, scale: 1.0 },
       { type: 'crowdStand', t: 0.018, lat: 25, up: 0 },
-      { type: 'balloonArch', t: 0.055, lat: 0, up: 9 },
+      // `up: 0`, not 9. The recipe's two ballast blocks are built at local
+      // y = 0..0.6, so the arch's origin IS ground level — `up: 9` lifted the whole
+      // 22 m span nine metres into the air and left its feet 8.45 m above the
+      // tarmac. Measured on all four circuits that carry one: 8.44-8.45 m of clear
+      // air under the ballast. This is the owner's "balloons that appear
+      // unnaturally suspended in the air", and it was authored, not computed.
+      { type: 'balloonArch', t: 0.055, lat: 0, up: 0 },
       // beachfront palms + umbrellas along the straight
       { type: 'palm', t: 0.01, lat: -26, step: 0.012, end: 0.12, mirror: false, scale: 1.1 },
       { type: 'beachUmbrella', t: 0.02, lat: -33, step: 0.02, end: 0.11 },
