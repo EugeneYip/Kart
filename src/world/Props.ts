@@ -6057,22 +6057,76 @@ export class Props implements ISubsystem {
         // corridor, so nothing may come inside 14.2 m of the centreline below
         // the crotch. The feet stand at +-14.9 m and the legs lean IN as they
         // rise, crossing the corridor only at 27 m — 25 m above the deck.
+        //
+        // ---- WHAT WAS WRONG WITH IT, MEASURED --------------------------------
+        // Owner: *"the bridge in the Boston track has not been properly
+        // optimised and appears visually unnatural."* Three separate numbers,
+        // all off the old recipe (`.probe-tmp/landmark.ts`, `.probe-tmp/bridgeseat.ts`):
+        //
+        //  1. PROPORTION. 63 m tall against a 34 m foot spread and a 60 m cable
+        //     fan: slenderness 1.0, i.e. as wide as it was tall. A cable-stayed
+        //     tower is the opposite shape — the real one is 82 m above its deck
+        //     on legs 30 m apart. That is the "generic wide low arch" read.
+        //  2. NOTHING UNDER THE FEET. The legs stand at +-14.9 m; the bridge
+        //     DECK ends at hw 11 + kerb 1.55 + shoulder 1.2 + 0.1 = 13.85 m. So
+        //     both feet were outboard of the deck they appeared to stand on, and
+        //     the prop is a `CORRIDOR_PROPS` type so it keeps the deck's Y with
+        //     no re-seating. Measured against the heightfield: the -X feet hung
+        //     1.60-3.01 m in the air, the +X feet were 0.71-1.63 m INTO the
+        //     bank. One tower leg floating and the other buried, on both towers.
+        //  3. 488 TRIANGLES for the circuit's signature structure, with cables
+        //     0.09 m in radius — 1.2 px at 120 m on a 1080p frame, i.e. below
+        //     the resolution at which a cable fan is a cable fan at all.
+        //
+        // The leg geometry BELOW the crotch is deliberately unchanged: its lean
+        // is what keeps the carriageway clear, and re-tuning it would put the
+        // corridor argument above back in play for no visual gain. Everything
+        // that changed is above the crotch, below the deck, or in the fan.
         const b = this.builder();
-        const LEG = 14.9, KNEE = 27, TOP = 58;
+        b.uvScale = 0.5;
+        const LEG = 14.9, KNEE = 27, TOP = 86, PIER = -5.4;
+        const pale = 0xe0dbcd, stone = 0xd2ccbc;
         for (const sx of [-1, 1]) {
+          // ---- the pier the leg actually stands on --------------------------
+          // Descends BELOW the anchor, which is the deck. That is the same
+          // convention `bridgePylon` and `overpassArch` use and it is listed with
+          // its reason in `.probe-tmp/buried.ts`'s DESIGNED_SKIRT: a corridor
+          // prop's anchor is the carriageway, so anything that meets the ground
+          // has to hang from it. 5.4 m covers the 3.01 m of measured air with
+          // margin and buries harmlessly where the bank is high.
+          b.box(sx * LEG, PIER * 0.5 + 0.3, 0, 2.9, (0.6 - PIER) * 0.5, 3.3, stone,
+            { taper: 1.18, shade: { top: 1.06 } });
+          b.box(sx * LEG, PIER + 0.55, 0, 4.0, 0.55, 4.4, 0x9a958c, { shade: { top: 1.1 } });
           b.box(sx * LEG, 0.6, 0, 2.2, 0.6, 2.5, 0x8f8b82, { shade: { top: 1.12 } });
           // Four-sided tubes: a square section, and the only primitive here that
           // can lean. Two segments per leg so the lean has a knuckle in it.
-          b.tube(sx * LEG, 0.9, 0, sx * LEG * 0.6, KNEE * 0.66, 0, 1.5, 4, 0xe0dbcd, 1.0);
-          b.tube(sx * LEG * 0.6, KNEE * 0.66, 0, sx * 1.6, KNEE, 0, 1.25, 4, 0xe0dbcd, 0.94);
+          b.tube(sx * LEG, 0.9, 0, sx * LEG * 0.6, KNEE * 0.66, 0, 1.5, 4, pale, 1.0);
+          b.tube(sx * LEG * 0.6, KNEE * 0.66, 0, sx * 1.6, KNEE, 0, 1.25, 4, pale, 0.94);
+          // A shadow line down the outer face of each leg. Two thin battens on a
+          // 30 m member is the cheapest thing that stops a smooth white tube
+          // reading as a default primitive at 100 m.
+          for (const sz of [-1, 1]) {
+            b.tube(sx * (LEG - 0.1), 1.2, sz * 1.05, sx * (LEG * 0.6 - 0.1), KNEE * 0.66,
+              sz * 0.9, 0.13, 4, 0xbdb6a6, 0.8);
+          }
         }
-        // The obelisk above the crotch, tapered, with a pyramidal cap.
-        b.box(0, KNEE + (TOP - KNEE) * 0.5, 0, 2.5, (TOP - KNEE) * 0.5, 2.2, 0xe8e3d6,
-          { taper: 0.62, shade: { top: 1.14 } });
-        b.box(0, TOP + 1.9, 0, 1.7, 1.9, 1.5, 0xe8e3d6, { taper: 0.08, shade: { top: 1.2 } });
+        // ---- the obelisk above the crotch ------------------------------------
+        // Was 31 m of shaft on a 58 m tower. Now 59 m on an 88 m one: the tower
+        // is 2.6x its own foot spread instead of 1.8x, which is the proportion
+        // the real structure has. Built in two stages with a set-off between
+        // them, so the taper has a joint in it rather than being one long cone.
+        const MID = KNEE + (TOP - KNEE) * 0.56;
+        b.box(0, KNEE + (MID - KNEE) * 0.5, 0, 2.5, (MID - KNEE) * 0.5, 2.2, 0xe8e3d6,
+          { taper: 0.74, shade: { top: 1.14 } });
+        b.box(0, MID + 0.32, 0, 2.05, 0.32, 1.8, stone, { shade: { top: 1.2 } });
+        b.box(0, MID + 0.64 + (TOP - MID) * 0.5, 0, 1.78, (TOP - MID) * 0.5, 1.56, 0xe8e3d6,
+          { taper: 0.72, shade: { top: 1.14 } });
+        b.box(0, TOP + 1.0, 0, 1.4, 0.36, 1.25, stone, { shade: { top: 1.2 } });
+        b.box(0, TOP + 2.9, 0, 1.28, 1.55, 1.14, 0xe8e3d6, { taper: 0.08, shade: { top: 1.2 } });
         // Deck crossbeam under the crotch: what the legs are actually holding.
         b.box(0, KNEE - 1.6, 0, LEG * 0.62, 0.8, 1.6, 0xcfc9ba, { shade: { top: 1.1 } });
         const met = this.builder();
+        met.uvScale = 0.8;
         // ---- THE CABLES CROSSED THE RACING LINE AT 1.94 m. -------------------
         // The deck-end anchors were authored at `sx * 12.6` (just outside the
         // 12.55 m barrier) and `sz * (9 + f * 40)`, i.e. up to 49 m ALONG the road.
@@ -6090,12 +6144,41 @@ export class Props implements ISubsystem {
         // and the deck end lands at 2.9 m on the barrier line rather than 0.75 m on
         // the deck, so residual drift cannot put a cable at kart height. Re-measured
         // after the change and reported.
+        //
+        // ---- AND THEY WERE 1.2 PIXELS WIDE. ---------------------------------
+        // 0.09 m of radius seen from 120 m subtends 0.086 deg, which on a 1080p
+        // frame at the real 79.75 deg chase FOV is 1.2 px — thinner than the
+        // line the anti-aliaser can hold, so the fan dissolved into grey haze at
+        // exactly the distance you look at a bridge from. 0.17 m gives 2.3 px
+        // and 12 stays per quadrant instead of 8 makes it a fan rather than a
+        // few wires. The 27 m along-road reach is UNCHANGED, because that number
+        // is the chord-vs-curve limit derived above and has nothing to do with
+        // how the fan looks.
+        const STAYS = 12;
         for (const sx of [-1, 1]) {
           for (const sz of [-1, 1]) {
-            for (let i = 0; i < 8; i++) {
-              const f = (i + 1) / 8;
-              met.tube(sx * 1.5, KNEE + (TOP - 5 - KNEE) * f, 0,
-                sx * 12.6, 2.9, sz * (7 + f * 20), 0.09, 4, 0xc4ced6, 1.0);
+            for (let i = 0; i < STAYS; i++) {
+              const f = (i + 1) / STAYS;
+              met.tube(sx * 1.5, KNEE + (TOP - 8 - KNEE) * f, 0,
+                sx * 12.6, 2.9, sz * (7 + f * 20), 0.17, 4, 0xc4ced6, 1.0);
+            }
+          }
+        }
+        // One anchor casting per stay where it lands on the barrier line. A stay
+        // that ends in mid-air is what makes a cable-stayed bridge look drawn
+        // rather than built.
+        //
+        // DISCRETE, not a continuous anchor beam, and that is the same
+        // chord-vs-curve argument as the fan reach: a single 23 m beam at a
+        // fixed |x| = 12.6 departs from the curving deck edge by about a metre
+        // over its length, which would put it inside the 12.55 m barrier and
+        // over the tarmac. A 0.55 m casting cannot drift more than its own size.
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            for (let i = 0; i < STAYS; i++) {
+              const f = (i + 1) / STAYS;
+              met.box(sx * 12.6, 3.0, sz * (7 + f * 20), 0.5, 0.75, 0.55, 0x9aa4ad,
+                { shade: { top: 1.12 } });
             }
           }
         }
@@ -6104,9 +6187,16 @@ export class Props implements ISubsystem {
         // apart would each lay a 100 m rail down the SAME edge — coincident
         // surfaces that shimmer. The cables land on the barrier that exists.
         const glow = this.builder();
-        glow.sphere(0, TOP + 4.2, 0, 0.5, 8, 5, 0xff3b2e);
+        glow.sphere(0, TOP + 5.2, 0, 0.5, 8, 5, 0xff3b2e);
         for (let i = -2; i <= 2; i++) {
           glow.box(i * 5.6, KNEE - 2.5, 0, 0.5, 0.14, 0.5, 0xfff0c8);
+        }
+        // Obstruction lights up the obelisk. Boston is a daylight circuit so
+        // this is not doing the work `broadcastSpire`'s scheme does — it is the
+        // detail that says "a structure tall enough to need warning lights",
+        // and it costs 3 spheres.
+        for (const f of [0.34, 0.67, 1.0]) {
+          glow.sphere(0, KNEE + (TOP - KNEE) * f, 1.3, 0.34, 6, 4, 0xff5a3a);
         }
         return {
           geo: b.build('bridgeArch'), metal: met.build('bridgeArchCables'),
@@ -6516,13 +6606,39 @@ export class Props implements ISubsystem {
         b.box(0, DECK + 5.1, 0, 6.3, 0.42, 6.3, red, { shade: { top: 1.1 } });
         b.box(0, TOP + 1.7, 0, 3.7, 1.7, 3.7, pale, { taper: 0.86, shade: { top: 1.16 } });
         b.prism(0, TOP + 3.4, 0, 0.58, MAST - TOP - 3.4, 8, red, { taper: 0.2 });
+        // ---- FLOODLIT OVER ITS WHOLE HEIGHT --------------------------------
+        // Measured on the old recipe: `lit% 15` — 3 of 20 height bands carried
+        // any emissive geometry (a deck ring, a crown bar, the mast beacon), on
+        // a night circuit. A tower that is dark for 85 % of its own height is
+        // not a landmark at night however good its daytime silhouette is, and
+        // the real one is uplit from the ground to the mast.
+        //
+        // The light is authored ON the four legs rather than as a separate glow
+        // cage: one emissive member per leg per level, so it follows the batter
+        // exactly and the lit line reads as the tower's own edge.
         const glow = this.builder();
-        glow.sphere(0, MAST + 0.7, 0, 0.62, 8, 5, 0xff3b2e);
+        for (let l = 0; l < LV; l++) {
+          const y0 = l === 0 ? 0.35 : (l / LV) * TOP;
+          const y1 = ((l + 1) / LV) * TOP;
+          const r0 = rAt(y0) * 1.02, r1 = rAt(y1) * 1.02;
+          // Warm at the base, cooling toward the crown: a 2 % hue walk is what
+          // AGENTS section 3 means by "even a small hue shift reads as art
+          // directed", and it stops 36 members being one flat orange.
+          const warm = mixHex(0xff8a2a, 0xffd9a0, l / LV);
+          for (const [ax, az] of corners) {
+            glow.tube(ax * r0, y0, az * r0, ax * r1, y1, az * r1, 0.22, 4, warm);
+          }
+        }
+        // Deck soffit and crown bands, then the mast beacon ladder.
         for (let i = 0; i < 8; i++) {
           const a = (i / 8) * Math.PI * 2;
           glow.box(Math.cos(a) * 6.7, DECK + 1.1, Math.sin(a) * 6.7, 0.55, 0.3, 0.55, 0xffd9a0);
         }
+        glow.box(0, DECK - 0.35, 0, 7.6, 0.28, 7.6, 0xffc27a);
         glow.box(0, TOP + 3.5, 0, 3.4, 0.2, 3.4, 0xffb43a);
+        for (const f of [0.42, 0.72, 1.0]) {
+          glow.sphere(0, TOP + 3.4 + (MAST - TOP - 3.4) * f + 0.4, 0, 0.6, 8, 5, 0xff3b2e);
+        }
         return {
           geo: b.build('latticeTower'), glow: glow.build('latticeGlow'),
           softGlow: true, cull: CULL_FAR,
@@ -6530,40 +6646,149 @@ export class Props implements ISubsystem {
       }
 
       case 'broadcastspire': {
-        // ---- TOKYO: the white broadcast spire ------------------------------
-        // A 196 m tapering shaft with vertical ribs, two observation pods and a
-        // needle. Taller than everything else on the circuit by a factor of two,
-        // which is the entire point: it is the horizon marker.
-        // ACROSS-ROAD half-extent 9.4 m. Authored once, 200 m off the road.
+        // ---- TOKYO: the broadcast tower ------------------------------------
+        // Owner: *"the Skytree is very slim and does not convey the sense of a
+        // grand illuminated landmark"*. Both halves of that were measured before
+        // this was touched (`.probe-tmp/landmark.ts` on the old recipe):
+        //
+        //   slenderness 10.0  — height / full width. The most needle-like object
+        //                       in the game; the background towers run 2.4-3.4.
+        //   lit% 15           — 3 of 20 equal height bands carried any emissive
+        //                       geometry at all: two deck rings and the beacon.
+        //                       On a `skyPreset: 'night'` circuit whose every
+        //                       other building has a full window grid and a
+        //                       shopfront band, that is why it read as a pale
+        //                       vertical line against the sky.
+        //   923 triangles     — the least geometry of any landmark on the lap,
+        //                       for the tallest thing on it.
+        //
+        // Three changes, in the order they matter:
+        //
+        //  1. THE PROFILE IS NOW A TABLE, not a geometric taper. `0.86^i` can
+        //     only ever make a cone. The real tower's silhouette is a wide
+        //     tripod base, a waist, a fat observation drum, a second waist, a
+        //     smaller drum, and a needle — and that double bulge is the entire
+        //     recognisability of the thing. Authored as `KEY` below so the
+        //     silhouette IS the data and can be read without running the code.
+        //  2. A STEEL EXOSKELETON. Ten corner columns following that profile,
+        //     with diagonal bracing and a ring at every level, on the `metal`
+        //     pass. A truss reads as structure at 200 m where a smooth prism
+        //     reads as a painted post; it is also what makes the base flare
+        //     legible as a tripod rather than as a fatter cone.
+        //  3. FULL-HEIGHT ILLUMINATION. An emissive rib up every column at every
+        //     level, plus lit deck bands and a beacon ladder. `lit%` goes to
+        //     100: every band of the tower carries light, which is what a
+        //     landmark lighting scheme is.
+        //
+        // ACROSS-ROAD half-extent 14.6 m (was 9.4). Authored once, 200 m off the
+        // road, so the extra width costs no clearance anywhere.
         const b = this.builder();
         b.uvScale = 0.12;
-        const white = 0xdfe4e8, cool = 0xb0bdc8;
-        const SEG = 7, H1 = 124;
-        let y = 0, r = 9.4;
-        for (let i = 0; i < SEG; i++) {
-          const h = H1 / SEG;
-          const rt = 9.4 * Math.pow(0.86, i + 1);
-          b.prism(0, y, 0, r, h, 9, i % 2 ? white : cool,
-            { taper: rt / r, capBottom: i === 0, capTop: false, shade: { side: 1.0 } });
-          for (let k = 0; k < 9; k++) {
-            const a = (k / 9) * Math.PI * 2;
-            b.tube(Math.cos(a) * r * 0.99, y, Math.sin(a) * r * 0.99,
-              Math.cos(a) * rt * 0.99, y + h, Math.sin(a) * rt * 0.99, 0.22, 4, cool, 0.9);
+        const white = 0xe6ebee, cool = 0xbcc9d4, steelC = 0x9fb0be;
+        const H = 196;
+        /**
+         * Silhouette control points, `[height fraction, radius in metres]`.
+         * Linear between them. The two local maxima at 0.56 and 0.73 are the
+         * observation decks and they are the read — `.probe-tmp/landmark.ts`
+         * counts them as `bulge 2` off the built vertices, so a future edit that
+         * flattens them shows up as `bulge 0` rather than as nothing.
+         */
+        const KEY: ReadonlyArray<readonly [number, number]> = [
+          [0.000, 14.6], [0.055, 11.6], [0.150, 8.4], [0.300, 6.4],
+          [0.450, 5.2], [0.520, 5.4], [0.545, 10.4], [0.605, 10.8],
+          [0.630, 4.6], [0.700, 4.0], [0.720, 7.6], [0.765, 7.4],
+          [0.790, 2.5], [0.850, 1.5], [1.000, 0.30],
+        ];
+        const rAt = (f: number): number => {
+          const t = clamp(f, 0, 1);
+          for (let i = 1; i < KEY.length; i++) {
+            if (t <= KEY[i][0]) {
+              const [f0, r0] = KEY[i - 1], [f1, r1] = KEY[i];
+              return r0 + (r1 - r0) * ((t - f0) / Math.max(1e-6, f1 - f0));
+            }
           }
-          y += h;
-          r = rt;
+          return KEY[KEY.length - 1][1];
+        };
+        // Solid core, so the tower has mass behind the truss. Kept at 44 % of
+        // the profile: enough to stop the lattice reading as a wire model,
+        // narrow enough that the exoskeleton is still a separate silhouette.
+        const LV = 20, COL = 10, TOPF = 0.855;
+        for (let l = 0; l < LV; l++) {
+          const f0 = (l / LV) * TOPF, f1 = ((l + 1) / LV) * TOPF;
+          const r0 = rAt(f0) * 0.44, r1 = rAt(f1) * 0.44;
+          b.prism(0, f0 * H, 0, r0, (f1 - f0) * H, 10, l % 2 ? white : cool,
+            { taper: r1 / Math.max(1e-4, r0), capBottom: l === 0, capTop: false,
+              shade: { side: 1.0 } });
         }
-        b.prism(0, 103, 0, 8.4, 7.0, 12, white, { taper: 0.94, shade: { top: 1.14 } });
-        b.prism(0, 110, 0, 8.0, 0.5, 12, cool);
-        b.prism(0, y, 0, r * 0.85, 196 - y, 8, cool, { taper: 0.07 });
-        b.prism(0, 146, 0, 5.6, 4.6, 12, white, { taper: 0.92, shade: { top: 1.14 } });
+        // The needle above the truss, in two stages so the join is a shoulder.
+        b.prism(0, TOPF * H, 0, rAt(TOPF) * 0.5, (1 - TOPF) * H * 0.62, 8, cool,
+          { taper: 0.34, capTop: false });
+        b.prism(0, TOPF * H + (1 - TOPF) * H * 0.62, 0, rAt(TOPF) * 0.17,
+          (1 - TOPF) * H * 0.38, 6, steelC, { taper: 0.22 });
+        // ---- the exoskeleton ------------------------------------------------
+        const metal = this.builder();
+        metal.uvScale = 0.3;
+        for (let l = 0; l <= LV; l++) {
+          const f = (l / LV) * TOPF;
+          const r = rAt(f), y = f * H;
+          // Ring at every level: the horizontal rhythm that gives a 196 m tower
+          // a readable scale instead of one continuous edge.
+          for (let k = 0; k < COL; k++) {
+            const a0 = (k / COL) * Math.PI * 2, a1 = ((k + 1) / COL) * Math.PI * 2;
+            metal.tube(Math.cos(a0) * r, y, Math.sin(a0) * r,
+              Math.cos(a1) * r, y, Math.sin(a1) * r, 0.2, 4, steelC, 0.94);
+          }
+          if (l === LV) break;
+          const f2 = ((l + 1) / LV) * TOPF;
+          const r2 = rAt(f2), y2 = f2 * H;
+          for (let k = 0; k < COL; k++) {
+            const a0 = (k / COL) * Math.PI * 2, a1 = ((k + 1) / COL) * Math.PI * 2;
+            // Column, then one diagonal per bay, alternating hand by level so
+            // the bracing zig-zags up the tower the way a real truss does.
+            metal.tube(Math.cos(a0) * r, y, Math.sin(a0) * r,
+              Math.cos(a0) * r2, y2, Math.sin(a0) * r2, 0.34, 4, steelC, 1.0);
+            const [ba, bb2] = l % 2 ? [a0, a1] : [a1, a0];
+            metal.tube(Math.cos(ba) * r, y, Math.sin(ba) * r,
+              Math.cos(bb2) * r2, y2, Math.sin(bb2) * r2, 0.17, 4, cool, 0.88);
+          }
+        }
+        // ---- the two observation decks --------------------------------------
+        // Drums with a projecting lip and a floor slab, so the bulge in the
+        // profile is a building and not a swelling in the shaft.
+        for (const [df, dh] of [[0.545, 0.06], [0.720, 0.045]] as const) {
+          const dy = df * H, r = rAt(df + dh * 0.5);
+          b.prism(0, dy, 0, r * 0.99, dh * H, 14, white,
+            { taper: 0.98, shade: { side: 1.02, top: 1.14 } });
+          b.prism(0, dy - 0.7, 0, r * 1.1, 0.7, 14, cool, { shade: { top: 1.16 } });
+          b.prism(0, dy + dh * H, 0, r * 1.06, 0.6, 14, cool, { shade: { top: 1.2 } });
+        }
+        // ---- illumination ----------------------------------------------------
         const glow = this.builder();
-        glow.prism(0, 102.4, 0, 8.5, 0.6, 12, 0xa8d8ff);
-        glow.prism(0, 145.4, 0, 5.7, 0.5, 12, 0xa8d8ff);
-        glow.sphere(0, 197, 0, 0.85, 8, 5, 0xff3b2e);
+        for (let l = 0; l < LV; l++) {
+          const f = (l / LV) * TOPF, f2 = ((l + 1) / LV) * TOPF;
+          const r = rAt(f) * 1.02, r2 = rAt(f2) * 1.02;
+          // The scheme alternates a cool blue and a warm violet up the tower,
+          // the way the real one alternates its two named lightings; two hues
+          // over 20 levels also stops a single flat emissive column.
+          const hue = l % 2 ? 0x6fd8ff : 0xb08cff;
+          for (let k = 0; k < COL; k++) {
+            const a = (k / COL) * Math.PI * 2;
+            glow.tube(Math.cos(a) * r, f * H, Math.sin(a) * r,
+              Math.cos(a) * r2, f2 * H, Math.sin(a) * r2, 0.2, 4, hue);
+          }
+        }
+        for (const [df, dh] of [[0.545, 0.06], [0.720, 0.045]] as const) {
+          glow.prism(0, df * H - 0.75, 0, rAt(df + dh * 0.5) * 1.13, 0.5, 14, 0xd6ecff);
+          glow.prism(0, (df + dh) * H + 0.05, 0, rAt(df + dh * 0.5) * 1.09, 0.4, 14, 0xd6ecff);
+        }
+        // Aviation beacons up the needle, not just one at the tip: a ladder of
+        // red lights is what says "very tall" at night from far away.
+        for (const f of [0.88, 0.94, 1.0]) {
+          glow.sphere(0, f * H + 1.0, 0, 0.8, 8, 5, 0xff3b2e);
+        }
         return {
-          geo: b.build('broadcastSpire'), glow: glow.build('spireGlow'),
-          softGlow: true, cull: CULL_FAR,
+          geo: b.build('broadcastSpire'), metal: metal.build('spireTruss'),
+          glow: glow.build('spireGlow'), softGlow: true, cull: CULL_FAR,
         };
       }
 

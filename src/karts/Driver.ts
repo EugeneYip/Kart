@@ -317,8 +317,17 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     torso: 0.228, head: 'beret', outfit: 'sweater',
     // Bold two-mass blocking: cold blue knit over the whole upper body against
     // warm orange fur everywhere else, with the mustard beret as the only accent.
-    suit: 0x4a7398, suitAlt: 0xd8a32b, skinColor: 0xe4761f,
-    species: 'fox', fur: 0xe4761f, furAlt: 0xf3e3cb, furDark: 0x2e1a12,
+    // ⚠️ SECOND INSTANCE OF THE CAPY DEFECT, ON THE MASCOT. `fur` was 0xe4761f
+    // and `CHARACTERS.foxy.color` — the racer-select card's background — was also
+    // 0xe4761f. Byte-identical, 1.00:1 contrast: Foxy's entire pelt vanished into
+    // her own card. Found by the contrast gate in `.probe-tmp/charqa.ts`
+    // immediately after it was written to catch the capybara's hat.
+    //
+    // The fix darkens the pelt rather than moving the card, because a red fox's
+    // dorsal coat IS a deep rust and the bright orange was always closer to
+    // safety cone than to the animal. deltaE 25.1 against the card.
+    suit: 0x4a7398, suitAlt: 0xd8a32b, skinColor: 0xa53f0c,
+    species: 'fox', fur: 0xa53f0c, furAlt: 0xf3e3cb, furDark: 0x2e1a12,
     // A red fox's muzzle is close to HALF its head length — 1.05 R was already
     // long, and 1.28 puts the nose where the reference photographs put it.
     muzzle: 1.28, tail: true, knitwear: true, expressive: true,
@@ -327,7 +336,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // which is what stops a sharp snout reading as a beak.
     crouch: 8, shrug: 0.14, chin: -5, elbowOut: -0.010,
     face: {
-      style: 'fox', skin: '#e4761f', snout: '#f3e3cb', nose: '#241713',
+      style: 'fox', skin: '#a53f0c', snout: '#f3e3cb', nose: '#241713',
       eye: '#43301c', brow: '#8a4a16', eyeSize: 1.10, mark: 'whiskers',
       idle: 'thoughtful',
     },
@@ -339,8 +348,26 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   capy: {
     id: 'capy', name: 'Capy', scale: 1.12, bulk: 0.94, headR: 0.128, neck: 0.0,
     torso: 0.222, head: 'bucketHat', outfit: 'pelt',
-    suit: 0x6e90ae, suitAlt: 0xc4622d, skinColor: 0xc9a98a,
-    species: 'capy', fur: 0xa8815d, furAlt: 0xcaa87e, furDark: 0x6e5136,
+    // ⚠️ THE HAT WAS THE SAME HEX AS THE CARD IT IS DRAWN ON. `suitAlt` feeds the
+    // `clothAlt` slot, which on this driver is the entire bucket hat — and it was
+    // 0xc4622d, byte-identical to `CHARACTERS.capy.color`, the racer-select card's
+    // own background. A rust hat on a rust card is invisible, which is most of why
+    // Capy read as a featureless mass however good the geometry got. The note at
+    // `Widgets.ts:786` calls this out and compensates with a drop shadow, but the
+    // real fix is here: the driver's palette is deliberately NOT the kart paint
+    // (see the `suit` doc comment), so this hex should never have matched.
+    //
+    // Straw is also the right answer for a capybara rather than merely a
+    // different one, and it is the roster's only warm-neutral headwear.
+    suit: 0x6e90ae, suitAlt: 0xe3cf9a, skinColor: 0x786047,
+    // Third instance of the same defect: the pelt at 0xa8815d sat 1.16:1 against
+    // the 0xc4622d card. A capybara's coat is a cool greyish-brown rather than a
+    // warm tan anyway, so going greyer and darker is both the contrast fix
+    // (1.44:1 against the card, 3.83:1 against the straw hat) and the truer
+    // animal. Note the luminance curve is not monotonic here — 0x9a7a58 measures
+    // WORSE than the colour it replaced, at 1.03:1, because it passes straight
+    // through the card's own luminance. Contrast has to be measured, not eyeballed.
+    species: 'capy', fur: 0x786047, furAlt: 0xb59e7c, furDark: 0x4f4030,
     // A capybara's muzzle is NOT short — it is long, deep and BLUNT, a
     // rectangular block ending in a broad flat nose pad. Shortening it to 0.78 R
     // to make it "blunt" was the wrong lever: it turned the head into a ball and
@@ -352,7 +379,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // are 0.94 vs -0.14 apart on `shrug` so they still separate.
     crouch: -6, shrug: -0.10, chin: 6, elbowOut: 0.034,
     face: {
-      style: 'capy', skin: '#c9a98a', snout: '#e3cbae', nose: '#3b2a20',
+      style: 'capy', skin: '#786047', snout: '#b59e7c', nose: '#2b2118',
       eye: '#2c1e16', brow: '#6b4c30', eyeSize: 1.0, mark: 'whiskers',
       idle: 'sleepy',
     },
@@ -1759,7 +1786,7 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // the skull, so this is also the head's silhouette idea.
     const eh = R * 1.28;
     const earPlace: RigPlace = {
-      pos: [R * 0.46, hy + R * 0.66, R * 0.10], rot: [-11, -8, -15], detail: 0,
+      pos: [R * 0.56, hy + R * 0.68, R * 0.02], rot: [-11, -8, -13], detail: 0,
     };
     b.pair('head', 'head', 'fur', earWedge(R * 0.42, eh, R * 0.16, 0.20), earPlace);
     // The dark back of the ear is a second wedge in the SAME local frame, so it
@@ -1768,6 +1795,16 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     const tip = earWedge(R * 0.33, eh * 0.60, R * 0.17, 0.20);
     tip.translate(eh * 0.20 * 0.56, eh * 0.42, R * 0.012);
     b.pair('head', 'head', 'furDark', tip, earPlace);
+    // Wispy tufts at the ear base — real on a red fox, and thin protrusions are
+    // the only thing that raises perimeter/sqrt(area) on a card.
+    for (let i = 0; i < 3; i++) {
+      const t = i / 2;
+      b.pair('head', 'head', 'furAlt', limb(
+        _a.set(R * (0.34 + t * 0.10), hy + R * (0.62 + t * 0.14), R * (0.08 - t * 0.10)),
+        _b.set(R * (0.10 - t * 0.16), hy + R * (0.90 + t * 0.30), R * (0.02 - t * 0.22)),
+        R * 0.035, R * 0.012, 6, 2, 0,
+      ), { detail: i === 1 ? 1 : 2, shade: 0.94 });
+    }
     // Pale inner ear, pressed into the front face.
     const inner = earWedge(R * 0.26, eh * 0.66, R * 0.05, 0.20);
     inner.translate(eh * 0.04, eh * 0.14, -R * 0.075);
@@ -1868,10 +1905,10 @@ function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       // scores the same normalised IoU as every other mirror-symmetric shape.
       b.add('head', 'furDark', taperTube([
         new THREE.Vector3(-R * 0.16, hy + R * 0.34, R * 0.56),
-        new THREE.Vector3(-R * 0.66, hy + R * 0.76, R * 0.86),
-        new THREE.Vector3(-R * 1.16, hy + R * 0.96, R * 1.06),
-        new THREE.Vector3(-R * 1.62, hy + R * 0.86, R * 1.14),
-      ], [R * 0.26, R * 0.23, R * 0.16, R * 0.05], 9, 12, 0.10), { detail: 0 });
+        new THREE.Vector3(-R * 0.78, hy + R * 0.90, R * 0.86),
+        new THREE.Vector3(-R * 1.48, hy + R * 1.22, R * 1.02),
+        new THREE.Vector3(-R * 2.14, hy + R * 1.10, R * 1.10),
+      ], [R * 0.22, R * 0.18, R * 0.12, R * 0.035], 9, 14, 0.10), { detail: 0 });
       b.add('head', 'clothAlt', sweepRing(ringProfile(R * 0.24, R * 0.038, R * 0.048, 6), 10), {
         pos: [-R * 0.44, hy + R * 0.62, R * 0.76], rot: [64, 0, -44], detail: 1, shade: 0.88,
       });
@@ -2301,10 +2338,27 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       b.pair('head', 'head', 'paint2', wing, {
         pos: [R * 0.94, hy + R * 0.06, R * 0.24], rot: [0, 96, 8], detail: 1,
       });
-      // Top vent + spine stripe
-      b.add('head', 'metal', roundedBox(R * 0.34, R * 0.10, R * 0.62, 4.0), {
-        pos: [0, hy + R * 1.06, R * 0.05], detail: 1, shade: 0.55,
-      });
+      // Three thin crown fins, unequal, with sky between them. Same recipe as the
+      // robot's fin comb — which is the best-scoring card on the roster at 5.72
+      // precisely because separated thin protrusions add boundary without adding
+      // area. A solid top vent added area and did nothing for the outline.
+      for (let i = 0; i < 3; i++) {
+        const t = Math.abs(i - 1);
+        b.add('head', i === 1 ? 'paint2' : 'metal', extrude([
+          new THREE.Vector2(-R * 0.34, 0), new THREE.Vector2(R * 0.30, 0),
+          new THREE.Vector2(R * 0.20, R * (0.44 - t * 0.16)),
+          new THREE.Vector2(-R * 0.28, R * (0.36 - t * 0.14)),
+        ], R * 0.055, R * 0.016), {
+          pos: [(i - 1) * R * 0.40, hy + R * 1.04, R * 0.06],
+          rot: [0, 90, (i - 1) * 9], detail: i === 1 ? 0 : 1, shade: i === 1 ? 1 : 0.6,
+        });
+      }
+      // Chin bar carried on two thin stays with a gap behind it.
+      b.pair('head', 'head', 'metal', limb(
+        _a.set(R * 0.66, hy - R * 0.30, -R * 0.80),
+        _b.set(R * 0.52, hy - R * 0.86, -R * 0.92),
+        R * 0.045, R * 0.038, 6, 2, 0,
+      ), { detail: 1, shade: 0.55 });
       break;
     }
     case 'robot': {
@@ -2374,6 +2428,33 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
         { z: -R * 1.10, y: 0, hw: R * 0.16, hUp: R * 1.22, hDown: 0, eSide: 3.0, eTop: 3.0 },
         { z: R * 1.20, y: -0.02, hw: R * 0.13, hUp: R * 1.10, hDown: 0, eSide: 3.0, eTop: 3.0 },
       ], 12, false, false), { pos: [0, hy + R * 0.12, 0], detail: 2 });
+      // A teardrop is the smoothest shape there is, so the outline has to come
+      // from things that stand off it: one tall thin dorsal fin, offset from the
+      // centreline, and two thin canards either side of the shell.
+      b.add('head', 'paint2', extrude([
+        new THREE.Vector2(-R * 0.86, 0), new THREE.Vector2(R * 0.70, 0),
+        new THREE.Vector2(R * 0.22, R * 1.16), new THREE.Vector2(-R * 0.62, R * 0.92),
+      ], R * 0.040, R * 0.012), {
+        pos: [R * 0.09, hy + R * 1.16, R * 0.20], rot: [0, 86, 6], detail: 0,
+      });
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? 1 : -1;
+        b.add('head', 'paint2', extrude([
+          new THREE.Vector2(0, 0), new THREE.Vector2(R * (0.52 - i * 0.12), R * 0.06),
+          new THREE.Vector2(R * (0.44 - i * 0.12), R * 0.20), new THREE.Vector2(0, R * 0.17),
+        ], R * 0.038, R * 0.012), {
+          pos: [sx * R * 1.04, hy + R * 0.16, R * 0.42], rot: [0, sx > 0 ? 96 : -96, sx * 12],
+          detail: 0, shade: i === 0 ? 1 : 0.94,
+        });
+      }
+      // Pip's scarf, on the HEAD node so it survives the card crop — the torso
+      // scarf sits below the framing entirely and contributes nothing there.
+      b.add('head', 'clothAlt', taperTube([
+        new THREE.Vector3(R * 0.54, hy - R * 1.06, R * 0.30),
+        new THREE.Vector3(R * 1.24, hy - R * 0.74, R * 0.66),
+        new THREE.Vector3(R * 1.94, hy - R * 0.22, R * 0.92),
+        new THREE.Vector3(R * 2.26, hy + R * 0.40, R * 1.02),
+      ], [R * 0.19, R * 0.16, R * 0.12, R * 0.040], 8, 14, 0.06), { detail: 0, shade: 0.96 });
       break;
     }
     case 'bubble': {
@@ -2387,6 +2468,24 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       b.add('head', 'glow', new THREE.TorusGeometry(R * 1.06, R * 0.05, 6, 16), {
         pos: [0, hy - R * 0.36, 0], rot: [90, 0, 0], detail: 1,
       });
+      // Three sensor stalks of different lengths, splayed. A glass sphere is the
+      // literal minimum-complexity silhouette (a circle scores 3.57), so the only
+      // way this card gets an outline is thin things sticking out of it.
+      for (let i = 0; i < 3; i++) {
+        const ang = (-0.55 + i * 0.55);
+        const len = R * (1.05 - Math.abs(i - 1) * 0.30);
+        b.add('head', 'chrome', limb(
+          _a.set(Math.sin(ang) * R * 0.60, hy + R * 1.26, Math.cos(ang) * R * 0.20),
+          _b.set(Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.26 + len,
+            Math.cos(ang) * R * 0.20 + R * 0.10),
+          R * 0.038, R * 0.020, 6, 2, 0,
+        ), { detail: i === 1 ? 0 : 1 });
+        b.add('head', 'glow', new THREE.SphereGeometry(R * 0.085, 8, 6), {
+          pos: [Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.28 + len,
+            Math.cos(ang) * R * 0.20 + R * 0.10],
+          detail: i === 1 ? 0 : 1,
+        });
+      }
       // Twin breathing pipes running back to the pack.
       for (const sx of [-1, 1]) {
         b.add('head', 'rubber', tube([
@@ -2423,6 +2522,21 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
           pos: [0, hy + R * 1.14 + i * R * 0.16, -R * 0.34 + i * R * 0.20], rot: [0, 0, 0], detail: 2,
         });
       }
+      // Outboard horns. A great-helm is a smooth barrel and the crest alone runs
+      // up the centreline where it barely widens the card. Horns project sideways
+      // into empty frame, and one is deliberately shorter — Ember has hit things.
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? 1 : -1;
+        const len = i === 0 ? 1.0 : 0.62;
+        b.add('head', 'chrome', taperTube([
+          new THREE.Vector3(sx * R * 0.94, hy + R * 0.30, R * 0.06),
+          new THREE.Vector3(sx * R * 1.42, hy + R * 0.56 * len, R * 0.02),
+          new THREE.Vector3(sx * R * 1.78, hy + R * 0.96 * len, -R * 0.06),
+          new THREE.Vector3(sx * R * 1.86, hy + R * 1.34 * len, -R * 0.10),
+        ], [R * 0.17, R * 0.13, R * 0.085, R * 0.030], 8, 12), {
+          detail: 0, shade: i === 0 ? 1 : 0.92,
+        });
+      }
       // Rivet row around the base
       for (let i = 0; i < 7; i++) {
         const a0 = (-0.9 + (i / 6) * 1.8);
@@ -2440,11 +2554,47 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
         { z: R * 0.54, y: -0.004, hw: R * 0.94, hUp: R * 0.90, hDown: R * 0.96, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
         { z: R * 0.96, y: -0.006, hw: R * 0.62, hUp: R * 0.58, hDown: R * 0.62, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
       ], 20, false), { pos: [0, hy + R * 0.12, 0], detail: 0 });
-      const flap = superShape(R * 0.20, R * 0.40, R * 0.30, 3.0, 2.8, 10, 7);
-      b.pair('head', 'head', 'clothAlt', flap, {
-        pos: [R * 0.98, hy - R * 0.30, R * 0.04], rot: [0, 0, -6], detail: 0,
-      });
-      // Goggles over the eyes — the key silhouette beat.
+      // EARFLAPS HANG CLEAR OF THE JAW. Flush against the head they merged into
+      // one convex mass; swung outboard with a real gap they put two notches in
+      // the card outline, which is the only thing that moves perimeter/sqrt(area).
+      // Deliberately different lengths — mirror symmetry is what made this card
+      // score 0.819 against the fox's.
+      // ⚠️ COMPLEXITY IS PERIMETER / sqrt(AREA), SO BULK IS THE ENEMY.
+      // The first attempt swung fat earflaps outboard to "break the outline" and
+      // the card score went the wrong way, 4.83 -> 4.28: a chunky lobe adds area
+      // faster than it adds boundary. What raises the number is THIN and
+      // SEPARATED — narrow lappets hanging clear of the jaw with sky either side,
+      // and a strap below each. Different lengths, because mirror symmetry is
+      // what made this card score 0.819 against the fox's.
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? 1 : -1;
+        const len = i === 0 ? 1.0 : 0.72;
+        b.add('head', 'clothAlt', verticalLoft([
+          { z: 0, y: 0, hw: R * 0.13, hUp: R * 0.15, hDown: R * 0.15, eSide: 3.0, eTop: 2.8 },
+          { z: R * (0.42 * len), y: 0, hw: R * 0.15, hUp: R * 0.14, hDown: R * 0.14, eSide: 3.0, eTop: 2.8 },
+          { z: R * (0.80 * len), y: 0, hw: R * 0.10, hUp: R * 0.11, hDown: R * 0.11, eSide: 2.8, eTop: 2.6 },
+        ], 12), {
+          pos: [sx * R * 1.02, hy - R * 0.22, R * 0.02],
+          rot: [4, 0, sx * 172], detail: 0, shade: i === 0 ? 1 : 0.95,
+        });
+        b.add('head', 'rubber', limb(
+          _a.set(sx * R * 1.00, hy - R * (1.02 * len + 0.20), R * 0.02),
+          _b.set(sx * R * 0.52, hy - R * (1.42 * len + 0.24), -R * 0.14),
+          R * 0.030, R * 0.022, 6, 2, 0,
+        ), { detail: 1, shade: 0.7 });
+      }
+      // Chin strap crossing under the jaw with air on both sides of it.
+      b.add('head', 'rubber', limb(
+        _a.set(-R * 0.52, hy - R * 1.52, -R * 0.16),
+        _b.set(R * 0.52, hy - R * 1.52, -R * 0.16),
+        R * 0.030, R * 0.030, 6, 2, 0,
+      ), { detail: 1, shade: 0.68 });
+      // GOGGLES PUSHED UP ONTO THE FOREHEAD, standing proud with a gap beneath.
+      // This is the classic aviator read and it is worth far more silhouette than
+      // goggles worn flat over the eyes, which just fill the face with a band.
+      // Goggles stay AT THE EYES. Pushing them onto the forehead was tried and
+      // measured worse (4.83 -> 4.32): a band across the crown is solid area in
+      // the exact region the outline is decided, and it flattened the card.
       const strap = shell(R * 1.06, 1.45, 0.024, -0.024, 0.011, 20);
       b.add('head', 'rubber', strap, { pos: [0, hy + R * 0.24, 0], rot: [0, 180, 0], detail: 0, shade: 0.65 });
       b.pair('head', 'head', 'glass', disc(R * 0.34, 0.014, 0, 18), {
@@ -2456,30 +2606,58 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       b.add('head', 'chrome', roundedBox(R * 0.24, R * 0.06, R * 0.06, 4.0), {
         pos: [0, hy + R * 0.24, -R * 0.92], detail: 1,
       });
+      // Scarf streaming off the neck at HEAD height. The torso scarf is cropped
+      // out of the racer-select card entirely, so it did nothing for the framing
+      // the roster is judged on. This one lives on the head node, is long, thin
+      // and one-sided, and it is what finally separates Strata from Foxy — the
+      // two cards measured 0.819 against each other, the worst pair on the
+      // roster and the most embarrassing one.
+      b.add('head', 'clothAlt', taperTube([
+        new THREE.Vector3(-R * 0.62, hy - R * 1.20, R * 0.18),
+        new THREE.Vector3(-R * 1.26, hy - R * 0.86, R * 0.52),
+        new THREE.Vector3(-R * 1.86, hy - R * 0.30, R * 0.74),
+        new THREE.Vector3(-R * 2.10, hy + R * 0.34, R * 0.82),
+        new THREE.Vector3(-R * 1.86, hy + R * 0.86, R * 0.78),
+      ], [R * 0.20, R * 0.17, R * 0.14, R * 0.11, R * 0.045], 8, 16, 0.06), {
+        detail: 0, shade: 0.96,
+      });
+      // Thin swept crown fin — a leather ridge running fore-aft, standing proud.
+      b.add('head', 'clothAlt', extrude([
+        new THREE.Vector2(-R * 0.86, 0), new THREE.Vector2(R * 0.52, 0),
+        new THREE.Vector2(R * 0.30, R * 0.34), new THREE.Vector2(-R * 0.74, R * 0.26),
+      ], R * 0.055, R * 0.018), {
+        pos: [R * 0.06, hy + R * 0.92, R * 0.10], rot: [0, 90, 0], detail: 0, shade: 0.9,
+      });
       break;
     }
     case 'beret': {
       // Soft felted beret worn at a tilt, with the little stalk on top. Tilted
       // headwear is worth a surprising amount: a symmetrical hat reads as part
       // of the skull, an asymmetrical one reads as a *choice* the character made.
-      const tilt: RigPlace = { pos: [-R * 0.12, hy + R * 0.60, R * 0.24], rot: [-13, 0, 19] };
+      // ⚠️ THE BERET WAS FILLING THE ONE GAP THAT MAKES A FOX A FOX. At 1.08 R it
+      // spanned the whole crown and closed the V between the ears, so the card
+      // silhouette was a dome with two bumps — measured 4.67 complexity and 0.819
+      // against Strata's flight cap, which is the single most embarrassing pair on
+      // the roster. Pulled in to 0.84 R and pushed back and down, the ears now
+      // rise off a visible skull with open sky between them.
+      const tilt: RigPlace = { pos: [-R * 0.12, hy + R * 0.50, R * 0.40], rot: [-19, 0, 21] };
       b.add('head', 'clothAlt', verticalLoft([
-        { z: -R * 0.10, y: 0, hw: R * 0.88, hUp: R * 0.84, hDown: R * 0.92, eSide: 3.2, eTop: 3.0, eBot: 3.4 },
-        { z: R * 0.10, y: -R * 0.01, hw: R * 1.08, hUp: R * 1.02, hDown: R * 1.10, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
-        { z: R * 0.30, y: -R * 0.02, hw: R * 0.96, hUp: R * 0.90, hDown: R * 0.98, eSide: 2.9, eTop: 2.7, eBot: 2.8 },
-        { z: R * 0.42, y: -R * 0.02, hw: R * 0.56, hUp: R * 0.52, hDown: R * 0.58, eSide: 2.8, eTop: 2.6, eBot: 2.7 },
+        { z: -R * 0.10, y: 0, hw: R * 0.68, hUp: R * 0.66, hDown: R * 0.74, eSide: 3.2, eTop: 3.0, eBot: 3.4 },
+        { z: R * 0.10, y: -R * 0.01, hw: R * 0.84, hUp: R * 0.80, hDown: R * 0.88, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+        { z: R * 0.30, y: -R * 0.02, hw: R * 0.74, hUp: R * 0.70, hDown: R * 0.78, eSide: 2.9, eTop: 2.7, eBot: 2.8 },
+        { z: R * 0.42, y: -R * 0.02, hw: R * 0.44, hUp: R * 0.40, hDown: R * 0.46, eSide: 2.8, eTop: 2.6, eBot: 2.7 },
       ], 22), { ...tilt, detail: 0 });
       // The rolled headband the beret grips with — an actual separate volume,
       // because a beret with no band is a bowl.
       b.add('head', 'clothAlt', sweepRing(ringProfile(R * 0.90, R * 0.075, R * 0.055, 6), 16, (th) => ({
-        dr: Math.sin(th * 2) * R * 0.035, dy: 0,
-      })), { ...tilt, pos: [-R * 0.12, hy + R * 0.52, R * 0.24], detail: 0, shade: 0.86 });
+        dr: Math.sin(th * 2) * R * 0.030, dy: 0,
+      })), { ...tilt, pos: [-R * 0.12, hy + R * 0.44, R * 0.40], detail: 0, shade: 0.86 });
       // Stalk.
       b.add('head', 'clothAlt', lathe([
         new THREE.Vector2(0, 0), new THREE.Vector2(R * 0.055, R * 0.012),
         new THREE.Vector2(R * 0.048, R * 0.090), new THREE.Vector2(R * 0.026, R * 0.118),
         new THREE.Vector2(0, R * 0.124),
-      ], 9), { ...tilt, pos: [-R * 0.15, hy + R * 1.00, R * 0.22], detail: 1, shade: 0.92 });
+      ], 9), { ...tilt, pos: [-R * 0.15, hy + R * 0.86, R * 0.38], detail: 1, shade: 0.92 });
 
       // Round thin dark-rimmed spectacles. Two rims + a bridge + temples: the
       // temples matter, they are what stop the glasses floating off the face.

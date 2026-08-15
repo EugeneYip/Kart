@@ -197,10 +197,15 @@ const BOSTON_NODES: SplineNodeSpec[] = [
 //  turn left, which makes the single right-hander at t=0.72 the one corner
 //  nobody has a rhythm for. Turn 1 drops straight into the NIGHT MARKET, 17 m
 //  wide between shophouse faces with lantern strings overhead. Out along the
-//  river, then the signature corner: a 150 m-radius banked left, 123 m long,
-//  with the tiered supertall standing on the inside of it. A banked left onto
-//  the MEMORIAL PLAZA (the flag is here), a tight left out of it, the lone
-//  right, and then a 154-degree double-apex left with the mountains behind it.
+//  river — and the tiered supertall stands ACROSS it, 320 m out, which is the
+//  distance at which the whole 187 m of it fits in frame (see the prop note) —
+//  then the signature corner: a 150 m-radius banked left, 123 m long. A banked
+//  left onto the MEMORIAL PLAZA, a tight left out of it, the lone right, and
+//  then a 154-degree double-apex left with the mountains behind it.
+//
+//  The national flag flies in a row down both sides of the start/finish
+//  straight and again on the memorial plaza; see the flag note in the Boston
+//  props list, which explains the scheme once for all three circuits.
 //
 //  Elevation: 0 m at the line, 9 m on the mountain side.
 //
@@ -500,6 +505,47 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.006, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.022, lat: 27 },
+      // ---- THE NATIONAL FLAG, and where a circuit actually flies one -------
+      //
+      // This is the third attempt at the owner's *"the three city series tracks
+      // still lack naturally incorporated national flags"*, and the first two
+      // both answered a question that was not asked. Round one added the type;
+      // round two rebuilt its cloth so it ripples (36 triangles, 25 distinct
+      // `aFlap` levels). Both are true and neither is the complaint:
+      // `.probe-tmp/citymeta.ts` has asserted "one correct flag, on its own
+      // atlas cell" on each circuit for two rounds while the owner kept saying
+      // there were none. Measured, that is not surprising — ONE mast, on ONE
+      // plaza, at ONE point of the lap:
+      //
+      //     masts                              1
+      //     flag-stations per lap station    0.19-0.27   (Taipei / Tokyo)
+      //
+      // i.e. for three quarters of every lap there is no flag anywhere in frame.
+      // "Present" and "naturally incorporated" are different claims and only the
+      // first was ever being tested.
+      //
+      // So all three circuits now fly the same three-part scheme, which is what
+      // a real street circuit does:
+      //
+      //   1. A ROW DOWN BOTH SIDES OF THE START/FINISH STRAIGHT. Seven masts a
+      //      side, in front of the grandstand and the crowd stand, at the one
+      //      place every car passes at the start of every lap. This is the
+      //      unmissable one.
+      //   2. A CEREMONIAL PAIR ON THE CIVIC BUILDING'S PLAZA — the State House
+      //      here, the memorial hall on Taipei, the tower plaza on Tokyo. One at
+      //      `scale: 1.7` (a 16 m mast with a 4.6 x 3.1 m flag) so the plaza has
+      //      a hierarchy rather than two identical poles.
+      //   3. ONE AT THE MID-LAP STAND, so the far half of the lap is not bare.
+      //
+      // `lat: 21` puts them outboard of the street lamps at 17 and, on the two
+      // signed circuits, of the signage at 20 — the row stands behind the street
+      // furniture and in front of the stands, which is where flagpoles go.
+      //
+      // COST: none in draw calls. Every instance of one authored type shares a
+      // single InstancedMesh per pass, so 17 masts are the same two draws as 1,
+      // and 244 triangles each.
+      { type: 'flagUSA', t: 0.006, lat: 21, step: 0.009, end: 0.060, mirror: true },
+      { type: 'flagUSA', t: 0.490, lat: 22 },
       // `up: 0`, not 9. The recipe's two ballast blocks are built at local
       // y = 0..0.6, so the arch's origin IS ground level — `up: 9` lifted the whole
       // 22 m span nine metres into the air and left its feet 8.45 m above the
@@ -564,7 +610,8 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // side, 3.4 m clear — the plaza in front of the building, which is where a
       // national flag on a government building actually stands.
       { type: 'goldenDome', t: 0.662, lat: -34 },
-      { type: 'flagUSA', t: 0.674, lat: -15 },
+      { type: 'flagUSA', t: 0.674, lat: -15, scale: 1.7 },
+      { type: 'flagUSA', t: 0.686, lat: -15 },
       { type: 'planter', t: 0.658, lat: 15, step: 0.012, end: 0.70 },
       { type: 'streetLamp', t: 0.66, lat: 16, step: 0.018, end: 0.70, mirror: true },
       { type: 'towerBlock', t: 0.71, lat: 40, step: 0.014, end: 0.78, mirror: true },
@@ -658,6 +705,8 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.008, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.026, lat: 27 },
+      // The flag row. See the scheme note in Boston's props list.
+      { type: 'flagROC', t: 0.008, lat: 21, step: 0.009, end: 0.062, mirror: true },
       { type: 'balloonArch', t: 0.052, lat: 0, up: 0 },
       { type: 'skyscraper', t: 0.012, lat: 88, step: 0.022, end: 0.10, mirror: true, scale: 1.45 },
       { type: 'towerBlock', t: 0.016, lat: 44, step: 0.015, end: 0.105, mirror: true },
@@ -666,11 +715,36 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'brakeBoard', t: 0.108, lat: 15 },
       { type: 'tyreStack', t: 0.124, lat: -12.5, step: 0.005, end: 0.15 },
       { type: 'signChevron', t: 0.126, lat: 14.5, step: 0.006, end: 0.158 },
-      // ---- THE SUPERTALL, on the inside of the long sweeper ---------------
-      // 184 m tall and authored once. At lat -96 it is 80 m clear of the road,
-      // which is what lets it be the thing on the horizon from most of the lap
-      // instead of a wall you drive past.
-      { type: 'pagodaTower', t: 0.415, lat: -96 },
+      // ---- THE SUPERTALL, ACROSS THE RIVER --------------------------------
+      // Owner: *"Taipei 101 is too close to the track, leaving no chance to
+      // appreciate it."* It was at `t: 0.415, lat: -96`, standing in the infield
+      // on the inside of the sweeper, and the note here claimed 80 m of clearance
+      // "is what lets it be the thing on the horizon". Measured, that is exactly
+      // backwards. `.probe-tmp/landmark.ts` walks the lap at the real chase pose
+      // and FOV and asks whether the whole tower is inside the frustum:
+      //
+      //     whole%  0.0     — not once, from any of 267 stations in a full lap
+      //     subV    69.6 deg at 106 m, p50 46.9 deg over every station it is
+      //                       visible from; the vertical FOV is 79.75 deg and
+      //                       the eye looks at the horizon, so only the upper
+      //                       39.9 deg of it is above the eyeline. A 187 m tower
+      //                       needs 222 m of distance before its top re-enters
+      //                       the frame. At 76 m it never can.
+      //     vis%    24.3    — and it was only in frame for a quarter of the lap.
+      //
+      // A previous round measured the same prop "filling 92.6 % of screen height
+      // at 208 m" and recorded that as a success. Screen fill is the defect here,
+      // not the achievement.
+      //
+      // `.probe-tmp/lmscout.ts` searched the whole (t, lat) authoring space for
+      // the placement that maximises "seen whole". The answer is across the river
+      // on the OUTSIDE of the riverside straight: t 0.33, lat 340, world
+      // (-481, -526) — 320 m from the nearest point of the racing line, clear of
+      // all four `mountainRidge` cones (nearest 390 m) and outside the circuit's
+      // own 431 x 512 m footprint, so no road guard can touch it. It reads down
+      // the length of the riverside run and stands over the whole far half of the
+      // lap. Re-measured after the move and reported.
+      { type: 'pagodaTower', t: 0.33, lat: 340 },
       // ---- the night market ----------------------------------------------
       // Across-road half-extent 3.85 m against an hw of 8.5, so lat 20 leaves
       // 7.65 m of clear verge — measured up from 2.9 m, where 32 stalls were
@@ -691,7 +765,9 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // 10.6 m. The flag stands at lat 15 on the same side: the plaza in front
       // of the hall, which is exactly where this flag flies.
       { type: 'memorialHall', t: 0.588, lat: 46 },
-      { type: 'flagROC', t: 0.578, lat: 15 },
+      { type: 'flagROC', t: 0.578, lat: 15, scale: 1.7 },
+      { type: 'flagROC', t: 0.590, lat: 15 },
+      { type: 'flagROC', t: 0.604, lat: -22 },
       { type: 'planter', t: 0.566, lat: -15, step: 0.012, end: 0.624 },
       { type: 'crowdStand', t: 0.60, lat: -26 },
       { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.656 },
@@ -780,6 +856,10 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'startGantry', t: 0.0, lat: 0 },
       { type: 'grandstand', t: 0.007, lat: -29, scale: 1.15 },
       { type: 'crowdStand', t: 0.024, lat: 27 },
+      // The flag row. See the scheme note in Boston's props list. It stops at
+      // t=0.060, well short of the `TF.Dark` run under the expressway deck at
+      // t=0.09 — a flag in the dark under a deck is a flag nobody sees.
+      { type: 'flagJapan', t: 0.006, lat: 21, step: 0.009, end: 0.060, mirror: true },
       { type: 'balloonArch', t: 0.05, lat: 0, up: 0 },
       { type: 'skyscraper', t: 0.012, lat: 92, step: 0.021, end: 0.115, mirror: true, scale: 1.5 },
       { type: 'towerBlock', t: 0.016, lat: 45, step: 0.015, end: 0.12, mirror: true },
@@ -834,7 +914,9 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // 22.9 m: it stands in its own plaza, and the national flag stands in
       // that plaza too, at lat -15 on the same side.
       { type: 'latticeTower', t: 0.796, lat: -46 },
-      { type: 'flagJapan', t: 0.812, lat: -15 },
+      { type: 'flagJapan', t: 0.812, lat: -15, scale: 1.7 },
+      { type: 'flagJapan', t: 0.824, lat: -15 },
+      { type: 'flagJapan', t: 0.848, lat: 22 },
       { type: 'crowdStand', t: 0.84, lat: 26, step: 0.018, end: 0.875 },
       { type: 'towerBlock', t: 0.79, lat: 42, step: 0.015, end: 0.87, mirror: true },
       // ---- the run to the line -------------------------------------------
