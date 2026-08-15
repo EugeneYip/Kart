@@ -1134,94 +1134,120 @@ export class TerrainField {
      *
      * The stamp below picks the station nearest in **XZ only**, which is right
      * for a flat circuit and badly wrong for one that stacks roads vertically.
-     * Volcano's helix passes directly over the lava-tube straight: at the
-     * t=0.805 tunnel portal the nearest station >60 m away along the lap is
-     * **3.5 m away in plan and 38 m overhead** (y 44.12 against the tube's
-     * 5.96), so the ground under the tube was stamped to the *helix's* height.
-     * Measured, that put terrain up to +38.8 m above the road on the racing
-     * line, and a patchwork of +1 / +4 / +14 / +32 m spikes across the portal
-     * mouth — which is the "portal buried in a hillside" report. The natural
-     * terrain there is 11.5 m BELOW the road: there is no hill at all.
+     * Volcano's helix passes over the lava tube: at the t=0.805 portal the
+     * nearest station >60 m away along the lap is **3.5 m away in plan and 38 m
+     * overhead** (y 44.12 against the tube's 5.96), so the ground under the tube
+     * was stamped to the *helix's* height — up to +38.8 m of terrain above the
+     * road ON the racing line, and the "portal buried in a hillside" report.
      *
-     * So: first pass records the LOWEST plausible GROUND height at each texel;
-     * the stamp then ignores any station riding more than `STACK_V` above it. A
-     * flyover stops paving the ground it flies over, while ordinary cut-and-fill
-     * embankments are unchanged.
+     * The guard therefore has to answer: is this carriageway carried over
+     * another one, or is it a road on a slope? TWO tests have to agree, and the
+     * history of this pass is two attempts that each used only one of them.
      *
-     * "LOWEST PLAUSIBLE GROUND", NOT "LOWEST ROAD", AND THAT DISTINCTION IS THE
-     * WHOLE OF THIS PASS. The first version of it recorded `min(st.py)` over a
-     * hard disc of radius `halfWidth + 12`, and a flat minimum over a hard disc
-     * is wrong at both ends:
+     *  1. WHICH STATION — a property of the carriageway, not of the texel.
+     *     `.probe-tmp/stackpairs.ts` censuses every station on all six circuits
+     *     for the lowest carriageway passing within `hwA + hwB + STACK_PLAN` in
+     *     plan and more than `STACK_ARC` away along the lap. The answer is not a
+     *     spectrum, it is a single isolated cluster: **23 stations of 1340, all
+     *     on volcano, all 33.9-41.2 m up at 28.0 m in plan.** Coastal, neon,
+     *     Boston, Taipei and Tokyo have ZERO — on those five circuits this guard
+     *     is now provably a no-op. Any threshold in 12-30 m separates the cluster
+     *     from nothing at all, so `STACK_V` is not fitted to a case: 24 sits
+     *     9.9 m below the cluster floor and 15.3 m above the largest thing that
+     *     must NOT be caught, coastal's 8.67 m climb back over its own ramp.
      *
-     *  · INSIDE, it rejects roads that are not flyovers at all. Coastal spirals
-     *    over itself at t=0.71 with only **8.67 m** between the two decks. The
-     *    lower one set `groundPy`, 8.67 > `STACK_V`, so the guard threw out the
-     *    deck the player was actually driving on: `roadH` came from a station
-     *    11.96 m away instead of 5.23 m, the ground under the upper deck was
-     *    stamped 5.7 m BELOW it, and the corridor mask was 12 m off-centre —
-     *    which is exactly the 3-of-646 grass leak left over on coastal.
-     *  · OUTSIDE, the disc edge is a cliff. Volcano's helix is rejected within
-     *    21.5 m of the lava tube and accepted at 21.6 m, so the +38.8 m mesa was
-     *    not removed, it was slotted: measured (`.probe-tmp/terrecon.ts`) a
-     *    **39.7 m wall with a 17-18 m/m gradient, 13-14 m outside the asphalt
-     *    edge**, on 33 of 616 station-sides.
+     *  2. WHERE — a property of the texel. A flyover only stops paving the ground
+     *     it is actually flying over. The allowance is an EMBANKMENT CONE: ground
+     *     `d` from a road at `py` could plausibly be as low as
+     *     `py + STACK_RAMP * (d - halfWidth)`, so the rejection fades out with
+     *     distance instead of ending at a disc edge.
      *
-     * Both go away if `groundPy` is the lower envelope of an EMBANKMENT CONE
-     * instead: a road may have climbed `STACK_RAMP` metres per metre outside its
-     * own asphalt edge, so ground `d` metres from a station could plausibly be as
-     * low as `st.py + STACK_RAMP * (d - halfWidth)`. Two decks 8.67 m apart and
-     * 20 m apart in plan are then one hillside (allowance 3.9 m + `STACK_V`);
-     * a deck 38 m over a tube 3.5 m away in plan cannot be (allowance 0), and is
-     * still rejected at every distance out to the full 74 m of influence — so
-     * there is no disc edge left to make a cliff at.
+     * REQUIRING BOTH IS THE POINT. Test 2 alone was the previous revision and it
+     * over-reached badly: volcano's caldera rim road (arc 763-826, py 47) has the
+     * basin road passing 30-42 m away and 36 m below, the 0.45 cone could not
+     * climb that, and the rim road was classified a flyover — which deleted the
+     * mountain out from under it. Measured at its own centreline (264.8, -118.8):
+     * road at 47.02, ground at **3.81**, i.e. a ground-borne mountain road left
+     * floating 43 m in the air, and the `lavaRock` run beside it re-seated 65.9 m
+     * down (`.probe-tmp/whyhere.ts` prints the whole derivation). Test 1 alone
+     * would delete the mountain along a different boundary: the rim road IS the
+     * helix, one continuous carriageway at py 47, and the tube only runs
+     * alongside for part of it, so a station-only rule steps 40 m along the arc
+     * where the pairing starts. With both, the rim road keeps its embankment
+     * everywhere and the helix declines to pave only the strip actually above the
+     * tube, fading out over the cone.
      *
-     * `STACK_RAMP = 0.45` is a 24° hillside. `STACK_V = 7` on top of it covers
-     * what a single carriageway varies by within its own reach (about 3.6 m at
-     * volcano's steepest ~15 % grade).
-     *
-     * WHAT THIS STILL CANNOT DO, measured, so nobody has to rediscover it. A
-     * heightfield holds one surface per column, and where a graded, turning road
-     * passes over its OWN plan footprint at a height gap SMALLER than `STACK_V`,
-     * both passes are legitimately ground and the stamp has to choose. It chooses
-     * the plan-nearest, which on the outside of a descending corner is the higher,
-     * earlier pass. Volcano t=0.283 is the one place on six circuits where that
-     * shows: the texel under the chase eye is 11.50 m from arc 415 (py 45.86) and
-     * 13.13 m from arc 427 (py 42.02), so the nearer, 3.8 m higher pass wins and
-     * the ground ends up 0.95 m over the drawn shoulder — one pose of 5688 with the
-     * eye 0.32 m under the surface (`.probe-tmp/eyedig.ts` prints exactly this).
-     * Lowering `STACK_V` to catch it would re-break coastal's 8.67 m spiral, and a
-     * "prefer the lower pass within N metres of a tie" rule reintroduces the very
-     * class of discontinuity the embankment cone exists to remove. The honest
-     * remedies are outside this file: a denser station table
-     * (`STATION_SPACING` in Environment, currently ~7 m) shrinks the ambiguous
-     * window, and the grade itself is a track-authoring choice.
+     * KNOWN RESIDUAL. Test 2 is not directional: it asks how far the texel is
+     * from the ground, not which SIDE of the deck it is on. Where the rim road is
+     * carried, the ground outboard of it — away from the tube entirely — is
+     * rejected too if the cone has not climbed far enough by then. One authored
+     * prop lands in it: volcano's `lavaRock` at xz(275,-85), lat -22 outboard,
+     * where the cone reads 19.92 and the road 47.00, missing acceptance by 3.08 m
+     * and re-seating 53 m down. Raising the texel threshold past ~27 closes it but
+     * drags the caldera cliff ~4 m nearer the tube; making test 2 directional off
+     * the recorded partner station is the better fix and wants a visual pass to
+     * judge. `.probe-tmp/whyhere.ts <track> <x> <z>` prints the whole derivation.
      */
-    const STACK_V = 7;
+    const STACK_V = 24;
     const STACK_RAMP = 0.45;
+    /** Plan clearance, beyond both half-widths, for one road to be "over" another. */
+    const STACK_PLAN = 12;
+    /** Lap distance below which two stations are the same road, not a stack. */
+    const STACK_ARC = 60;
+
+    const nSt = this.stations.length;
+    let lapLen = 0;
+    for (let i = 0; i < nSt; i++) {
+      const a = this.stations[i], b = this.stations[(i + 1) % nSt];
+      lapLen += Math.hypot(b.px - a.px, b.pz - a.pz);
+    }
+    /** Per station: does it ride over another carriageway at all? */
+    const carried = new Uint8Array(nSt);
+    let nCarried = 0;
+    for (let i = 0; i < nSt; i++) {
+      const a = this.stations[i];
+      for (let j = 0; j < nSt; j++) {
+        if (i === j) continue;
+        const b = this.stations[j];
+        if (a.py <= b.py + STACK_V) continue;
+        let da = Math.abs(a.s - b.s);
+        if (da > lapLen * 0.5) da = lapLen - da;
+        if (da < STACK_ARC) continue;
+        const gate = a.halfWidth + b.halfWidth + STACK_PLAN;
+        const dx = a.px - b.px, dz = a.pz - b.pz;
+        if (dx * dx + dz * dz > gate * gate) continue;
+        carried[i] = 1;
+        nCarried++;
+        break;
+      }
+    }
+
+    // The cone is only needed where some station is actually carried; on five of
+    // six circuits this whole pass is skipped.
     const groundPy = new Float32Array(n).fill(INF);
-    for (let si = 0; si < this.stations.length; si++) {
-      const st = this.stations[si];
-      // The full influence radius, so the cone has decided the whole region the
-      // stamp below can reach and no boundary between the two survives.
-      const reach = R;
-      const reachTex = Math.ceil(reach / mpt);
-      const cx = (st.px - this.originX) / mpt;
-      const cz = (st.pz - this.originZ) / mpt;
-      const x0 = Math.max(0, Math.floor(cx - reachTex));
-      const x1 = Math.min(res - 1, Math.ceil(cx + reachTex));
-      const z0 = Math.max(0, Math.floor(cz - reachTex));
-      const z1 = Math.min(res - 1, Math.ceil(cz + reachTex));
-      for (let ty = z0; ty <= z1; ty++) {
-        const ddz = this.originZ + (ty + 0.5) * mpt - st.pz;
-        for (let tx = x0; tx <= x1; tx++) {
-          const ddx = this.originX + (tx + 0.5) * mpt - st.px;
-          const dd2 = ddx * ddx + ddz * ddz;
-          if (dd2 > reach * reach) continue;
-          const i = ty * res + tx;
-          // The embankment cone: inside its own asphalt the road IS the ground,
-          // and outside it the ground may have climbed at STACK_RAMP.
-          const cand = st.py + STACK_RAMP * Math.max(0, Math.sqrt(dd2) - st.halfWidth);
-          if (cand < groundPy[i]) groundPy[i] = cand;
+    if (nCarried > 0) {
+      for (let si = 0; si < nSt; si++) {
+        const st = this.stations[si];
+        // Only GROUNDED stations describe where the ground is. Letting a carried
+        // station seed the cone would let the helix vouch for its own height.
+        if (carried[si]) continue;
+        const reachTex = Math.ceil(R / mpt);
+        const cx = (st.px - this.originX) / mpt;
+        const cz = (st.pz - this.originZ) / mpt;
+        const x0 = Math.max(0, Math.floor(cx - reachTex));
+        const x1 = Math.min(res - 1, Math.ceil(cx + reachTex));
+        const z0 = Math.max(0, Math.floor(cz - reachTex));
+        const z1 = Math.min(res - 1, Math.ceil(cz + reachTex));
+        for (let ty = z0; ty <= z1; ty++) {
+          const ddz = this.originZ + (ty + 0.5) * mpt - st.pz;
+          for (let tx = x0; tx <= x1; tx++) {
+            const ddx = this.originX + (tx + 0.5) * mpt - st.px;
+            const dd2 = ddx * ddx + ddz * ddz;
+            if (dd2 > R * R) continue;
+            const i = ty * res + tx;
+            const cand = st.py + STACK_RAMP * Math.max(0, Math.sqrt(dd2) - st.halfWidth);
+            if (cand < groundPy[i]) groundPy[i] = cand;
+          }
         }
       }
     }
@@ -1289,7 +1315,6 @@ export class TerrainField {
      * Cost is unchanged: one box of texels per segment instead of one per station,
      * and there are as many segments as stations.
      */
-    const nSt = this.stations.length;
     for (let si = 0; si < nSt; si++) {
       const a = this.stations[si];
       const b = this.stations[(si + 1) % nSt];
@@ -1310,6 +1335,10 @@ export class TerrainField {
        * through unevenly-spaced samples can overshoot, and an overshoot here would
        * be a spike of terrain, which is the defect this whole pass exists to remove.
        */
+      // Either endpoint carried makes the whole segment carried: the set is
+      // contiguous along the arc, so this only widens it by one station at each
+      // end, where the deck is descending to meet the ground anyway.
+      const carriedSeg = carried[si] === 1 || carried[(si + 1) % nSt] === 1;
       const a0 = this.stations[(si - 1 + nSt) % nSt];
       const b1 = this.stations[(si + 2) % nSt];
       const pyLo = Math.min(a0.py, a.py, b.py, b1.py);
@@ -1352,8 +1381,11 @@ export class TerrainField {
           if (d >= dist[i]) continue;
           let pyI = c0 + u * (c1 + u * (c2 + u * c3));
           pyI = pyI < pyLo ? pyLo : pyI > pyHi ? pyHi : pyI;
-          // A carriageway flying over a lower one does not pave the ground.
-          if (pyI > groundPy[i] + STACK_V) continue;
+          // A carriageway that is carried over another one does not pave the
+          // ground it is actually above. BOTH tests, see the guard block: the
+          // segment has to be a carried one AND the texel has to be somewhere a
+          // grounded road says the ground is far below.
+          if (carriedSeg && pyI > groundPy[i] + STACK_V) continue;
           dist[i] = d;
           // Interpolated frame. The binormal is renormalised because lerping two
           // unit vectors shortens the result, and `cross` is a distance.
