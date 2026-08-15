@@ -361,10 +361,17 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // A red fox's muzzle is close to HALF its head length — 1.05 R was already
     // long, and 1.28 puts the nose where the reference photographs put it.
     muzzle: 1.28, tail: true, knitwear: true, expressive: true,
-    // Alert and forward: ears up, weight over the wheel. `chin` is negative so
-    // the long muzzle points slightly down the road rather than at the sky,
-    // which is what stops a sharp snout reading as a beak.
-    crouch: 8, shrug: 0.14, chin: -5, elbowOut: -0.010,
+    // EAGER, FORWARD, LIGHT. She is the fastest on the grid and the mascot, and
+    // a mascot's rest pose is a piece of characterisation you get for free every
+    // frame she is on screen. 8° of crouch put her upright between Strata (3)
+    // and Pip (10) — mid-table, i.e. nothing. At 12 she is second only to
+    // Blitz's 13, but where Blitz is FOLDED (shrug 0.26, shoulders hauled up
+    // around the helmet, chin buried) she is *reaching*: shoulders only lightly
+    // raised, elbows tucked in tight, chin down the road. Two different ideas of
+    // "fast" rather than two depths of the same slouch.
+    // `chin` is negative so the long muzzle points slightly down the road rather
+    // than at the sky, which is what stops a sharp snout reading as a beak.
+    crouch: 12, shrug: 0.17, chin: -7, elbowOut: -0.017,
     // AMBER. A red fox's iris is amber-gold and it is the second thing anyone
     // recognises about the animal after the ears — and #43301c was chroma 17,
     // i.e. a dark brown that at a 6 px iris resolves to a black dot with a
@@ -373,9 +380,16 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // black, so the gold reads as a ring round a black pupil rather than as a
     // flat coin. This is the largest iris on the board (6.2 card px) and the
     // mascot's; it should be the one people remember.
+    // The BROW was 1.6:1 against the pelt it is drawn on (#8a4a16 on #a53f0c —
+    // both mid rust), so the one facial feature that carries expression was
+    // invisible at any size. A fox's brow marking is near-black, the same tone
+    // as the ear backs and the stockings, and matching it to `furDark` (0x2e1a12)
+    // ties the face into the character's dark value group instead of leaving it
+    // a smudge. Brow is what makes `determined` and `thoughtful` different faces
+    // rather than two mouths.
     face: {
       style: 'fox', skin: '#a53f0c', snout: '#f3e3cb', nose: '#241713',
-      eye: '#c8891f', brow: '#8a4a16', eyeSize: 1.16, mark: 'whiskers',
+      eye: '#c8891f', brow: '#33200f', eyeSize: 1.20, mark: 'whiskers',
       idle: 'thoughtful',
     },
   },
@@ -464,10 +478,19 @@ function capSlotFor(d: DriverDef): MaterialSlot {
   return d.outfit === 'armour' ? 'paint' : 'clothAlt';
 }
 
-/** Upper arm. Sleeve on the fox, bare mid-brown limb on the capybara. */
+/**
+ * Upper arm. Bare pelt on both animals; the fox's knit is a SLEEVELESS gilet.
+ *
+ * ⚠️ THE MASCOT'S SPECIES MARKINGS WERE UNDER A JUMPER. A red fox reads as
+ * orange body / white bib / BLACK STOCKINGS, and the black has to start
+ * somewhere visible for the stocking to exist at all. With a full sleeve the
+ * fox's colour blocking was blue-blue-blue then black at the wrist, i.e. a
+ * knitted person with dark gloves. Bare orange from shoulder to cuff puts the
+ * hard orange→black edge back where the animal has it, mid-forearm, and it is
+ * the one change that makes the arms read as fox limbs rather than sleeves.
+ */
 function armSlotFor(d: DriverDef): MaterialSlot {
-  if (d.species === 'fox') return 'cloth';      // sweater sleeve
-  if (d.species === 'capy') return 'furDark';   // mid-brown limb
+  if (d.species !== undefined) return d.species === 'fox' ? 'fur' : 'furDark';
   return d.outfit === 'plated' ? 'metal' : 'cloth';
 }
 
@@ -1414,29 +1437,86 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       break;
     }
     case 'sweater': {
-      // Chunky roll-neck knit. The knit normal map carries the stitch; these
-      // are the MACRO ribs, because a normal map alone still reads as a printed
-      // pattern on a smooth cylinder at ten metres.
+      // A SLEEVELESS V-NECK KNIT GILET OVER A WHITE CHEST BIB.
+      //
+      // ⚠️ THIS USED TO BE A CLOSED ROLL-NECK, AND IT WAS HIDING THE ANIMAL.
+      // Foxy's whole colour identity is three masses — deep rust pelt, white
+      // cheek-and-chest bib, near-black stockings — and a jumper buttoned to the
+      // chin deleted the middle one, leaving a 4 cm cream lozenge under the
+      // collar as "the only place the fox's pale chest is visible". A red fox's
+      // bib is not a lozenge: it runs from the jaw to the belly and it is the
+      // second-biggest value block on the animal after the pelt itself.
+      //
+      // So the knit opens into a deep V, the bib fills it, and the ribs stop at
+      // the vest's own edge instead of wrapping the whole barrel. The garment
+      // still reads as knitwear (same `cloth` slot, same knit normal, same macro
+      // ribs) — it is just no longer worn over the character.
+      const bibTop = s.torsoTop - 0.006;
+      const bibBot = s.hipY - 0.036;
+      const bibH = bibTop - bibBot;
+      // The bib. A thin vertical plate standing proud of the chest, widest at
+      // the sternum and tapering both ways, so its outline is a shield rather
+      // than a stripe. `hUp`/`hDown` are its THICKNESS — `verticalLoft` reads
+      // `z` as height, so this stands up the body instead of lying across it.
+      const bib = verticalLoft([
+        { z: 0.000, y: 0, hw: s.chest * 0.30, hUp: 0.014, hDown: 0.030, eSide: 2.6, eTop: 2.6, eBot: 2.8 },
+        { z: bibH * 0.30, y: 0.004, hw: s.chest * 0.56, hUp: 0.016, hDown: 0.034, eSide: 2.9, eTop: 2.8, eBot: 3.0 },
+        { z: bibH * 0.66, y: 0.006, hw: s.chest * 0.62, hUp: 0.017, hDown: 0.036, eSide: 3.0, eTop: 2.9, eBot: 3.0 },
+        { z: bibH * 0.92, y: 0.004, hw: s.chest * 0.50, hUp: 0.016, hDown: 0.034, eSide: 2.8, eTop: 2.7, eBot: 2.9 },
+        { z: bibH, y: 0.000, hw: s.chest * 0.34, hUp: 0.013, hDown: 0.030, eSide: 2.6, eTop: 2.5, eBot: 2.7 },
+      ], 20);
+      b.add('torso', 'furAlt', bib, { pos: [0, bibBot, -front * 0.90], detail: 0 });
+      // Bib fur breaking over the vest edge: three soft lobes, so the boundary
+      // between white and rust is a torn edge and not a decal outline.
+      for (let i = 0; i < 3; i++) {
+        const t = i / 2;
+        b.pair('torso', 'torso', 'furAlt', superShape(
+          0.028 - i * 0.005, 0.030 - i * 0.004, 0.020, 2.5, 2.3, 9, 6,
+        ), {
+          pos: [
+            lerp(s.chest * 0.34, s.chest * 0.16, t),
+            lerp(bibBot + bibH * 0.62, bibTop + 0.010, t),
+            -front * (0.92 - t * 0.06),
+          ],
+          rot: [-8 - i * 6, -14, -22 - i * 10], detail: i === 0 ? 0 : 2, shade: 0.96 - i * 0.03,
+        });
+      }
+      // The two halves of the vest front: mirrored panels flanking the bib, each
+      // with a rolled knit edge. This is what makes it a garment with an opening
+      // rather than a torso with a stripe painted down it.
+      const lapel = verticalLoft([
+        { z: 0.000, y: 0, hw: 0.030, hUp: 0.018, hDown: 0.022, eSide: 2.8, eTop: 2.6, eBot: 3.0 },
+        { z: bibH * 0.52, y: 0.002, hw: 0.038, hUp: 0.019, hDown: 0.023, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+        { z: bibH * 0.98, y: 0.000, hw: 0.026, hUp: 0.016, hDown: 0.020, eSide: 2.7, eTop: 2.5, eBot: 2.8 },
+      ], 14);
+      b.pair('torso', 'torso', 'cloth', lapel, {
+        pos: [s.chest * 0.74, bibBot + 0.004, -front * 0.80], rot: [0, 0, -9], detail: 0, shade: 0.94,
+      });
+      // Rolled collar, opened at the front so it frames the throat instead of
+      // closing over it: two short arcs rather than a full ring.
       const collarR = 0.048 + bulk * 0.014;
-      const roll = sweepRing(ringProfile(collarR, 0.024, 0.026, 7), 16);
+      const roll = sweepRing(ringProfile(collarR, 0.026, 0.028, 7), 16, (th) => ({
+        // Pinch the ring to nothing across the front third so the V stays open.
+        dr: -collarR * 0.34 * Math.max(0, Math.cos(th)) ** 2, dy: 0,
+      }));
       b.add('torso', 'cloth', roll, {
         pos: [0, s.torsoTop + 0.014, -0.004], rot: [-6, 0, 0], detail: 0,
       });
-      // Cream chest ruff pushing up out of the collar — the only place the
-      // fox's pale chest is visible once the jumper is on.
-      const ruff = superShape(0.040, 0.030, 0.026, 2.6, 2.4, 11, 7);
+      // THROAT RUFF. The bib's top end, pushing up out of the open collar and
+      // wider than the collar is — a red fox's white runs right up under the jaw.
+      const ruff = superShape(0.058, 0.040, 0.034, 2.5, 2.3, 12, 8);
       b.add('torso', 'furAlt', ruff, {
-        pos: [0, s.torsoTop + 0.022, -collarR * 0.70], rot: [-14, 0, 0], detail: 1,
+        pos: [0, s.torsoTop + 0.020, -collarR * 0.86], rot: [-16, 0, 0], detail: 0,
       });
-      // Horizontal rib courses up the body, alternating depth so the light
-      // breaks across them.
+      // Horizontal rib courses. They now stop at the vest's own front edge
+      // (`hUp` pulled back inside the bib) so they do not run across the white.
       for (let i = 0; i < 4; i++) {
         const t = i / 3;
         const y = lerp(s.hipY - 0.030, s.torsoTop - 0.036, t);
         const w = lerp(s.waist * 1.10, s.chest * 1.10, t * 0.9);
         const rib = verticalLoft([
-          { z: -0.008, y: 0, hw: w, hUp: front * 0.96, hDown: back * 0.96, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
-          { z: 0.008, y: 0, hw: w * 1.008, hUp: front * 0.966, hDown: back * 0.966, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
+          { z: -0.008, y: 0, hw: w, hUp: front * 0.80, hDown: back * 0.96, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
+          { z: 0.008, y: 0, hw: w * 1.008, hUp: front * 0.806, hDown: back * 0.966, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
         ], 20, false, false);
         b.add('torso', 'cloth', rib, {
           pos: [0, y, 0], detail: i % 2 === 0 ? 1 : 2, shade: i % 2 === 0 ? 0.90 : 0.98,
@@ -1447,6 +1527,15 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
         dr: Math.abs(Math.cos(th)) * s.waist * 0.06, dy: 0,
       }));
       b.add('torso', 'cloth', hem, { pos: [0, s.hipY - 0.052, 0.002], detail: 0, shade: 0.88 });
+      // Armhole binding: the hard edge where the sleeveless knit meets bare
+      // pelt. Without it the shoulder cap and the upper arm are one soft blend
+      // and the gilet reads as a paint job.
+      b.pair('torso', 'torso', 'clothAlt', sweepRing(
+        ringProfile(0.046 + bulk * 0.020, 0.012, 0.013, 6), 14,
+      ), {
+        pos: [s.shoulderHalf * 0.94, s.shoulderY - 0.026, s.shoulderZ + 0.002],
+        rot: [4, 0, -74], detail: 1, shade: 0.90,
+      });
       break;
     }
     case 'pelt': {
@@ -1708,9 +1797,11 @@ function buildArms(b: RigBucket, d: DriverDef, s: Skeleton): void {
 
   // Cuff ring: hard edge between sleeve and glove.
   if (animal) {
-    // A knitted cuff where the sleeve meets the dark paw — a hard colour edge is
-    // what makes the forearm read as a glove rather than as a thin arm.
-    b.pair('foreR', 'foreL', d.species === 'fox' ? 'cloth' : 'fur', sweepRing(
+    // The top of the STOCKING. A ruff of pale/body-toned fur overhanging the
+    // dark forearm is what makes the black read as a marking on the animal
+    // rather than as a glove pulled on over it — the same trick as the cheek
+    // ruff, one scale down.
+    b.pair('foreR', 'foreL', d.species === 'fox' ? 'furAlt' : 'fur', sweepRing(
       ringProfile(foreR * 1.16, foreR * 0.32, foreR * 0.34, 6), 10,
     ), {
       pos: [lerp(s.elbow.x, s.hand.x, 0.14), lerp(s.elbow.y, s.hand.y, 0.14), lerp(s.elbow.z, s.hand.z, 0.14)],
@@ -1777,40 +1868,88 @@ function buildArms(b: RigBucket, d: DriverDef, s: Skeleton): void {
  */
 function buildTail(b: RigBucket, d: DriverDef, s: Skeleton): void {
   const y0 = s.hipY;
+  // ⚠️ IT HAS TO BE THE BIGGEST SHAPE ON HER, AND IT WAS NOT.
+  //
+  // The old brush peaked at a 78 mm radius — 156 mm across, against a head that
+  // measures 326 mm wide. A red fox's tail is as thick as its body and as long
+  // as the rest of the animal; at half the head's width this was a bushy cat
+  // tail, and it is the one part of the design that has to carry the character
+  // from the chase camera. It is now 216 mm at the fattest station and 0.62 m
+  // along the curve, so it is both the longest and (after the torso) the
+  // heaviest single volume on the rig.
+  //
+  // It also now RISES. The old path crested at y = 0.33 and then ran away
+  // rearward at roughly shoulder height, which from three-quarters put it
+  // BEHIND the torso where the seat back already occupies the outline. The new
+  // arc lifts to y = 0.354 outboard of the driver's left shoulder before it
+  // curls back, so the plume is a second mass beside the head with a real notch
+  // between the two — which is a shape no other driver on the roster has.
+  //
+  // Clearance: the fox driver is only ever built on the `standard` chassis
+  // (`CHARACTERS.foxy.bodyId`, and a relabelled repeat keeps the same bodyId),
+  // so the binding constraint is that chassis' seat back, not the buggy roll
+  // hoop the original routing was written defensively around. Everything above
+  // y = 0.24 here sits at |x| >= 0.19, which is outboard of the seat shoulder on
+  // every chassis in the table — see `.probe-tmp/fox-space.ts`.
   const path = [
-    new THREE.Vector3(0.020, y0 + 0.120, 0.020),
-    new THREE.Vector3(0.118, y0 + 0.200, 0.078),
-    new THREE.Vector3(0.204, y0 + 0.252, 0.152),
-    new THREE.Vector3(0.216, y0 + 0.288, 0.232),
-    new THREE.Vector3(0.152, y0 + 0.308, 0.302),
-    new THREE.Vector3(0.074, y0 + 0.316, 0.368),
+    new THREE.Vector3(0.022, y0 + 0.116, 0.014),
+    new THREE.Vector3(0.140, y0 + 0.208, 0.058),
+    new THREE.Vector3(0.244, y0 + 0.292, 0.122),
+    new THREE.Vector3(0.268, y0 + 0.340, 0.214),
+    new THREE.Vector3(0.216, y0 + 0.336, 0.316),
+    new THREE.Vector3(0.132, y0 + 0.292, 0.402),
+    new THREE.Vector3(0.062, y0 + 0.240, 0.464),
   ];
   // Thin at the root, fattest two thirds along, tapering to a point. `fluff`
-  // breaks the silhouette into three locks so it is not a smooth sausage.
-  const radii = [0.026, 0.050, 0.072, 0.078, 0.062, 0.022];
-  b.add('hips', 'fur', taperTube(path, radii, 12, 18, 0.055), { detail: 0 });
+  // breaks the silhouette into locks so it is not a smooth sausage; it is up
+  // from 0.055 because a bigger tube needs a bigger break to read as fur.
+  // The DIP at station 3 is deliberate: a monotonic taper is a sausage, and a
+  // sausage measures as one convex blob however big it is. Swell, pinch, swell
+  // puts a real concavity in the rear outline, which is the cheapest shape
+  // complexity on the character — it costs zero extra triangles.
+  const radii = [0.034, 0.078, 0.104, 0.086, 0.100, 0.058, 0.022];
+  b.add('hips', 'fur', taperTube(path, radii, 13, 22, 0.085), { detail: 0 });
 
   // Cream tip — the single highest-contrast note on the character, and the
-  // reason the tail still reads as a fox tail at minimap size.
+  // reason the tail still reads as a fox tail at minimap size. It covers the
+  // last ~40 % of the brush, which is what the reference animal has; a token
+  // white dot on the point is invisible by 40 px.
   const tipPath = [
-    new THREE.Vector3(0.186, y0 + 0.300, 0.264),
-    new THREE.Vector3(0.152, y0 + 0.308, 0.302),
-    new THREE.Vector3(0.072, y0 + 0.317, 0.370),
+    new THREE.Vector3(0.224, y0 + 0.338, 0.296),
+    new THREE.Vector3(0.132, y0 + 0.292, 0.402),
+    new THREE.Vector3(0.060, y0 + 0.238, 0.466),
   ];
-  b.add('hips', 'furAlt', taperTube(tipPath, [0.068, 0.062, 0.020], 12, 8, 0.06), { detail: 0 });
+  b.add('hips', 'furAlt', taperTube(tipPath, [0.094, 0.064, 0.022], 13, 12, 0.070), { detail: 0 });
 
-  // Fur tufts along the top edge so the outline is not a clean arc.
-  for (let i = 0; i < 3; i++) {
-    const t = i / 2;
-    const tuft = superShape(0.026 - i * 0.005, 0.019, 0.028, 2.4, 2.2, 7, 5);
-    b.add('hips', i === 2 ? 'furAlt' : 'fur', tuft, {
-      pos: [
-        lerp(0.196, 0.130, t),
-        y0 + lerp(0.300, 0.354, t),
-        lerp(0.158, 0.290, t),
-      ],
-      rot: [-16 + i * 12, 0, 26], detail: 2, shade: 0.93,
-    });
+  // GUARD LOCKS, AND THEY HAVE TO BE LONG.
+  //
+  // ⚠️ FIRST ATTEMPT MADE THE SILHOUETTE WORSE. Tripling the brush's volume with
+  // 50 mm tufts on it dropped the rear shape complexity from 5.35 to 4.98 — the
+  // only failing assertion on the roster — because perimeter/sqrt(area) rewards
+  // boundary and punishes area, and a 50 mm lock on a 104 mm-radius tube does not
+  // even clear the tube. Exactly the mistake the capybara's flank tufts recorded
+  // two rounds ago, repeated at three times the scale.
+  //
+  // These are 110–150 mm, thin, and placed on the TOP and OUTBOARD faces, which
+  // are the two edges that are on the outline from directly behind and from the
+  // chase three-quarter. Nothing goes underneath: that edge is inside the seat.
+  const LOCKS: Array<[number, number, number, number, number, number, number]> = [
+    // x, y-offset, z, pitch, yaw, roll, length
+    [0.256, 0.336, 0.130, -46, 16, 20, 0.132],
+    [0.286, 0.352, 0.212, -20, 6, 34, 0.150],
+    [0.252, 0.348, 0.300, 10, -6, 40, 0.138],
+    [0.176, 0.318, 0.386, 34, -14, 44, 0.116],
+    [0.300, 0.284, 0.176, -6, 4, 78, 0.124],
+    [0.302, 0.276, 0.268, 16, -8, 84, 0.112],
+    [0.238, 0.240, 0.354, 40, -12, 88, 0.100],
+  ];
+  for (let i = 0; i < LOCKS.length; i++) {
+    const [x, dy, z, rx, ry, rz, len] = LOCKS[i];
+    b.add('hips', i >= 3 && z > 0.28 ? 'furAlt' : 'fur',
+      earWedge(0.015, len, 0.009, 0.42), {
+        pos: [x, y0 + dy, z], rot: [rx, ry, rz],
+        detail: i % 3 === 2 ? 2 : 0, shade: 0.90 + (i % 2) * 0.06,
+      });
   }
 }
 
