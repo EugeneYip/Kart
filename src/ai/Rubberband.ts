@@ -79,6 +79,35 @@ export const RUBBERBAND = {
    *  Long on purpose: a fast-changing multiplier is visible. */
   smoothHalfLife: 2.2,
 
+  /**
+   * Half-life used for RISK ONLY, and only while the composure gate is the thing
+   * pulling it down. Short on purpose — and it is not a symmetry violation, it is
+   * the point.
+   *
+   * Measured, seed 12345, 260 s, per-tick trace of the `rival`
+   * (`.probe-tmp/bandtrace.ts`), sampled 5 s / 2 s / 0 s before each of its wall
+   * contacts:
+   *
+   *   circuit          composure -5s   risk -5s   risk -2s   risk now   mean gap
+   *   neonMetropolis        0.99         0.41       0.45       0.47       325 m
+   *   tokyoNeon             0.78         0.12       0.12       0.12        42 m
+   *   taipeiCircuit         1.00         0.03       0.02       0.04        29 m
+   *
+   * Composure is ~1.0 five seconds before the contact on every circuit: the gate
+   * is REACTIVE. It cannot know the driver is about to fail, only that it has
+   * failed, and `contactsForPanic` needs two touches before it clamps at all. That
+   * is unavoidable. What is not unavoidable is that once it does clamp, the
+   * output takes `smoothHalfLife` to get there — risk 1.0 with the target dropped
+   * to `strugglingRiskFloor` is still 0.76 one second later, 0.58 at two seconds
+   * and 0.29 at five. Those are precisely the seconds in which a driver that has
+   * just hit a barrier is gathering it up, and it is being told to attack.
+   *
+   * Ramping the band UP slowly is what keeps it invisible. Taking it away quickly
+   * cannot be seen at all — nobody notices a rival that stopped trying quite so
+   * hard — so the two directions do not want the same time constant.
+   */
+  composureReleaseHalfLife: 0.35,
+
   /** First N seconds of the race are untouched — no early cheating. */
   graceSeconds: 6.0,
 
@@ -323,7 +352,14 @@ export class Rubberband {
     const prevS = this.smoothSpeed.get(kartId);
     const prevR = this.smoothRisk.get(kartId);
     const s = prevS === undefined ? targetSpeed : targetSpeed + (prevS - targetSpeed) * f;
-    const r = prevR === undefined ? targetRisk : targetRisk + (prevR - targetRisk) * f;
+    // Risk gets the fast half-life when the COMPOSURE GATE is what is pulling it
+    // down — see `composureReleaseHalfLife`. `speedMul` keeps the slow one either
+    // way: speed is the term a player can actually see.
+    const fr =
+      cope < 1 && prevR !== undefined && targetRisk < prevR
+        ? Math.pow(2, -dt / RUBBERBAND.composureReleaseHalfLife)
+        : f;
+    const r = prevR === undefined ? targetRisk : targetRisk + (prevR - targetRisk) * fr;
     this.smoothSpeed.set(kartId, s);
     this.smoothRisk.set(kartId, r);
 

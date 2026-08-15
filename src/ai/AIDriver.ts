@@ -229,6 +229,60 @@ export const SPEED = {
   yawLimitMargin: 0.97,
   yawLimitIterations: 3,
   /**
+   * ⚠️ THE OVERSPEED BRAKE LICENCE — this is `volcanoRush`, and it is the whole
+   * of the "3x worse than any other circuit" gap.
+   *
+   * `lineLimited` licenses the brake (`if (!lineLimited) c.brake = 0`) and gates
+   * the boost override. It means "the racing line, not my own cruise ceiling, is
+   * what is holding me back" — i.e. "a corner is binding". It is FALSE for
+   * 96–98 % of the lap on EVERY circuit, because `RacingLine` builds its profile
+   * from `sqrt(30/κ)` capped at 36 m/s while the roster cruises at 26.4–30.4, so
+   * the cruise ceiling is what binds almost everywhere. That is normally
+   * harmless: at 1–3 m/s over your own target, lifting is the right answer.
+   *
+   * It stops being harmless when a boost pad sits in front of a corner. Measured,
+   * `volcanoRush` seed 12345 (`.probe-tmp/volctraj.ts`), the rival on the spiral:
+   *
+   *     arc 830  boost pad, surface=Boost      28.8 m/s   target 30.1  accel 1.00 brake 0.00
+   *     arc 846                                43.9 m/s   target 30.2  accel 1.00 brake 0.00
+   *     arc 858                                47.8 m/s   target 30.2  accel 1.00 brake 0.00
+   *     arc 870  boost expired                 40.7 m/s   target 30.2  accel 0.00 brake 0.00  <-- !
+   *     arc 880  SPIRAL entry, R 44 m          32.2 m/s   ... 11 m wide to the OUTSIDE
+   *     arc 946  inside guardrail              21.5 m/s   full opposite lock, contact
+   *
+   * The PI controller wanted `brake = 1` from arc 846 on — 17.6 m/s of error —
+   * and `if (!lineLimited) c.brake = 0` threw it away for 40 m, then the kart
+   * coasted into a 360° R 44–51 m helix whose racing line is pinned to the inside
+   * edge with 4.2 m of clearance, ran wide, corrected at full lock, crossed the
+   * whole 19 m road and speared the inside rail. All four of volcano's boost pads
+   * are inside 140 m of a corner tighter than R 120; 56 % of its wall contacts
+   * happen with `boostTime > 0` against 35–47 % elsewhere.
+   *
+   * So: a driver may brake, whatever set the target, when it is travelling faster
+   * than the corner AHEAD can physically be turned at. `v ≤ yaw(v)/κ` is the same
+   * ceiling `yawLimitMargin` already solves, evaluated at the CURRENT speed rather
+   * than at the target — the existing loop clamps every iterate to the target, so
+   * it can only ever answer "is the target too fast", never "am I".
+   *
+   * This is a LICENCE, not a target. It never lowers `v`, so it cannot slow a
+   * driver below its pace-ladder rung and it cannot fire at all while `speed ≤
+   * target`. On a straight `κ→0`, the ceiling is unreachable and nothing happens,
+   * which is what keeps "the battery gives acceleration but feels too weak" fixed:
+   * a mushroom down a straight is still flat out and still pays out in full.
+   *
+   * The horizon is `DRIFT.farSeconds` of line — see the note at the test itself
+   * for why the braking lead's 0.42 s cannot supply it and why the drift
+   * detector's existing scan can, for free.
+   */
+  /** Fraction over the corner's yaw ceiling before the brake is licensed. */
+  yawBrakeMargin: 1.04,
+  /**
+   * ∫κ ds over the near window above which a driver is "in a corner" and may not
+   * change racing-line variant. See the note in `chooseVariant`. Its own constant
+   * rather than a reuse of `DRIFT.exitIntegral` so the two can be measured apart.
+   */
+  variantCornerIntegral: 0.2,
+  /**
    * Boost-into-a-corner. See the `st.boostTime` block in `applySpeedControl` for
    * why these exist and why lifting cannot waste a mini-turbo.
    *
@@ -1360,7 +1414,25 @@ export class AIDriver {
   // -------------------------------------------------------------------------
 
   private chooseVariant(dt: number, world: DriverWorld, st: KartState): void {
-    if (this.variantCooldown > 0) return;
+    // Never change line in the middle of a corner.
+    //
+    // A switch injects up to 5 m of `variantShift` into the lateral target. Doing
+    // that on a straight is a lane change; doing it while committed to an arc is a
+    // second steering input on top of the one holding the corner, and the
+    // controller cannot tell them apart. Measured on volcano's 340 m helix, the
+    // rival flipped optimal/inside/outside every 25–60 m for the whole corner and
+    // crossed the full 19 m road each time; 63–100 % of all AI wall contacts on
+    // the four measured circuits happen on a non-`optimal` variant.
+    //
+    // `nearWindow` is one tick stale here (`updateDrift` refreshes it after this
+    // runs) which at 30 m/s is 0.25 m of arc — irrelevant at this threshold.
+    //
+    // It gates the VARIANT only. The blocking bias at the bottom of this method
+    // has to keep updating or a defender freezes its cover for the whole corner,
+    // and blocking is authored differentiation, not a line choice.
+    const maySwitch =
+      this.variantCooldown <= 0 &&
+      Math.abs(this.nearWindow.signed) <= SPEED.variantCornerIntegral;
     const line = world.line;
     const p = this.personality;
     const risk = this.band.risk;
@@ -1426,6 +1498,7 @@ export class AIDriver {
     }
 
     if (!world.line.has(want)) want = 'optimal';
+    if (!maySwitch) want = this.variant;
 
     if (want !== this.variant) {
       // Carry the lateral difference as a decaying shift so the target never
@@ -1682,6 +1755,47 @@ export class AIDriver {
         v = vy;
         // The binding constraint is now a CORNER, so braking for it is correct.
         this.lineLimited = true;
+      }
+    }
+
+    // The overspeed brake licence. See SPEED.yawBrakeMargin — this is the
+    // volcanoRush fix, and it is deliberately the last word on `lineLimited`.
+    //
+    // Gated on the overspeed first, because that test is free: below
+    // `boostCornerDeadband` the PI controller's output is still positive (bias
+    // 0.36 against kP 0.55) so there is no brake to license and nothing downstream
+    // reads the flag differently, and only a driver actually running away from its
+    // own target pays for the extra curvature scan.
+    if (absSpeed > v + SPEED.boostCornerDeadband) {
+      // `farWindow.peak` rather than a third `curvatureAhead`: the drift detector
+      // already scans `clamp(v · 1.9, 18, 66)` m of line every tick, which is the
+      // horizon this test wants anyway (braking 48 -> 38 m/s takes ~30 m, and a
+      // fixed lead TIME cannot supply that because braking distance grows with v²
+      // while `targetLead` grows with v — at 48 m/s the 0.42 s braking lead sees
+      // 20 m). A fourth scan of the same array costs 6.5 us x 11 karts x 120 Hz
+      // (`.probe-tmp/curvcost.ts`) for a horizon 40–66 m wide instead of 57–66.
+      // One tick stale, i.e. 0.25 m of arc at 30 m/s.
+      const kc = Math.max(kappa, this.farWindow.peak);
+      if (kc > 1e-4) {
+        // Same fixed point as above, but seeded from the speed we ACTUALLY have.
+        // `yaw()` falls with speed, so seeding high and iterating converges from
+        // the outside; three steps land within 0.2 m/s (verified against a
+        // 40-step solve in `.probe-tmp/volcline.ts`).
+        //
+        // `drifting = false` deliberately. `driftAuthorityBonus` is a 1.3x flat
+        // credit for the extra yaw a slide buys, and it is fine for the STEERING
+        // divisor, but here it is the kart talking itself out of braking at the
+        // exact moment it should not: measured on the spiral, the licence fired
+        // at arc 840 and 845, the kart began a drift at 846, the ceiling jumped
+        // 37.6 -> 48.9 m/s, the licence switched off and the boost override went
+        // straight back to `accel = 1` at 36 m/s. A slide buys yaw by spending
+        // lateral grip; it does not raise the speed at which the corner can be
+        // made.
+        let vc = absSpeed;
+        for (let i = 0; i < SPEED.yawLimitIterations; i++) {
+          vc = (this.yawAuthorityAt(vc, false) * SPEED.yawLimitMargin) / kc;
+        }
+        if (absSpeed > vc * SPEED.yawBrakeMargin) this.lineLimited = true;
       }
     }
 

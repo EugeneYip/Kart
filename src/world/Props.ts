@@ -47,7 +47,9 @@ import { floatToTexture, heightToNormal, makeRock } from '@/render/TextureFactor
 // road builds around itself (tunnel bores, bridge decks, anti-gravity tubes).
 // Published module-level by `buildTrack()` because `Environment` constructs the
 // dresser and never hands it a `Track`. See the ROAD VOLUMES block there.
-import { ROAD_VOLUME_SHELL, roadVolumePenetration, roadVolumes } from '@/track/TrackBuilder';
+import {
+  CROSS, ROAD_VOLUME_SHELL, roadVolumePenetration, roadVolumes,
+} from '@/track/TrackBuilder';
 
 // ===========================================================================
 // Public placement types
@@ -162,6 +164,36 @@ const _s = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _axisY = new THREE.Vector3(0, 1, 0);
 const _volDir = new THREE.Vector3();
+
+/**
+ * One resolved cross-section of the DRAWN carriageway, in world space — the
+ * surface a prop that straddles the road has to meet. See `deckFrameAt`.
+ */
+interface DeckFrame {
+  /** Centreline at road-surface level. */
+  p: THREE.Vector3;
+  /** Unit BANKED binormal (driver's right), so `p + b*lat` follows the camber. */
+  b: THREE.Vector3;
+  /** Unit surface normal, carrying both bank and grade. */
+  n: THREE.Vector3;
+  hw: number;
+  shL: number;
+  shR: number;
+  ok: boolean;
+}
+
+const _deck: DeckFrame = {
+  p: new THREE.Vector3(), b: new THREE.Vector3(1, 0, 0), n: new THREE.Vector3(0, 1, 0),
+  hw: 11, shL: 1.2, shR: 1.2, ok: false,
+};
+
+/**
+ * Shoulder width assumed when a `PathStation` does not publish one. Same value
+ * and same reasoning as `WorldTextures.SH_FALLBACK`: guessing too WIDE puts a
+ * prop on ground that is not there, too NARROW puts it slightly inboard where
+ * there is certainly surface, so err narrow.
+ */
+const SH_FALLBACK = 3;
 
 /**
  * A zero-length frame, used once at the end of `init()` to pose the CPU-animated
@@ -544,7 +576,7 @@ class Builder {
     cx: number, cy: number, cz: number,
     w: number, h: number, yaw: number, hex: number,
     segs = 4, uvRect?: [number, number, number, number],
-    opts: { double?: boolean; gap?: number } = {},
+    opts: { double?: boolean; gap?: number; wave?: number } = {},
   ): void {
     const uv = uvRect ?? [0, 0, 1, 1];
     const ca = Math.cos(yaw), sa = Math.sin(yaw);
@@ -553,6 +585,13 @@ class Builder {
     // literal that used to be written here, but is correct at every other yaw too.
     const nx = -sa, nz = ca;
     const gap = opts.gap ?? 0.016;
+    /**
+     * Rest-pose slack along the sheet normal, metres — see `mastCloth.wave` for
+     * why a cloth needs a shape it is not animated into. Here the anchored edge
+     * is the TOP, so the belly grows downward as `fy^1.4` and undulates across
+     * the span: a hung banner bows between its fixings and lifts at the hem.
+     */
+    const wave = opts.wave ?? 0;
     const sheet = (side: 1 | -1): void => {
       const base = this.vertexCount;
       const stride = segs + 1;
@@ -565,13 +604,30 @@ class Builder {
           const fx = i / segs;
           const lx = (fx - 0.5) * w;
           const y = cy - fy * h;
+          // Slack, plus its two derivatives, so the shading follows the shape
+          // instead of staying flat-sheet — the section 0 failure.
+          const th = Math.PI * 1.45 * fx + 0.7 * fy;
+          const fyw = fy ** 1.4;
+          const d = wave * fyw * Math.sin(th);
+          const dFx = wave * fyw * Math.cos(th) * Math.PI * 1.45;
+          const dFy = wave * (fy <= 0 ? 0 : 1.4 * fy ** 0.4) * Math.sin(th)
+            + wave * fyw * Math.cos(th) * 0.7;
+          // t1 = U*w + N*dFx (along +x), t2 = -Y*h + N*dFy; normal = t2 x t1.
+          const t1x = ca * w + nx * dFx, t1z = sa * w + nz * dFx;
+          const t2x = nx * dFy, t2y = -h, t2z = nz * dFy;
+          let vnx = t2y * t1z;
+          let vny = t2z * t1x - t2x * t1z;
+          let vnz = -t2y * t1x;
+          const vl = Math.hypot(vnx, vny, vnz) || 1;
+          vnx = (vnx / vl) * side; vny = (vny / vl) * side; vnz = (vnz / vl) * side;
           // u runs uMin -> uMax as lx goes -w/2 -> +w/2 on the +Z sheet, exactly
           // as in `plate()`'s front face — see the long note on the u axis there.
           // A viewer of that face sees local +x on their right, so u must grow
           // with +x. The -Z sheet's viewer sees +x on their LEFT, so its u runs
           // the other way; `1 - fx` is that mirror.
           const fu = side > 0 ? fx : 1 - fx;
-          this.vert(cx + lx * ca + ox, y, cz + lx * sa + oz, nx * side, 0, nz * side,
+          this.vert(cx + lx * ca + ox + nx * d, y, cz + lx * sa + oz + nz * d,
+            vnx, vny, vnz,
             uv[0] + (uv[2] - uv[0]) * fu, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
         }
       }
@@ -610,7 +666,38 @@ class Builder {
     cx: number, cy: number, cz: number,
     w: number, h: number, yaw: number, hex: number,
     cols = 6, rows = 3, uvRect?: [number, number, number, number],
-    opts: { double?: boolean; gap?: number; bow?: number } = {},
+    opts: {
+      double?: boolean; gap?: number; bow?: number;
+      /**
+       * Depth of the REST-POSE ripple along the sheet normal, metres.
+       *
+       * ---- WHY A FLAG NEEDS SHAPE IT IS NOT ANIMATED INTO -------------------
+       * The wave in `patchProp` is a sine of `uTime`, so twice a cycle it passes
+       * through zero and the flag is drawn EXACTLY as authored. Authored flat,
+       * that is a rectangle, twice a second, and the eye reads the rectangle
+       * rather than the motion. Measured on `flagusa` before this existed: max
+       * deviation from the panel's own best-fit plane was 0.4 % of its height —
+       * a plane to within 7 mm over 2.7 m. That, and not a frozen uniform, is
+       * the owner's *"visually appearing stiff like panels"*: `uTime` was
+       * advancing the whole time (verified over 240 frames of the real
+       * `Environment.update`, `.probe-tmp/flagmotion.ts`).
+       *
+       * The ripple is a travelling crease baked into the geometry: it grows as
+       * `fx^1.6` so the hoist stays flat against the mast, and it is skewed down
+       * the panel by `WAVE_SKEW` so the crease runs diagonally instead of
+       * standing as a vertical corrugation.
+       */
+      wave?: number;
+      /** How far the fly end hangs under its own weight, metres. */
+      sag?: number;
+      /**
+       * Per-cell colour. When present each cell gets its own four vertices
+       * instead of sharing them, which is what a checkerboard needs; the surface
+       * and the normals are the same functions either way, so a checkered flag
+       * and a plain one cannot end up different shapes.
+       */
+      cellHex?: (i: number, j: number) => number;
+    } = {},
   ): void {
     const uv = uvRect ?? [0, 0, 1, 1];
     const ca = Math.cos(yaw), sa = Math.sin(yaw);
@@ -627,50 +714,91 @@ class Builder {
      * own normal so it works at any yaw.
      */
     const bow = opts.bow ?? 0;
+    const wave = opts.wave ?? 0;
+    const sag = opts.sag ?? 0;
+    /** Ripples across the fly, in half-cycles. */
+    const WAVE_K = 1.65;
+    /** ...leaned down the panel, so the crease is diagonal, not a corrugation. */
+    const WAVE_SKEW = 0.85;
+    const cell = opts.cellHex;
+
+    /** Offset along the sheet normal, and its two partial derivatives. */
+    const shape = (fx: number, fy: number): [number, number, number, number, number, number] => {
+      const A = Math.sin(Math.PI * fx) ** 1.35;
+      const B = Math.sin(Math.PI * (0.15 + fy * 0.7));
+      const dA = fx <= 0 || fx >= 1 ? 0
+        : 1.35 * Math.sin(Math.PI * fx) ** 0.35 * Math.PI * Math.cos(Math.PI * fx);
+      const th = Math.PI * WAVE_K * fx + WAVE_SKEW * fy;
+      const fx16 = fx ** 1.6;
+      const d = bow * A * B + wave * fx16 * Math.sin(th);
+      const dFx = bow * dA * B
+        + wave * (1.6 * (fx <= 0 ? 0 : fx ** 0.6) * Math.sin(th)
+          + fx16 * Math.cos(th) * Math.PI * WAVE_K);
+      const dFy = bow * A * 0.7 * Math.PI * Math.cos(Math.PI * (0.15 + fy * 0.7))
+        + wave * fx16 * Math.cos(th) * WAVE_SKEW;
+      // Droop: nothing at the hoist, most at the fly's bottom corner.
+      const wgt = 0.45 + 0.55 * fy;
+      const sD = sag * fx ** 1.8 * wgt;
+      const sFx = sag * 1.8 * (fx <= 0 ? 0 : fx ** 0.8) * wgt;
+      const sFy = sag * fx ** 1.8 * 0.55;
+      return [d, dFx, dFy, sD, sFx, sFy];
+    };
+
+    /** One vertex of the surface, with its analytic normal. */
+    const put = (fx: number, fy: number, side: 1 | -1, hexAt: number): void => {
+      // Squared along the length so the hoist stays put and the fly end moves,
+      // with a small extra lift toward the bottom corner — that asymmetry is
+      // what stops the ripple looking like a flat pendulum.
+      this.flap = fx * fx * (0.82 + 0.18 * fy);
+      const [d, dFx, dFy, sD, sFx, sFy] = shape(fx, fy);
+      const off = (side < 0 ? -gap : 0) + d;
+      // The rest shape has to reach the NORMALS as well as the positions, or a
+      // rippled flag is shaded as the flat sheet it no longer is — which is the
+      // section 0 failure this replaced in the first place. Surface is
+      //   p(fx,fy) = C + U*fx*w - Y*(fy*h + s) + N*d
+      // so t1 = U*w + N*dFx - Y*sFx and t2 = N*dFy - Y*(h + sFy), and `t2 x t1`
+      // is the outward normal. With d = s = 0 it reduces to (-sa, 0, ca), i.e.
+      // the flat sheet's normal — which is the check that the general cross
+      // product below did not silently invert anything.
+      const t1x = ca * w + nx * dFx, t1y = -sFx, t1z = sa * w + nz * dFx;
+      const t2x = nx * dFy, t2y = -(h + sFy), t2z = nz * dFy;
+      let vnx = t2y * t1z - t2z * t1y;
+      let vny = t2z * t1x - t2x * t1z;
+      let vnz = t2x * t1y - t2y * t1x;
+      const vl = Math.hypot(vnx, vny, vnz) || 1;
+      vnx = (vnx / vl) * side; vny = (vny / vl) * side; vnz = (vnz / vl) * side;
+      // u grows with local +x on the +Z sheet, matching `plate()`'s front face
+      // — see the u-axis note there. The -Z sheet mirrors it, exactly as
+      // `banner()` does and for the same reason.
+      const fu = side > 0 ? fx : 1 - fx;
+      const lx = fx * w;
+      this.vert(cx + lx * ca + nx * off, cy - (fy * h + sD), cz + lx * sa + nz * off,
+        vnx, vny, vnz,
+        uv[0] + (uv[2] - uv[0]) * fu, uv[1] + (uv[3] - uv[1]) * fy, hexAt, 1);
+    };
+
     const sheet = (side: 1 | -1): void => {
+      if (cell) {
+        // Unshared cells, for a checkerboard.
+        for (let j = 0; j < rows; j++) {
+          for (let i = 0; i < cols; i++) {
+            const base = this.vertexCount;
+            const hx = cell(i, j);
+            put(i / cols, j / rows, side, hx);
+            put((i + 1) / cols, j / rows, side, hx);
+            put(i / cols, (j + 1) / rows, side, hx);
+            put((i + 1) / cols, (j + 1) / rows, side, hx);
+            if (side > 0) this.I.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+            else this.I.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+          }
+        }
+        this.flap = 0;
+        return;
+      }
       const base = this.vertexCount;
       const stride = cols + 1;
       for (let j = 0; j <= rows; j++) {
-        const fy = j / rows;              // 0 = top, 1 = bottom
-        for (let i = 0; i <= cols; i++) {
-          const fx = i / cols;            // 0 = mast (anchored), 1 = free edge
-          // Squared along the length so the hoist stays put and the fly end moves,
-          // with a small extra lift toward the bottom corner — that asymmetry is
-          // what stops the ripple looking like a flat pendulum.
-          this.flap = fx * fx * (0.82 + 0.18 * fy);
-          const lx = fx * w;
-          // Belly, tapering to nothing at the head and the foot so the cloth
-          // still meets its boom and its yard.
-          const A = Math.sin(Math.PI * fx) ** 1.35;
-          const B = Math.sin(Math.PI * (0.15 + fy * 0.7));
-          const camber = bow * A * B;
-          const off = (side < 0 ? -gap : 0) + camber;
-          // The camber has to reach the NORMALS as well as the positions, or a
-          // bellied sail is shaded as the flat sheet it no longer is — which is
-          // the section 0 failure this replaced in the first place. Surface is
-          // p(fx,fy) = U*fx*w - Y*fy*h + N*camber, so the tangents carry the
-          // camber's own derivatives and `t2 x t1` is the outward normal (it
-          // reduces to (-sa, 0, ca) when `bow` is 0, matching the flat sheet).
-          const dA = fx <= 0 || fx >= 1 ? 0
-            : 1.35 * Math.sin(Math.PI * fx) ** 0.35 * Math.PI * Math.cos(Math.PI * fx);
-          const dcx = bow * dA * B;
-          const dcy = bow * A * 0.7 * Math.PI * Math.cos(Math.PI * (0.15 + fy * 0.7));
-          // t1 = (ca*w + nx*dcx, 0, sa*w + nz*dcx);  t2 = (nx*dcy, -h, nz*dcy)
-          const t1x = ca * w + nx * dcx, t1z = sa * w + nz * dcx;
-          const t2x = nx * dcy, t2z = nz * dcy;
-          let vnx = (-h) * t1z - t2z * 0;
-          let vny = t2z * t1x - t2x * t1z;
-          let vnz = t2x * 0 - (-h) * t1x;
-          const vl = Math.hypot(vnx, vny, vnz) || 1;
-          vnx = (vnx / vl) * side; vny = (vny / vl) * side; vnz = (vnz / vl) * side;
-          // u grows with local +x on the +Z sheet, matching `plate()`'s front face
-          // — see the u-axis note there. The -Z sheet mirrors it, exactly as
-          // `banner()` does and for the same reason.
-          const fu = side > 0 ? fx : 1 - fx;
-          this.vert(cx + lx * ca + nx * off, cy - fy * h, cz + lx * sa + nz * off,
-            vnx, vny, vnz,
-            uv[0] + (uv[2] - uv[0]) * fu, uv[1] + (uv[3] - uv[1]) * fy, hex, 1);
-        }
+        for (let i = 0; i <= cols; i++) put(i / cols, j / rows, side, hex);
       }
       this.flap = 0;
       for (let j = 0; j < rows; j++) {
@@ -777,6 +905,16 @@ interface PropUniforms extends Record<string, THREE.IUniform> {
 type PatchOpts = {
   /** Cloth / balloon motion driven by aFlap. */
   sway?: number;
+  /**
+   * Out-of-plane VERTICAL component of the cloth wave, metres per unit of `amp`.
+   *
+   * Without it the sway block moves a cloth in one horizontal direction only, so
+   * however finely the panel is subdivided it reads as corrugated card sliding
+   * sideways. Measured on `flagusa` before this existed: the fly edge's whole
+   * peak-to-peak excursion was 0.229 m on a 2.7 x 1.8 m flag, all of it in a
+   * single plane.
+   */
+  curl?: number;
   /** Bob up and down (balloons). */
   bob?: number;
   /** Per-instance atlas sub-rect from aAtlas. */
@@ -846,9 +984,38 @@ function patchProp(
           float g = sin(uTime * 2.3 + ph + apxOrigin.x * 0.07 - aFlap * 2.6)
                   + 0.45 * sin(uTime * 5.1 + ph * 1.7 - aFlap * 4.1);
           float amp = aFlap * uWind * ${opts.sway.toFixed(3)};
-          transformed.x += uWindDir.x * g * amp;
-          transformed.z += uWindDir.y * g * amp;
-          transformed.y -= abs(g) * amp * 0.25;
+          // ---- THE FLUTTER RUNS ACROSS THE CLOTH'S OWN FACE. ----------------
+          // NOTE FOR EDITORS: this whole block is inside a JS template literal.
+          // A backtick in a comment here ENDS THE STRING, and the file then fails
+          // to parse in a way that points at the GLSL rather than at the quote.
+          // It used to displace by uWindDir directly: a WORLD direction applied in
+          // OBJECT space, so how much of it was visible depended on the angle
+          // between the wind and the sheet. A cloth edge-on to the wind got its
+          // whole displacement along its own span, which is a stretch, not a
+          // flutter, and looks like nothing at all. Two live cases:
+          //   the roadside pennant is built at a random builder yaw, so its face
+          //   direction is a per-instance lottery and some barely moved;
+          //   THEME_WIND gives snow a direction of 3.3 rad, whose sine is -0.16,
+          //   which would freeze every cloth on such a circuit to a sixth of its
+          //   amplitude. No shipping circuit is snow today. That is luck.
+          // objectNormal is in scope here: three fills it in beginnormal_vertex,
+          // which runs before begin_vertex. Flattening it into XZ and flipping it
+          // to agree with the wind gives BOTH sheets of a doubled cloth the SAME
+          // world displacement (normal +Z with sign +1, and normal -Z with sign
+          // -1, are the same vector), so the two layers cannot peel apart.
+          vec3 apxFace = vec3(objectNormal.x, 0.0, objectNormal.z);
+          float apxFl = length(apxFace);
+          vec3 apxWind = vec3(uWindDir.x, 0.0, uWindDir.y);
+          apxFace = apxFl > 1e-4 ? apxFace / apxFl : apxWind;
+          apxFace *= dot(apxWind, apxFace) >= 0.0 ? 1.0 : -1.0;
+          transformed.x += apxFace.x * g * amp;
+          transformed.z += apxFace.z * g * amp;
+          transformed.y -= abs(g) * amp * 0.25;${opts.curl ? `
+          // A flag does not swing in a plane: the fly end lifts and drops out of
+          // phase with the sideways ripple, which is what turns a corrugated
+          // sheet into cloth. Same aFlap taper, so the hoist stays pinned.
+          float gy = sin(uTime * 1.910 + ph * 1.310 + apxOrigin.x * 0.070 - aFlap * 3.770);
+          transformed.y += gy * amp * ${opts.curl.toFixed(3)};` : ''}
         }` : ''}
         ${opts.bob ? `
         {
@@ -1972,6 +2139,12 @@ interface AuthoredSpec {
   softGlow?: boolean;
   cloth?: THREE.BufferGeometry;
   /**
+   * Drive `cloth` with the FLAG amplitude instead of the general one. Set it for
+   * anything bent onto a mast; leave it for awnings, sails and canopies, which
+   * are stayed at more than one edge and do not sweep.
+   */
+  clothMast?: boolean;
+  /**
    * Companion pass on the SPONSOR ATLAS cloth material — a hanging banner with
    * real artwork on it, swaying like `cloth` but textured like `sign`.
    *
@@ -1991,6 +2164,34 @@ interface AuthoredSpec {
   flag?: THREE.BufferGeometry;
   /** Companion pass on the metal material — trusses, bracing, railings. */
   metal?: THREE.BufferGeometry;
+  /**
+   * PER-INSTANCE metal pass: the geometry is rebuilt for every anchor, so it can
+   * be authored against the road THAT anchor actually stands on.
+   *
+   * ---- WHY THIS EXISTS ------------------------------------------------------
+   * Everything else in this file shares one geometry across every instance, which
+   * is right for a lamp post and wrong for anything that has to MEET the
+   * carriageway at a point away from its own anchor. `bridgearch`'s stay fan
+   * reaches 27 m fore and aft and lands 12.6 m out to each side, and over that
+   * box the road is not a plane and not straight:
+   *
+   *   bank      the deck at Boston's two towers is superelevated 5.2 deg and
+   *             7.8 deg, so the deck edge is 0.98 m ABOVE the anchor plane on one
+   *             side and 1.30 m BELOW it on the other (2.07 m at the second
+   *             tower). The instance transform is yaw-only, so a level prop's
+   *             left and right anchor lines cannot both be on the deck.
+   *   grade     the deck falls 0.3-0.9 m over the fan's own length.
+   *   curvature the straight chord departs from the curving deck edge by up to
+   *             1.66 m at 27 m of reach.
+   *
+   * Measured against the DRAWN track mesh before this existed
+   * (`.probe-tmp/staygap.ts`): all 96 stay anchor castings hung in the air, p50
+   * 1.32 m, p90 4.06 m, max 5.01 m, and 6 of them sat over the tarmac. No amount
+   * of tuning a shared geometry fixes that, because the two towers need different
+   * numbers. Rebuilding the fan per anchor does, exactly, and it costs ONE extra
+   * draw call per additional instance — the body and the glow stay shared.
+   */
+  metalPerAnchor?: (a: Anchor) => THREE.BufferGeometry;
   /** Companion pass on the sponsor atlas, with cells baked into the uvs. */
   sign?: THREE.BufferGeometry;
   /**
@@ -2105,6 +2306,69 @@ const CORRIDOR_PROPS = new Set([
   // moving a declaration around as though it had a silhouette.
   'district:brick', 'district:midrise', 'district:tokyo',
 ]);
+
+/**
+ * ===========================================================================
+ *  THE CABLE-STAYED BRIDGE TOWER, IN ONE PLACE
+ * ===========================================================================
+ *  The body (`authoredSpec('bridgearch')`) and the stay fan (`bridgeFan`, built
+ *  once per anchor) are two separate builders that have to agree to the
+ *  centimetre: the fan derives each stay's tower end from the shaft's taper at
+ *  that stay's own height, so a change to the obelisk that the fan did not see
+ *  would leave 48 cables hanging off thin air at the top instead of the bottom.
+ *  Neither builder is allowed a literal for any of these.
+ */
+const BRIDGE_KNEE = 27;
+const BRIDGE_TOP = 86;
+const BRIDGE = {
+  /** Half the foot spread; local |x| of each leg. */
+  leg: 14.9,
+  /** Height of the crotch, where the legs meet and the obelisk starts. */
+  knee: BRIDGE_KNEE,
+  /** Top of the shaft, below the finial. */
+  top: BRIDGE_TOP,
+  /** Joint between the obelisk's two stages. */
+  mid: BRIDGE_KNEE + (BRIDGE_TOP - BRIDGE_KNEE) * 0.56,
+  /** How far the pier descends BELOW the deck anchor. */
+  pier: -5.4,
+  /** Half-width of the lower obelisk stage at its foot, and its taper. */
+  shaftLo: 2.5,
+  taperLo: 0.74,
+  /** ...and of the upper stage. */
+  shaftHi: 1.78,
+  taperHi: 0.72,
+  /** Stays per quadrant. */
+  stays: 12,
+  /** Arc length from the tower to the NEAREST and FURTHEST deck anchor. */
+  near: 7,
+  far: 27,
+  /** Stay radius. 0.17 is 2.3 px at 120 m on a 1080p frame; 0.09 was 1.2. */
+  radius: 0.17,
+  /** Height of the anchor pier above the shoulder it stands on. */
+  anchorH: 2.05,
+  /**
+   * Metres INBOARD of the shoulder's outer edge that the anchor pier stands.
+   *
+   * The concrete barrier's foot is `WALL_STANDOFF` (0.12 m) OUTBOARD of that
+   * edge and it batters a further 0.36 m out as it rises, so 0.35 m in puts the
+   * pier on drawn shoulder with its outboard face against the barrier's inboard
+   * face. Not on top of the barrier: the barrier's lateral position moves with
+   * `halfWidth`, which changes by 0.76 m between Boston's two towers, and the
+   * shoulder is the widest thing that is certainly there.
+   */
+  inset: 0.35,
+} as const;
+
+/** Half-width of the obelisk shaft at height `y`, in the tower's local frame. */
+function bridgeShaftHalf(y: number): number {
+  const { knee, top, mid, shaftLo, taperLo, shaftHi, taperHi } = BRIDGE;
+  if (y <= mid) {
+    const t = clamp01((y - knee) / Math.max(mid - knee, 1e-3));
+    return shaftLo * (1 + (taperLo - 1) * t);
+  }
+  const t = clamp01((y - (mid + 0.64)) / Math.max(top - mid, 1e-3));
+  return shaftHi * (1 + (taperHi - 1) * t);
+}
 
 // ===========================================================================
 // City vocabularies
@@ -2458,6 +2722,7 @@ export class Props implements ISubsystem {
   private atlasSway!: THREE.MeshStandardMaterial;
   /** Cloth on the FLAG atlas — see `makeFlagAtlas`. */
   private flagSway!: THREE.MeshStandardMaterial;
+  private mastSway!: THREE.MeshStandardMaterial;
   private fence!: THREE.MeshStandardMaterial;
 
   private time = 0;
@@ -2674,9 +2939,29 @@ export class Props implements ISubsystem {
     };
 
     this.matte = patchProp(base({ name: 'prop-matte', roughness: 0.86, metalness: 0.02 }), this.u);
+    // ---- SWAY AMPLITUDES ----------------------------------------------------
+    // These were 0.55 / 0.50 / 0.80, and `Environment.THEME_WIND` gives a `city`
+    // circuit a base of 0.18 gusting to 0.25. The product is what the cloth
+    // actually does, and measured over 240 frames of the real update loop
+    // (`.probe-tmp/flagmotion.ts`) the numbers were: national flag fly edge
+    // 0.229 m peak-to-peak on a 2.7 x 1.8 m panel, checkered flag 0.144 m on a
+    // 2.1 x 1.36 m one, start-line banner 0.166 m on a 4.4 m drop. Five to nine
+    // per cent of the panel's own span is not cloth; it is a board with a tremor.
+    // Raised so the fly edge sweeps 0.5-0.6 m, which is what a flag in a fresh
+    // breeze does, and so a banner's free corner moves a readable amount.
     this.matteSway = patchProp(
       base({ name: 'prop-cloth', roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide }),
-      this.u, { sway: 0.55 },
+      this.u, { sway: 0.95, curl: 0.22 },
+    );
+    // A FLAG is not a parasol. `matteSway` also carries the beach parasols, the
+    // moored boats' sails and the seagulls' wing tips, and giving those the
+    // amplitude a flag needs makes a sunshade wobble like laundry. Flags get
+    // their own copy of the same material with the flag amplitudes — one extra
+    // `MeshStandardMaterial`, no extra draw call, because a draw call is per
+    // MESH and the cloth passes were already separate meshes.
+    this.mastSway = patchProp(
+      base({ name: 'prop-mast-cloth', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide }),
+      this.u, { sway: 2.05, curl: 0.55 },
     );
     this.metal = patchProp(
       base({ name: 'prop-metal', roughness: 0.34, metalness: 0.85, envMapIntensity: 1.15 }),
@@ -2737,7 +3022,7 @@ export class Props implements ISubsystem {
     );
     this.atlasSway = patchProp(
       base({ name: 'prop-atlas-cloth', map: sponsor, roughness: 0.9, side: THREE.DoubleSide }),
-      this.u, { atlas: true, sway: 0.5 },
+      this.u, { atlas: true, sway: 1.15, curl: 0.22 },
     );
 
     // A national flag is a bigger, slacker cloth than a sponsor banner, so it
@@ -2747,7 +3032,7 @@ export class Props implements ISubsystem {
     this.textures.push(flags);
     this.flagSway = patchProp(
       base({ name: 'prop-flag-cloth', map: flags, roughness: 0.88, side: THREE.DoubleSide }),
-      this.u, { atlas: true, sway: 0.8 },
+      this.u, { atlas: true, sway: 2.05, curl: 0.55 },
     );
 
     const fenceAlpha = makeFenceAlpha();
@@ -3289,7 +3574,8 @@ export class Props implements ISubsystem {
       // `CELL_FULL`, not `[0,0,1,1]`: an ascending v range put the artwork upside
       // down and the exact 0/1 ends were collapsed to one texel by the shader.
       const b = this.builder();
-      b.banner(0, 11.2, -0.1, (hw + 1) * 2, 2.6, 0, 0xffffff, 5, CELL_FULL, { double: true });
+      b.banner(0, 11.2, -0.1, (hw + 1) * 2, 2.6, 0, 0xffffff, 6, CELL_FULL,
+        { double: true, wave: 0.20 });
       this.emit('gantryBanner', b.build('gantryBanner'), this.atlasSway, gantryAnchor,
         { cull: CULL_MID, atlasCells: 8, shadow: false, corridor: true });
     }
@@ -3417,7 +3703,7 @@ export class Props implements ISubsystem {
           const bwd = Math.min(9, spec.width * 0.13);
           for (let k = -1; k <= 1; k++) {
             bn.banner(k * bwd * 1.6, parts.top - 2.4, STAND_FRONT_Z - 1.1,
-              bwd, 2.4, 0, 0xffffff, 3, atlasRect(k + 5));
+              bwd, 2.4, 0, 0xffffff, 5, atlasRect(k + 5), { wave: 0.17 });
           }
           this.emit('standBanner', bn.build('standBanner'), this.atlasSway, grp.anchors,
             { cull: CULL_MID, atlasBaked: true, shadow: false });
@@ -3433,19 +3719,20 @@ export class Props implements ISubsystem {
       this.emit('flagPole', b.build('flagPole'), this.metal, anchors, { cull: CULL_NEAR });
 
       const f = this.builder();
-      // Checkerboard from 4x3 quads, alternating colour, flapping outward.
-      const cols = 5, rowsF = 4, cw = 0.42, chh = 0.34;
-      for (let i = 0; i < cols; i++) {
-        for (let j = 0; j < rowsF; j++) {
-          f.flap = ((i + 0.5) / cols) ** 1.6;
-          const x = 0.1 + i * cw;
-          const y = 5.05 - j * chh;
-          const col = (i + j) % 2 ? 0xf4f2ec : 0x14171b;
-          f.quad(x, y, 0, x + cw, y, 0, x + cw, y - chh, 0, x, y - chh, 0, col, 1.05);
-        }
-      }
-      f.flap = 0;
-      this.emit('checkerFlag', f.build('checkerFlag'), this.matteSway, anchors,
+      // ---- THIS WAS 20 SEPARATE FLAT QUADS. --------------------------------
+      // Each cell was authored in the z = 0 plane with ONE `flap` value for the
+      // whole cell, so the panel had five discrete steps of displacement across
+      // its span and no curvature at all — a rigid checkerboard signboard on a
+      // stick, 17 of them per circuit at the roadside, and the most likely thing
+      // a player is looking at when they say the flags look like panels.
+      // `mastCloth` with `cellHex` builds the same checkerboard on the same
+      // rippled, drooping surface the national flags use, with `aFlap` graded per
+      // vertex rather than per cell. 48 triangles instead of 20.
+      f.mastCloth(0.1, 5.05, 0, 2.1, 1.36, 0, 0xffffff, 6, 4, undefined, {
+        wave: 0.26, sag: 0.16,
+        cellHex: (i, j) => ((i + j) % 2 ? 0xf4f2ec : 0x14171b),
+      });
+      this.emit('checkerFlag', f.build('checkerFlag'), this.mastSway, anchors,
         { cull: CULL_NEAR, shadow: false });
     }
     {
@@ -4983,7 +5270,8 @@ export class Props implements ISubsystem {
           anchors, { cull: spec.cull ?? CULL_MID, bloom: true, shadow: false, corridor });
       }
       if (spec.cloth) {
-        this.emit(`authored:${key}:cloth`, spec.cloth, this.matteSway, anchors,
+        this.emit(`authored:${key}:cloth`, spec.cloth,
+          spec.clothMast ? this.mastSway : this.matteSway, anchors,
           { cull: spec.cull ?? CULL_MID, shadow: false, corridor });
       }
       if (spec.clothSign) {
@@ -4997,6 +5285,16 @@ export class Props implements ISubsystem {
       if (spec.metal) {
         this.emit(`authored:${key}:metal`, spec.metal, this.metal, anchors,
           { cull: spec.cull ?? CULL_MID, corridor });
+      }
+      if (spec.metalPerAnchor) {
+        // One single-instance mesh per anchor. The name keeps the `:metal`
+        // infix so every probe that greps for a pass by name still finds it.
+        anchors.forEach((a, i) => {
+          const g = spec.metalPerAnchor?.(a);
+          if (!g) return;
+          this.emit(`authored:${key}:metal:${i}`, g, this.metal, [a],
+            { cull: spec.cull ?? CULL_MID, corridor });
+        });
       }
       if (spec.sign) {
         this.emit(`authored:${key}:sign`, spec.sign, this.atlas, anchors,
@@ -5105,8 +5403,8 @@ export class Props implements ISubsystem {
         const cloth = this.builder();
         cloth.flap = 1;
         for (const [i, sx] of [-1, 1].entries()) {
-          cloth.banner(sx * (halfSpan - 4.4), H - 0.1, 0.4, 3.4, 4.4, 0, 0xf4f2ec, 4,
-            atlasRect(i === 0 ? 0 : 7), { double: true });
+          cloth.banner(sx * (halfSpan - 4.4), H - 0.1, 0.4, 3.4, 4.4, 0, 0xf4f2ec, 6,
+            atlasRect(i === 0 ? 0 : 7), { double: true, wave: 0.26 });
         }
         // A valance above them, in the truss colour, so the cloths read as hung
         // from the gantry rather than floating under it.
@@ -5431,8 +5729,12 @@ export class Props implements ISubsystem {
         // Subdivided cloth, not a 2-triangle quad — see `mastCloth`. Measured
         // (`.probe-tmp/flagcheck.ts`): this pennant had 4 vertices and 2 distinct
         // `aFlap` levels, so it could only swing rigidly.
-        cloth.mastCloth(0, 7.1, 0, 2.6, 1.6, rng.range(0, 6.28), 0xe8332a, 5, 2);
-        return { geo: b.build('flagPole'), cloth: cloth.build('flagPoleCloth'), cull: CULL_MID };
+        cloth.mastCloth(0, 7.1, 0, 2.6, 1.6, rng.range(0, 6.28), 0xe8332a, 6, 4,
+          undefined, { wave: 0.30, sag: 0.18 });
+        return {
+          geo: b.build('flagPole'), cloth: cloth.build('flagPoleCloth'),
+          clothMast: true, cull: CULL_MID,
+        };
       }
 
       case 'streetlamp': {
@@ -6108,7 +6410,10 @@ export class Props implements ISubsystem {
         // that changed is above the crotch, below the deck, or in the fan.
         const b = this.builder();
         b.uvScale = 0.5;
-        const LEG = 14.9, KNEE = 27, TOP = 86, PIER = -5.4;
+        // Read from the module-level table so the fan (`bridgeFan`, built per
+        // anchor) and the body cannot drift apart — the fan has to know exactly
+        // where this shaft is at every height it lands on.
+        const { leg: LEG, knee: KNEE, top: TOP, pier: PIER, mid: MID } = BRIDGE;
         const pale = 0xe0dbcd, stone = 0xd2ccbc;
         for (const sx of [-1, 1]) {
           // ---- the pier the leg actually stands on --------------------------
@@ -6139,81 +6444,49 @@ export class Props implements ISubsystem {
         // is 2.6x its own foot spread instead of 1.8x, which is the proportion
         // the real structure has. Built in two stages with a set-off between
         // them, so the taper has a joint in it rather than being one long cone.
-        const MID = KNEE + (TOP - KNEE) * 0.56;
-        b.box(0, KNEE + (MID - KNEE) * 0.5, 0, 2.5, (MID - KNEE) * 0.5, 2.2, 0xe8e3d6,
-          { taper: 0.74, shade: { top: 1.14 } });
+        // `bridgeShaftHalf()` is the same two stages read as a function of
+        // height — keep them in step.
+        b.box(0, KNEE + (MID - KNEE) * 0.5, 0, BRIDGE.shaftLo, (MID - KNEE) * 0.5, 2.2, 0xe8e3d6,
+          { taper: BRIDGE.taperLo, shade: { top: 1.14 } });
         b.box(0, MID + 0.32, 0, 2.05, 0.32, 1.8, stone, { shade: { top: 1.2 } });
-        b.box(0, MID + 0.64 + (TOP - MID) * 0.5, 0, 1.78, (TOP - MID) * 0.5, 1.56, 0xe8e3d6,
-          { taper: 0.72, shade: { top: 1.14 } });
+        b.box(0, MID + 0.64 + (TOP - MID) * 0.5, 0, BRIDGE.shaftHi, (TOP - MID) * 0.5, 1.56,
+          0xe8e3d6, { taper: BRIDGE.taperHi, shade: { top: 1.14 } });
         b.box(0, TOP + 1.0, 0, 1.4, 0.36, 1.25, stone, { shade: { top: 1.2 } });
         b.box(0, TOP + 2.9, 0, 1.28, 1.55, 1.14, 0xe8e3d6, { taper: 0.08, shade: { top: 1.2 } });
         // Deck crossbeam under the crotch: what the legs are actually holding.
-        b.box(0, KNEE - 1.6, 0, LEG * 0.62, 0.8, 1.6, 0xcfc9ba, { shade: { top: 1.1 } });
-        const met = this.builder();
-        met.uvScale = 0.8;
-        // ---- THE CABLES CROSSED THE RACING LINE AT 1.94 m. -------------------
-        // The deck-end anchors were authored at `sx * 12.6` (just outside the
-        // 12.55 m barrier) and `sz * (9 + f * 40)`, i.e. up to 49 m ALONG the road.
-        // A prop's geometry is straight and the bridge is not: over a 49 m run the
-        // chord departs from the curving deck edge by metres, and measured
-        // (`.probe-tmp/overhead.ts`) the far cable's deck anchor on bostonHarbor
-        // ended up at lat -1.65 m — essentially over the CENTRELINE — 1.94 m above
-        // the road. A kart is 1.4 m tall. The previous owner of this file logged
-        // this as "7.91 m across at a rise of 2.0 m"; that came off an AABB corner
-        // and it was optimistic by 10 m of lateral offset.
+        // Its TOP is at the crotch, not 0.8 m under it. It used to span
+        // KNEE-2.4..KNEE-0.8, which left the obelisk's 5 m wide base starting on
+        // 0.8 m of air with only the two 2.5 m wide leg tops anywhere near it —
+        // measured at 0.801 m by `.probe-tmp/staygap.ts` once that probe could
+        // see individual components at all.
+        b.box(0, KNEE - 0.8, 0, LEG * 0.62, 0.8, 1.6, 0xcfc9ba, { shade: { top: 1.1 } });
+        // ---- THE FAN IS BUILT PER ANCHOR. See `metalPerAnchor`. --------------
+        // It used to be one shared geometry with the deck ends authored at a
+        // literal `sx * 12.6, y 2.9` and one 0.5 x 0.75 x 0.55 anchor casting per
+        // stay. Every one of those numbers is a constant, and the thing they are
+        // supposed to meet is not: the deck at Boston's two towers is banked 5.2
+        // and 7.8 degrees, falls 0.3-0.9 m over the fan's own length, and curves
+        // away from the straight chord by up to 1.66 m at 27 m of reach.
         //
-        // Two changes, both aimed at the straight-chord-vs-curve error rather than
-        // at the symptom: the fan reaches 27 m instead of 49 m (the chord's
-        // departure goes as the square of the run, so that is a ~3.3x reduction),
-        // and the deck end lands at 2.9 m on the barrier line rather than 0.75 m on
-        // the deck, so residual drift cannot put a cable at kart height. Re-measured
-        // after the change and reported.
+        // Measured against the DRAWN track mesh (`.probe-tmp/staygap.ts`, which
+        // decomposes the prop into welded components rather than trusting its
+        // AABB the way `floating.ts` has to): all 96 castings hung in the air,
+        // p50 1.32 m, p90 4.06 m, max 5.01 m, and 6 sat over the tarmac at
+        // negative verge. That is the owner's *"suspension cables still appear to
+        // be floating"*, and it is not a tuning problem — the two towers need
+        // different numbers, so no shared geometry can be right at both.
         //
-        // ---- AND THEY WERE 1.2 PIXELS WIDE. ---------------------------------
-        // 0.09 m of radius seen from 120 m subtends 0.086 deg, which on a 1080p
-        // frame at the real 79.75 deg chase FOV is 1.2 px — thinner than the
-        // line the anti-aliaser can hold, so the fan dissolved into grey haze at
-        // exactly the distance you look at a bridge from. 0.17 m gives 2.3 px
-        // and 12 stays per quadrant instead of 8 makes it a fan rather than a
-        // few wires. The 27 m along-road reach is UNCHANGED, because that number
-        // is the chord-vs-curve limit derived above and has nothing to do with
-        // how the fan looks.
-        const STAYS = 12;
-        for (const sx of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            for (let i = 0; i < STAYS; i++) {
-              const f = (i + 1) / STAYS;
-              met.tube(sx * 1.5, KNEE + (TOP - 8 - KNEE) * f, 0,
-                sx * 12.6, 2.9, sz * (7 + f * 20), 0.17, 4, 0xc4ced6, 1.0);
-            }
-          }
-        }
-        // One anchor casting per stay where it lands on the barrier line. A stay
-        // that ends in mid-air is what makes a cable-stayed bridge look drawn
-        // rather than built.
-        //
-        // DISCRETE, not a continuous anchor beam, and that is the same
-        // chord-vs-curve argument as the fan reach: a single 23 m beam at a
-        // fixed |x| = 12.6 departs from the curving deck edge by about a metre
-        // over its length, which would put it inside the 12.55 m barrier and
-        // over the tarmac. A 0.55 m casting cannot drift more than its own size.
-        for (const sx of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            for (let i = 0; i < STAYS; i++) {
-              const f = (i + 1) / STAYS;
-              met.box(sx * 12.6, 3.0, sz * (7 + f * 20), 0.5, 0.75, 0.55, 0x9aa4ad,
-                { shade: { top: 1.12 } });
-            }
-          }
-        }
-        // No deck-edge rail here on purpose: `TF.Bridge` already cuts the
-        // shoulder back to a kerb and a barrier at 12.55 m, and two towers 75 m
-        // apart would each lay a 100 m rail down the SAME edge — coincident
-        // surfaces that shimmer. The cables land on the barrier that exists.
+        // `bridgeFan` therefore resolves each stay's deck end against the
+        // carriageway cross-section at that stay's own arc length, and stands a
+        // real anchor pier on the shoulder under it. The tower ends are derived
+        // from the shaft's own taper at the stay's height instead of a literal
+        // 1.5, so the top stay is embedded rather than 0.05 m proud of it.
         const glow = this.builder();
         glow.sphere(0, TOP + 5.2, 0, 0.5, 8, 5, 0xff3b2e);
+        // Soffit lights, hung off the underside of the crossbeam — which moved up
+        // 0.8 m with it, so these move too or they hang in space under it.
         for (let i = -2; i <= 2; i++) {
-          glow.box(i * 5.6, KNEE - 2.5, 0, 0.5, 0.14, 0.5, 0xfff0c8);
+          glow.box(i * 5.6, KNEE - 1.7, 0, 0.5, 0.14, 0.5, 0xfff0c8);
         }
         // Obstruction lights up the obelisk. Boston is a daylight circuit so
         // this is not doing the work `broadcastSpire`'s scheme does — it is the
@@ -6223,7 +6496,8 @@ export class Props implements ISubsystem {
           glow.sphere(0, KNEE + (TOP - KNEE) * f, 1.3, 0.34, 6, 4, 0xff5a3a);
         }
         return {
-          geo: b.build('bridgeArch'), metal: met.build('bridgeArchCables'),
+          geo: b.build('bridgeArch'),
+          metalPerAnchor: (a) => this.bridgeFan(a),
           glow: glow.build('bridgeArchGlow'), softGlow: true, cull: CULL_FAR,
         };
       }
@@ -7524,6 +7798,160 @@ export class Props implements ISubsystem {
     }
   }
 
+  // =========================================================================
+  //  THE CARRIAGEWAY, AS A SURFACE A PROP CAN LAND ON
+  // =========================================================================
+
+  /**
+   * Height of the DRAWN road surface at lateral offset `u`, relative to the
+   * banked centreline plane. Always <= 0.
+   *
+   * ⚠️ This is the same profile `TrackBuilder.surfaceHeight` draws and
+   * `WorldTextures.roadSurfaceOffset` bakes the terrain against — a THIRD copy of
+   * one shape, which is a real cost, so it is written entirely out of the
+   * exported `CROSS` table rather than out of restated numbers. If the crown, the
+   * kerb width or the shoulder drop moves, this moves with it; only the SHAPE is
+   * duplicated. (The kerb is deliberately not followed up: it is a raised strip a
+   * prop should sit beside, not on.)
+   */
+  private roadCross(u: number, hw: number, sh: number): number {
+    const a = Math.abs(u);
+    if (a <= hw) {
+      const t = hw > 1e-3 ? a / hw : 0;
+      return -CROSS.crown * t * t;
+    }
+    const s = clamp01(sh > 1e-3 ? (a - hw - CROSS.kerbW) / sh : 1);
+    return -CROSS.crown - CROSS.shoulderDrop * (s * s * (3 - 2 * s));
+  }
+
+  /**
+   * Resolve the carriageway cross-section at arc length `s`, in world space.
+   *
+   * `PathStation` publishes an XZ-flattened frame plus `tanBank`, so the banked
+   * binormal is rebuilt here as `normalize(bx, tanBank, bz)` — which is a UNIT
+   * vector, so a lateral offset measured along it carries the same `sin(bank)`
+   * of rise that `Track.roadSurfacePoint` gets from the spline's own 3D
+   * binormal. Verified against it on `bostonHarbor`: the two agree to 0.02 m at
+   * lat +-12.55 on the bridge's 5.2 deg superelevation.
+   *
+   * The tangent carries the GRADE (`dy/ds` between the bracketing stations), so
+   * the normal is the real surface normal and not a level approximation. That
+   * matters here: the deck falls 0.9 m over the stay fan's own length.
+   */
+  private deckFrameAt(s: number, out: DeckFrame): DeckFrame {
+    const st = this.ctx.stations;
+    const n = st.length;
+    if (n < 2) {
+      out.p.set(0, 0, 0); out.b.set(1, 0, 0); out.n.set(0, 1, 0);
+      out.hw = 11; out.shL = 1.2; out.shR = 1.2; out.ok = false;
+      return out;
+    }
+    const L = this.ctx.lapLength || (st[n - 1].s + 1);
+    let t = s % L;
+    if (t < 0) t += L;
+    let i = 0;
+    while (i + 1 < n && st[i + 1].s <= t) i++;
+    const a = st[i];
+    const b = st[(i + 1) % n];
+    const span = (b.s > a.s ? b.s - a.s : L - a.s) || 1;
+    const f = clamp01((t - a.s) / span);
+    const lerp = (u: number, v: number): number => u + (v - u) * f;
+    out.p.set(lerp(a.px, b.px), lerp(a.py, b.py), lerp(a.pz, b.pz));
+    out.hw = lerp(a.halfWidth, b.halfWidth);
+    out.shL = lerp(a.shoulderL ?? SH_FALLBACK, b.shoulderL ?? SH_FALLBACK);
+    out.shR = lerp(a.shoulderR ?? SH_FALLBACK, b.shoulderR ?? SH_FALLBACK);
+    const bank = lerp(a.tanBank, b.tanBank);
+    out.b.set(lerp(a.bx, b.bx), bank, lerp(a.bz, b.bz)).normalize();
+    // Tangent with grade. `span` is arc length, so (dy/span) is the real slope.
+    _v2.set(lerp(a.tx, b.tx), (b.py - a.py) / span, lerp(a.tz, b.tz)).normalize();
+    out.n.crossVectors(out.b, _v2).normalize();
+    if (out.n.y < 0) out.n.negate();
+    out.ok = true;
+    return out;
+  }
+
+  /** Arc length of the station nearest `(x, z)`. */
+  private arcNearest(x: number, z: number): number {
+    const st = this.ctx.stations;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < st.length; i++) {
+      const dx = st[i].px - x, dz = st[i].pz - z;
+      const d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    return st.length ? st[bi].s : 0;
+  }
+
+  /**
+   * The stay fan and its deck anchorages for ONE bridge tower.
+   *
+   * Built in the tower's own local frame (yaw about Y at the anchor, exactly what
+   * `emit` composes), but every deck-end point is resolved in WORLD space against
+   * the carriageway at that stay's own arc length and then brought back. That is
+   * the whole point: bank, grade, curvature and a `halfWidth` that changes by
+   * 0.76 m between Boston's two towers all land in the geometry instead of being
+   * approximated by a constant.
+   *
+   * 12 stays per quadrant, 4 quadrants: 48 tubes at 8 triangles and 48 anchor
+   * piers at 12, i.e. 960 triangles — the same count the shared version cost,
+   * now on one instance each instead of two.
+   */
+  private bridgeFan(a: Anchor): THREE.BufferGeometry {
+    const met = this.builder();
+    met.uvScale = 0.8;
+    const { knee, top, stays, near, far, radius, anchorH, inset } = BRIDGE;
+    const arc0 = this.arcNearest(a.x, a.z);
+    // Yaw-only instance basis, matching `emit`'s default `place`.
+    const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
+    const sc = a.scale || 1;
+    /** World point -> the tower's local frame. */
+    const toLocal = (w: THREE.Vector3, o: THREE.Vector3): THREE.Vector3 => {
+      const dx = w.x - a.x, dy = w.y - a.y, dz = w.z - a.z;
+      return o.set((dx * ca - dz * sa) / sc, dy / sc, (dx * sa + dz * ca) / sc);
+    };
+    // Which lateral sign is the tower's local +X? A lat-0 prop is yawed off the
+    // TANGENT, and whether that lands local +X on the driver's right or left
+    // depends on the spline's handedness — measured, not assumed.
+    this.deckFrameAt(arc0, _deck);
+    const localX = _v.set(ca, 0, sa);
+    const latSign = _deck.b.dot(localX) >= 0 ? 1 : -1;
+
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (let i = 0; i < stays; i++) {
+          const f = (i + 1) / stays;
+          const along = near + (far - near) * f;
+          // ---- deck end: the real cross-section at this stay's own arc -------
+          const frame = this.deckFrameAt(arc0 + sz * along, _deck);
+          const side = sx * latSign;
+          const sh = side < 0 ? frame.shL : frame.shR;
+          const edge = frame.hw + CROSS.kerbW + sh;
+          const lat = side * (edge - inset);
+          const base = this.roadCross(lat, frame.hw, sh);
+          _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
+          const foot = toLocal(_v, _v2).clone();
+          // The pier's foot is sunk 0.1 m into the shoulder rather than resting
+          // exactly on it: the cross-section here is reconstructed from a 7 m
+          // resample, so a centimetre of disagreement must land as embedment,
+          // never as air. Air is the defect the owner reported.
+          const y0 = foot.y - 0.10;
+          const y1 = foot.y + anchorH;
+          // ---- tower end: derived from the shaft's own taper ----------------
+          const ty = knee + (top - 8 - knee) * f;
+          const tx = sx * Math.max(bridgeShaftHalf(ty) - 0.30, 0.45);
+          met.tube(tx, ty, 0, foot.x, y1 - 0.20, foot.z, radius, 4, 0xc4ced6, 1.0);
+          // ---- the anchorage itself -----------------------------------------
+          // A tapered pier standing ON the shoulder, not a casting hanging in
+          // the air at a fixed height above the anchor plane. This is the part
+          // that reads as "built" rather than "drawn".
+          met.box(foot.x, (y0 + y1) * 0.5, foot.z, 0.34, (y1 - y0) * 0.5, 0.40,
+            0x9aa4ad, { taper: 0.62, shade: { top: 1.12 } });
+        }
+      }
+    }
+    return met.build('bridgeArchCables');
+  }
+
   /**
    * A plaza flag mast carrying one cell of the flag atlas.
    *
@@ -7568,8 +7996,13 @@ export class Props implements ISubsystem {
     // sheet reads correctly from the road, which is the side that matters and the
     // side that was always correct; the -Z sheet is 36 triangles on one instance
     // per circuit and means a flyover or a cinematic angle cannot catch it out.
+    // `wave` and `sag` give the panel a shape it is not animated into: see
+    // `mastCloth`. Without them the flag is a plane every time the travelling
+    // wave crosses zero, which is twice a second and is what the eye latches on
+    // to. 7 rows instead of 3 so the diagonal crease has something to bend over —
+    // 84 triangles a sheet, on 17 instances of one draw call.
     cloth.mastCloth(0.11, 0.56 + mastH - 1.4 + chh * 0.5, 0, cw, chh, 0, 0xffffff,
-      6, 3, atlasRect(cell), { double: true });
+      6, 7, atlasRect(cell), { double: true, wave: 0.36, sag: 0.22 });
     return {
       geo: b.build(`flagMast${cell}`), flag: cloth.build(`flagCloth${cell}`),
       cull: CULL_MID,
