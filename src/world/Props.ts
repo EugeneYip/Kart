@@ -6691,52 +6691,159 @@ export class Props implements ISubsystem {
       }
 
       case 'pagodatower': {
-        // ---- TAIPEI: the tiered supertall ----------------------------------
-        // Eight identical modules, each WIDER AT THE TOP and capped by an
-        // overhanging cornice, on a tapering podium, under a stepped cap and a
-        // spire. 184 m. The silhouette alone is the landmark, so the module
-        // count and the flare are the only numbers that matter.
-        // ACROSS-ROAD half-extent 16.5 m (podium). Authored once, far out.
+        // ---- TAIPEI 101 -----------------------------------------------------
+        // Owner, twice: *"Taipei 101 is still not aesthetically pleasing and
+        // appears rather simplistic."* The rebuild is documented against the real
+        // building in the T101 helper block at the foot of this file; the numbers
+        // here are the profile, and every one of them is a fraction of the real
+        // tower's 508 m rescaled to the 187 m this placement was measured for.
+        //
+        //   real                        share   here
+        //   base + podium (L1-25)       21.7%   30.0 m
+        //   eight modules (L26-90)      53.0%   108.0 m  (8 x 13.5)
+        //   crown + setbacks (L91-101)  13.5%   26.0 m
+        //   pinnacle mast               11.8%   23.0 m
+        //                                       ------
+        //                                       187.0 m
+        //
+        // HEIGHT IS HELD AT 187 m ON PURPOSE. `.probe-tmp/landmark.ts` measured
+        // this placement at whole% 22.8 / vis% 24.3 with the tower filling 55% of
+        // frame height; a taller tower pushes its own top out of a 79.75 deg
+        // vertical FOV and takes whole% back toward the 0.0 the old placement
+        // scored. The note in `CityDefs.ts` above this prop's placement is the
+        // full history. Grow the DETAIL, never the envelope.
+        //
+        // ACROSS-ROAD half-extent 24.1 m — the podium's chamfered corner, at
+        // 19.4 x 1.241. It stands 320 m from the racing line, so this buys
+        // nothing but a bigger bounding sphere; it is recorded because every
+        // other recipe in this file records one.
         const b = this.builder();
-        b.uvScale = 0.16;
-        const glass = 0x6f9b90, trim = 0xa3bcb2, dark = 0x46655e;
-        b.box(0, 2.2, 0, 16.5, 2.2, 16.5, 0x59696a, { shade: { top: 1.06 } });
-        b.box(0, 7.9, 0, 15, 3.5, 15, 0x60716e, { taper: 0.79, shade: { top: 1.09 } });
-        b.box(0, 15.4, 0, 11.8, 4.0, 11.8, glass, { taper: 0.85, shade: { top: 1.1 } });
-        const MOD = 15.4, GAP = 1.1;
-        let y = 19.4, r = 10.0;
-        for (let i = 0; i < 8; i++) {
-          b.box(0, y + MOD * 0.5, 0, r, MOD * 0.5, r, i % 2 ? glass : dark,
-            { taper: 1.16, shade: { side: 1.0, top: 1.0 } });
-          b.box(0, y + MOD + 0.55, 0, r * 1.2, 0.55, r * 1.2, trim, { shade: { top: 1.2 } });
-          for (const sx of [-1, 1]) {
-            for (const sz of [-1, 1]) {
-              b.box(sx * r * 1.0, y + MOD * 0.5, sz * r * 1.0, 0.32, MOD * 0.5, 0.32, trim,
-                { taper: 1.16 });
-            }
-          }
-          y += MOD + GAP;
-          r *= 0.996;
-        }
-        b.box(0, y + 4.2, 0, r * 0.92, 4.2, r * 0.92, dark, { taper: 0.48, shade: { top: 1.14 } });
-        b.prism(0, y + 8.4, 0, 1.6, 12, 8, trim, { taper: 0.32 });
-        b.prism(0, y + 20.4, 0, 0.42, 14, 6, 0xd8e2e0, { taper: 0.22 });
+        b.uvScale = 1 / this.facadeTileOf('curtain');
+        const met = this.builder();
+        met.uvScale = 0.4;
         const glow = this.builder();
-        // A square light band at every setback — a torus would be a circle round
-        // a square tower. Four bars per tier.
-        for (let i = 0; i <= 8; i++) {
-          const gy = 19.4 + i * (MOD + GAP);
-          const gr = 10.0 * 1.21;
-          for (let s = 0; s < 4; s++) {
-            const ca = s % 2 === 0 ? 1 : 0, sa = s % 2 === 0 ? 0 : 1;
-            const sg = s < 2 ? 1 : -1;
-            glow.box(ca * sg * gr, gy - 0.2, sa * sg * gr,
-              ca ? 0.12 : gr, 0.16, sa ? 0.12 : gr, 0x7fe4ff);
+        const win = this.builder();
+        win.uvScale = 0.5;
+
+        // Blue-green double-glazed curtain wall. Authored COOL on purpose: this
+        // circuit runs at sunset under a warm key and a warm env, and the road
+        // palette note in `CityDefs.ts` records the same rule for the kerbs —
+        // warmth in the albedo compounds into gold. `facadeTexel`'s vision glass
+        // multiplies this by (0.84, 0.94, 1.16), which pushes it further toward
+        // cyan before the sun ever touches it.
+        const GLASS = 0x71968c;
+        const TRIM = 0x9fbcb0;      // anodised aluminium fascia
+        const SOFFIT = 0x2f4a46;    // the eave underside — real AO, not a guess
+        const STONE = 0x5d6a68;     // podium granite
+        const GOLD = 0xffc23a;      // ruyi medallions and the coin motif
+        const STEEL = 0xc4d0d2;     // the pinnacle
+
+        // ---- podium and base ------------------------------------------------
+        let v = 0;
+        const band = (
+          y0: number, y1: number, r0: number, r1: number, hex: number,
+          o: T101SkinOpts = {},
+        ): void => {
+          t101Skin(b, y0, y1, r0, r1, hex, { ...o, v0: o.v0 ?? v });
+          v += Math.hypot(y1 - y0, r1 - r0) * b.uvScale;
+        };
+        band(0.0, 2.4, 19.4, 18.8, STONE, { shade: 0.88 });     // battered plinth
+        band(2.4, 9.6, 18.8, 18.2, STONE, { shade: 1.0 });      // the mall, six storeys
+        band(9.6, 10.4, 18.9, 18.9, TRIM, { shade: 1.14 });     // podium cornice slab
+        band(10.4, 15.6, 18.2, 14.4, STONE, { shade: 1.08 });   // THE SLOPED SKIRT
+        band(15.6, 28.0, 14.4, 11.9, GLASS, { shade: 0.96 });   // base, battered in
+        band(28.0, 28.35, 12.5, 11.9, SOFFIT, { shade: 0.6 });
+        band(28.35, 28.9, 12.5, 12.58, TRIM, { shade: 1.16 });
+        band(28.9, 30.0, 12.58, 10.6, TRIM, { shade: 1.12 });
+        // The giant ancient-coin motif, one per cardinal face of the mall. A
+        // circle with a square hole is the single most legible "this is Taipei"
+        // mark available at 320 m that is not the silhouette itself.
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          t101Disc(met, dx * 18.52, dz * 18.52, 6.0, 3.4, 1.0, 0.6, 16, true, GOLD, 0.86);
+        }
+
+        // ---- the eight modules ----------------------------------------------
+        // Each is a truncated inverted pyramid flaring 8.3 deg outward as it
+        // rises, closed by a projecting drip lip over a dark soffit and a soffit
+        // raked back 54 deg to the start of the next one. Four golden ruyi
+        // medallions on the fascia, one per chamfered corner.
+        const MOD = 13.5, MODS = 8, Y0 = 30.0;
+        const R_LO = 10.6, R_HI = 12.2, R_LIP = 12.78, R_FAS = 12.86;
+        let cell = 1;
+        for (let i = 0; i < MODS; i++) {
+          const y = Y0 + i * MOD;
+          // Wall in three shade bands: a lifted middle with the contact shadow of
+          // the cornice above baked into the top band. `quad` shades per face, so
+          // this is the only way to get a vertical gradient without a second map.
+          const AO: readonly number[] = [0.93, 1.04, 0.90];
+          for (let s = 0; s < 3; s++) {
+            const a = y + (11.0 / 3) * s, c = y + (11.0 / 3) * (s + 1);
+            band(a, c, R_LO + (R_HI - R_LO) * (s / 3), R_LO + (R_HI - R_LO) * ((s + 1) / 3),
+              GLASS, { shade: AO[s] });
+          }
+          band(y + 11.00, y + 11.35, R_LIP, R_HI, SOFFIT, { shade: 0.58 });
+          band(y + 11.35, y + 11.90, R_LIP, R_FAS, TRIM, { shade: 1.18 });
+          band(y + 11.90, y + 13.50, R_FAS, R_LO, TRIM, { shade: 1.10 });
+          t101Medallions(met, y + 11.62, R_FAS, 1.85, GOLD);
+          // Cove lighting tucked under the drip lip — the real building's nightly
+          // wash, and at `night` 0.1 it is the tenth of a glow golden hour wants.
+          t101Skin(glow, y + 10.55, y + 10.95, R_HI, R_HI, 0x8fe6f2, { grow: 0.07 });
+          // Interior lights. `cell` drives the per-pane hash in `prop-windows`, so
+          // marching it forward is what stops three identical lit bands stacking.
+          for (let k = 0; k < 3; k++) {
+            const wy = y + 1.7 + k * 3.1;
+            const rr = (h: number): number => R_LO + (R_HI - R_LO) * (h / 11.0);
+            cell = t101Skin(win, wy, wy + 0.85, rr(wy - y), rr(wy - y + 0.85), 0xffd9a8,
+              { grow: 0.06, splits: 2, cell0: cell });
           }
         }
-        glow.sphere(0, y + 34.8, 0, 0.95, 8, 5, 0xffe9a8);
+
+        // ---- crown, stepped setbacks, mast base ------------------------------
+        const YC = Y0 + MODS * MOD;                              // 138.0
+        band(YC, YC + 8.4, 9.4, 10.55, GLASS, { shade: 1.02 });
+        band(YC + 8.4, YC + 8.72, 11.05, 10.55, SOFFIT, { shade: 0.58 });
+        band(YC + 8.72, YC + 9.24, 11.05, 11.12, TRIM, { shade: 1.18 });
+        band(YC + 9.24, YC + 10.7, 11.12, 8.9, TRIM, { shade: 1.10 });
+        t101Medallions(met, YC + 8.98, 11.12, 1.85, GOLD);
+        band(YC + 10.7, YC + 16.2, 8.9, 6.6, GLASS, { shade: 0.98 });
+        band(YC + 16.2, YC + 20.4, 6.6, 4.4, GLASS, { shade: 1.05 });
+        band(YC + 20.4, YC + 23.6, 4.4, 2.9, TRIM, { shade: 1.08 });
+        band(YC + 23.6, YC + 26.0, 2.9, 1.7, STONE, { shade: 1.0, capTop: true });
+        cell = t101Skin(win, YC + 2.2, YC + 3.1, 9.7, 9.82, 0xffe0b4,
+          { grow: 0.06, splits: 3, cell0: cell });
+        t101Skin(win, YC + 5.0, YC + 5.9, 10.08, 10.2, 0xffe0b4,
+          { grow: 0.06, splits: 3, cell0: cell });
+        // The observatory band reads as one continuous lit ring, not panes.
+        t101Skin(glow, YC + 7.5, YC + 8.15, 10.46, 10.46, 0xffd7a4, { grow: 0.07 });
+
+        // ---- the pinnacle ----------------------------------------------------
+        // 23 m of mast in three stages with collars, on the metal pass so the low
+        // sun actually catches it. A single cone read as a party hat.
+        const YM = YC + 26.0;                                    // 164.0
+        met.prism(0, YM, 0, 1.6, 11.5, 8, STEEL, { taper: 0.52, capTop: false });
+        met.prism(0, YM + 11.5, 0, 0.83, 7.5, 6, STEEL, { taper: 0.40, capTop: false });
+        met.prism(0, YM + 19.0, 0, 0.33, 4.0, 5, 0xe2ecee, { taper: 0.25 });
+        for (const cy of [YM + 3.4, YM + 7.6, YM + 13.2]) {
+          const rr = cy < YM + 11.5
+            ? 1.6 * (1 + (0.52 - 1) * (cy - YM) / 11.5)
+            : 0.83 * (1 + (0.40 - 1) * (cy - YM - 11.5) / 7.5);
+          met.prism(0, cy, 0, rr * 1.28, 0.45, 6, 0x94a3a6, { capTop: false });
+        }
+        // Podium entrance wash and the two aviation beacons.
+        t101Skin(glow, 3.0, 4.1, 18.72, 18.63, 0xffd2a0, { grow: 0.06, splits: 3 });
+        glow.sphere(0, YM + 11.5, 0, 0.55, 6, 4, 0xff7a5a);
+        glow.sphere(0, YM + 23.4, 0, 0.8, 8, 5, 0xff8f66);
+
         return {
-          geo: b.build('pagodaTower'), glow: glow.build('pagodaGlow'),
+          geo: b.build('pagodaTower'),
+          // THE CURTAIN WALL IS MATERIAL, NOT COLOUR. `uvScale` above is
+          // 1 / 7.2 m, so the 3-bay tile lands 8 structural bays across a 21.2 m
+          // module face — which is what the real tower has — and the 2-floor tile
+          // gives a 3.6 m storey. Section 0: no solid-colour standard material.
+          mat: this.facadeMat('curtain'),
+          metal: met.build('pagodaGild'),
+          glow: glow.build('pagodaGlow'),
+          windows: win.build('pagodaWindows'),
           softGlow: true, cull: CULL_FAR,
         };
       }
@@ -8339,5 +8446,240 @@ function normaliseType(type: string): string | null {
     case 'obsidianspire': case 'obsidian': case 'glassspire': return 'obsidianspire';
     case 'warningpost': case 'hazardpost': case 'warningmarker': return 'warningpost';
     default: return null;
+  }
+}
+
+// ===========================================================================
+//  TAIPEI 101 — GEOMETRY HELPERS
+// ===========================================================================
+/**
+ * ---------------------------------------------------------------------------
+ *  WHY THIS TOWER GETS ITS OWN HELPERS INSTEAD OF A STACK OF `box()` CALLS
+ * ---------------------------------------------------------------------------
+ *  The previous `pagodatower` was eight `box()` calls with `taper: 1.16` on the
+ *  default `matte` material. Three separate defects, all of them the owner's
+ *  word "simplistic":
+ *
+ *   1. `matte` carries the shared detail normal and NOTHING else — no albedo,
+ *      no roughness map. A 187 m tower of solid `#6f9b90` with a faint bump is
+ *      exactly the "no default MeshStandardMaterial with a solid colour" that
+ *      section 0 forbids. The curtain-wall grid has to be MATERIAL, and
+ *      `facadeMat('curtain')` already draws one: 3 structural bays and 2 floors
+ *      per 7.2 m tile, raised anodised mullions, an opaque spandrel band over
+ *      each floor slab, and per-pane tint jitter on the vision glass.
+ *   2. A `box()` is a square in plan with four hard 90 deg arrises. Taipei 101's
+ *      floor plate is a square with CUT CORNERS, and section 3 lists "geometry
+ *      with visible hard-edged low-poly silhouettes where MK8 would have a
+ *      smooth chamfer" as an instant fail. `t101Skin` builds the real chamfered
+ *      plan for 16 triangles against a box's 12.
+ *   3. The modules alternated `glass` / `dark`, which is a stripe, not a
+ *      building. Every module of the real tower is the same blue-green glass;
+ *      what separates them is the CORNICE — a projecting drip lip and a steeply
+ *      raked soffit — and the four golden ruyi medallions bolted to it. Those
+ *      two details are the entire reason the silhouette says "Taipei" and not
+ *      "generic stepped pagoda", and neither existed.
+ *
+ *  Everything below is authored against ONE plan (`T101_PLAN`) so the podium,
+ *  the eight modules, the crown, the light bands and the window pass cannot
+ *  drift out of register with each other.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Corner cut as a fraction of the half-extent. 0.245 x 10.6 m = a 2.6 m chamfer. */
+const T101_CHAMFER = 0.245;
+
+/**
+ * Unit plan of the chamfered square, **in increasing-angle order**, at
+ * half-extent 1. The order is load-bearing: `t101Skin` walks consecutive pairs
+ * and relies on the same winding convention `Builder.prism` uses, so a face
+ * emitted from `P[i+1]` toward `P[i]` comes out with its normal pointing OUT.
+ * See the winding note in `Builder.box` for what happens when that is wrong —
+ * every surface of this tower would be back-face culled and you would be
+ * looking at its far inside wall. `.probe-tmp/t101.ts` asserts the signed
+ * volume of the body is positive for exactly this reason.
+ */
+const T101_PLAN: ReadonlyArray<readonly [number, number]> = (() => {
+  const k = 1 - T101_CHAMFER;
+  const p: Array<readonly [number, number]> = [
+    [1, k], [k, 1], [-k, 1], [-1, k], [-1, -k], [-k, -1], [k, -1], [1, -k],
+  ];
+  return p;
+})();
+
+interface T101SkinOpts {
+  /**
+   * v of the BOTTOM edge in uv tiles; accumulate it up the tower so the floor
+   * lines run continuously through a module instead of restarting per band.
+   */
+  v0?: number;
+  /** Extra shade multiplier — this is how the under-cornice AO band is made. */
+  shade?: number;
+  /** Radial offset added to both radii. Stands a glow ribbon proud of the glass. */
+  grow?: number;
+  /** Split every plan face into this many quads, each with its own `cell`. */
+  splits?: number;
+  /** First `cell` value; the helper walks it forward one per quad. */
+  cell0?: number;
+  /** Flat lid over the top ring, as four quads (8 triangles). */
+  capTop?: boolean;
+}
+
+/**
+ * One band of chamfered-square skin between two heights, tapering linearly.
+ * Eight quads (sixteen triangles) plus an optional lid.
+ *
+ * Returns the next free `cell` index so a caller can keep the window hash
+ * marching forward across bands without repeating a pane pattern.
+ */
+function t101Skin(
+  b: Builder,
+  y0: number, y1: number, r0: number, r1: number,
+  hex: number, opts: T101SkinOpts = {},
+): number {
+  const P = T101_PLAN;
+  const n = P.length;
+  const R0 = r0 + (opts.grow ?? 0);
+  const R1 = r1 + (opts.grow ?? 0);
+  const sh = opts.shade ?? 1;
+  const splits = Math.max(1, Math.round(opts.splits ?? 1));
+  const uvS = b.uvScale;
+  const v0 = opts.v0 ?? 0;
+  // v tracks the SLANT height, not the rise: on a cornice raked at 54 deg the
+  // difference is 1.7x and the spandrel courses would visibly compress.
+  const v1 = v0 + Math.hypot(y1 - y0, R1 - R0) * uvS;
+  let cell = opts.cell0 ?? 0;
+  let u = 0;
+
+  for (let i = 0; i < n; i++) {
+    const pA = P[i];
+    const pB = P[(i + 1) % n];
+    // Outward normal of this face, from its own midpoint — the facet shade that
+    // keeps eight faces from reading as one smooth cylinder.
+    let mx = (pA[0] + pB[0]) * 0.5, mz = (pA[1] + pB[1]) * 0.5;
+    const ml = Math.hypot(mx, mz) || 1;
+    mx /= ml; mz /= ml;
+    const facet = 0.90 + 0.15 * (0.5 + 0.5 * (mx * 0.62 + mz * 0.78));
+    const fw = Math.hypot(pB[0] - pA[0], pB[1] - pA[1]) * ((R0 + R1) * 0.5);
+    const dx = pA[0] - pB[0], dz = pA[1] - pB[1];
+
+    for (let s = 0; s < splits; s++) {
+      const t0 = s / splits, t1 = (s + 1) / splits;
+      // a = bottom at t0, b = bottom at t1, c = top at t1, d = top at t0, with
+      // t running from pB toward pA. That order is what makes the face normal
+      // point outward AND puts u across the wall and v up it — `Builder.box`'s
+      // own quad order does the opposite (u vertical), which is why this helper
+      // passes an explicit uvRect rather than letting `quad` derive one.
+      const q0x = pB[0] + dx * t0, q0z = pB[1] + dz * t0;
+      const q1x = pB[0] + dx * t1, q1z = pB[1] + dz * t1;
+      b.cell = cell++;
+      b.quad(
+        q0x * R0, y0, q0z * R0,
+        q1x * R0, y0, q1z * R0,
+        q1x * R1, y1, q1z * R1,
+        q0x * R1, y1, q0z * R1,
+        hex, sh * facet,
+        [u + fw * t0 * uvS, v0, u + fw * t1 * uvS, v1],
+      );
+    }
+    u += fw * uvS;
+  }
+  b.cell = 0;
+
+  if (opts.capTop) {
+    // Four quads, each the centre plus three consecutive boundary points, in
+    // DECREASING angle so the lid faces up (see `Builder.prism`'s cap, which
+    // reverses its fan for the same reason).
+    for (let i = 0; i < n; i += 2) {
+      const q0 = P[i], q1 = P[(i + 1) % n], q2 = P[(i + 2) % n];
+      b.quad(
+        0, y1, 0,
+        q2[0] * R1, y1, q2[1] * R1,
+        q1[0] * R1, y1, q1[1] * R1,
+        q0[0] * R1, y1, q0[1] * R1,
+        hex, sh * 1.12,
+      );
+    }
+  }
+  return cell;
+}
+
+/**
+ * A disc standing proud of a vertical face: an annulus with a round or SQUARE
+ * hole, plus the cylindrical rim that joins it back to the wall.
+ *
+ * Two things on the tower are this shape and nothing else in the file is:
+ *  * the giant **ancient-coin motif** on the podium — a circle with a square
+ *    hole, the Chinese cash coin, and the reason the podium is not a plinth;
+ *  * the golden **ruyi medallion** at every module junction, four to a cornice,
+ *    which is the ornament that makes the silhouette specifically Taipei 101.
+ *
+ * `mx, mz` is the face midpoint already scaled into world XZ; the outward
+ * direction is taken from it, so a caller can hang one on a cardinal face or on
+ * a chamfered corner without knowing which it has.
+ */
+function t101Disc(
+  b: Builder,
+  mx: number, mz: number, cy: number,
+  R: number, inner: number, depth: number,
+  segs: number, squareHole: boolean,
+  hex: number, shade = 1,
+): void {
+  const l = Math.hypot(mx, mz) || 1;
+  const ox = mx / l, oz = mz / l;          // outward
+  const rx = oz, rz = -ox;                 // in-plane "right"
+  // p(u, d) — u across the face, d out of it; the third axis is world +Y.
+  const px = (u: number, d: number): number => mx + rx * u + ox * d;
+  const pz = (u: number, d: number): number => mz + rz * u + oz * d;
+
+  for (let i = 0; i < segs; i++) {
+    const a0 = (i / segs) * Math.PI * 2;
+    const a1 = ((i + 1) / segs) * Math.PI * 2;
+    const c0 = Math.cos(a0), s0 = Math.sin(a0);
+    const c1 = Math.cos(a1), s1 = Math.sin(a1);
+    // A square hole is the same polar sweep with the radius pushed out onto the
+    // square: 1 / max(|cos|, |sin|). No extra vertices, no special case.
+    const k0 = squareHole ? 1 / Math.max(Math.abs(c0), Math.abs(s0)) : 1;
+    const k1 = squareHole ? 1 / Math.max(Math.abs(c1), Math.abs(s1)) : 1;
+    const iu0 = inner * k0 * c0, iv0 = inner * k0 * s0;
+    const iu1 = inner * k1 * c1, iv1 = inner * k1 * s1;
+    const ou0 = R * c0, ov0 = R * s0;
+    const ou1 = R * c1, ov1 = R * s1;
+    // Face: inner -> outer -> outer' -> inner', at full depth.
+    b.quad(
+      px(iu0, depth), cy + iv0, pz(iu0, depth),
+      px(ou0, depth), cy + ov0, pz(ou0, depth),
+      px(ou1, depth), cy + ov1, pz(ou1, depth),
+      px(iu1, depth), cy + iv1, pz(iu1, depth),
+      hex, shade * 1.06,
+    );
+    // Rim, wall plane out to the face. Catches the low sun as a bright edge.
+    b.quad(
+      px(ou0, 0), cy + ov0, pz(ou0, 0),
+      px(ou1, 0), cy + ov1, pz(ou1, 0),
+      px(ou1, depth), cy + ov1, pz(ou1, depth),
+      px(ou0, depth), cy + ov0, pz(ou0, depth),
+      hex, shade * 0.84,
+    );
+  }
+}
+
+/**
+ * The four ruyi medallions of one module junction, one on each chamfered
+ * corner. Pulled out because ten junctions call it and the corner geometry is
+ * easy to get backwards: a chamfer midpoint sits `(1 + k) / 2 * sqrt(2)` =
+ * 1.241 half-extents from the axis, FURTHER out than a flat face, not nearer.
+ */
+function t101Medallions(
+  b: Builder, cy: number, r: number, R: number, hex: number,
+): void {
+  const P = T101_PLAN;
+  for (let i = 0; i < P.length; i++) {
+    const pA = P[i], pB = P[(i + 1) % P.length];
+    // Corner faces only: their two endpoints differ in BOTH axes.
+    if (Math.abs(pA[0] - pB[0]) < 1e-6 || Math.abs(pA[1] - pB[1]) < 1e-6) continue;
+    t101Disc(
+      b, (pA[0] + pB[0]) * 0.5 * r, (pA[1] + pB[1]) * 0.5 * r, cy,
+      R, R * 0.34, R * 0.30, 6, false, hex, 1,
+    );
   }
 }
