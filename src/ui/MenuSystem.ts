@@ -63,6 +63,15 @@ const QUALITY_ORDER: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra']
 /** MK8's points table, trimmed to the grid size in play. */
 const POINTS = [15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 
+/** One row of the stat panel. `ghost` is the racer-only value behind `fill`. */
+interface StatRow {
+  row: HTMLDivElement;
+  ghost: HTMLElement;
+  fill: HTMLElement;
+  value: HTMLElement;
+  delta: HTMLElement;
+}
+
 type ScreenId = 'title' | 'main' | 'chars' | 'karts' | 'tracks' | 'cc' | 'options' | 'controls' | 'pause';
 
 interface FocusItem {
@@ -135,8 +144,8 @@ export class MenuSystem implements ISubsystem {
   private watchId = 0;
   private padPrev = { x: 0, y: 0, a: false, b: false, start: false };
   private padRepeat = 0;
-  private statBars: Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }> = [];
-  private kartStatBars: Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }> = [];
+  private statBars: StatRow[] = [];
+  private kartStatBars: StatRow[] = [];
   private optionRefresh: Array<() => void> = [];
   private charName!: HTMLElement;
   private charTagline!: HTMLElement;
@@ -291,7 +300,9 @@ export class MenuSystem implements ISubsystem {
         + 'canvas-2D bust rather than a 3-D render.');
     }
     for (const k of KART_BODIES) {
-      try { this.kartArt.push(kartThumb(k.colorA, k.colorB, 240, 180).toDataURL('image/png')); }
+      // `k.id` is the real `KartBodyId`, so the thumbnail is the shape of the
+      // chassis you are actually picking rather than a recoloured generic.
+      try { this.kartArt.push(kartThumb(k.id, k.colorA, k.colorB, 260, 195).toDataURL('image/png')); }
       catch { this.kartArt.push(''); }
     }
     // Preview loops are the circuits' own centrelines (`TrackDef.outline`), so a
@@ -434,33 +445,59 @@ export class MenuSystem implements ISubsystem {
     s.onBack = () => this.show('main');
   }
 
-  private buildStatRows(panel: HTMLElement): Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }> {
-    const out: Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }> = [];
+  private buildStatRows(panel: HTMLElement): StatRow[] {
+    const out: StatRow[] = [];
     for (const k of STAT_KEYS) {
       const row = el('div', 'ak-stat', panel);
       el('div', 'ak-stat__k', row, STAT_LABEL[k]);
       const bar = el('div', 'ak-stat__bar', row);
+      // Order matters: the ghost is the racer's own value and must sit UNDER the
+      // combined fill, so the chassis' contribution is the part that sticks out.
+      const ghost = el('i', 'ak-stat__ghost', bar);
       const fill = el('i', undefined, bar);
       const value = el('div', 'ak-stat__v', row, '0.0');
-      out.push({ row, fill, value });
+      const delta = el('div', 'ak-stat__d', row, '');
+      out.push({ row, ghost, fill, value, delta });
     }
     return out;
   }
 
-  private paintStats(
-    bars: Array<{ row: HTMLDivElement; fill: HTMLElement; value: HTMLElement }>,
-    stats: StatBlock, deltas?: Partial<StatBlock>,
-  ): void {
+  /**
+   * THE HEADER PROMISES A DELTA, SO THE PANEL HAS TO SHOW ONE.
+   *
+   * The kart screen is captioned "DELTAS SHOWN AGAINST YOUR RACER" and showed
+   * six absolute numbers. Picking Heavy Cruiser moved 2.5/3.0/1.0 to 3.0/2.5/2.0
+   * and nothing on screen said which way, by how much, or against what — the
+   * player had to remember the previous screen's numbers to read the current
+   * one. Three things are drawn now, all from the same `base` / `d` pair:
+   *
+   *   - a ghost bar at the RACER's value, so the chassis' contribution is
+   *     visible as the difference between two lengths rather than inferred;
+   *   - the combined value, as before;
+   *   - the signed delta itself, `+0.5` / `-0.75`, which is the thing the
+   *     header was advertising.
+   *
+   * `deltas` is undefined on the racer screen, so every `d` is 0, and the ghost
+   * and the chip both stay hidden there. One code path, two screens.
+   */
+  private paintStats(bars: StatRow[], stats: StatBlock, deltas?: Partial<StatBlock>): void {
     for (let i = 0; i < STAT_KEYS.length; i++) {
       const k = STAT_KEYS[i];
-      const base = stats[k];
+      const base = clamp(stats[k], 0, 5);
       const d = deltas?.[k] ?? 0;
       const v = clamp(base + d, 0, 5);
       const bar = bars[i];
       bar.fill.style.transform = `scaleX(${(v / 5).toFixed(3)})`;
+      // The ghost marks where the racer alone sits. Clamping `v` means the
+      // EFFECTIVE delta can be smaller than the authored one (a 5.0 racer gains
+      // nothing from a +0.25 chassis), so report what actually changed.
+      const shown = v - base;
+      bar.ghost.style.transform = `scaleX(${(base / 5).toFixed(3)})`;
+      setClass(bar.ghost, 'ak-stat__ghost--on', shown !== 0);
       setText(bar.value, formatStat(v));
-      setClass(bar.row, 'ak-stat--delta-up', d > 0);
-      setClass(bar.row, 'ak-stat--delta-down', d < 0);
+      setText(bar.delta, shown === 0 ? '' : `${shown > 0 ? '+' : '−'}${Math.abs(shown).toFixed(2).replace(/0$/, '')}`);
+      setClass(bar.row, 'ak-stat--delta-up', shown > 0);
+      setClass(bar.row, 'ak-stat--delta-down', shown < 0);
     }
   }
 
@@ -535,7 +572,11 @@ export class MenuSystem implements ISubsystem {
       for (let d = 0; d < 3; d++) {
         el('div', `ak-card__pip${d < t.difficulty ? ' ak-card__pip--on' : ''}`, meta);
       }
-      el('div', 'ak-card__name', card, `${t.name.toUpperCase()}  ·  ${t.lengthKm.toFixed(1)} KM`);
+      // Course name only. It used to read `NAME  ·  1.6 KM`, which wrapped to
+      // three lines on a card this wide and left "KM" alone on the last one.
+      // The length now lives in the caption under the grid, where it has a full
+      // line to itself.
+      el('div', 'ak-card__name', card, t.name.toUpperCase());
       const idx = s.items.length;
       s.items.push({ el: card, onSelect: () => { this.trackIndex = i; this.show('cc'); } });
       card.addEventListener('click', () => { this.setFocus(idx); this.activate(); });
@@ -555,12 +596,13 @@ export class MenuSystem implements ISubsystem {
   private paintTrackName(): void {
     const t = TRACKS[this.trackIndex];
     const diff = ['EASY', 'MEDIUM', 'HARD'][clamp(t.difficulty - 1, 0, 2)];
-    // Lap count and length are deliberately NOT shown: the owner asked for them
-    // out, and they were the same three-lap figure on every circuit anyway. The
-    // catalogue still carries `laps`/`lengthKm` — `buildRace` reads `t.laps` to
-    // configure the race — so this is a presentation change only.
+    // Lap COUNT stays off: the owner asked for it out and it was the same three
+    // on every circuit. Length is back, but here rather than on the card — it
+    // does differ per circuit, and on the card it was what wrapped the name to
+    // three lines. ` ` binds the unit to its number so "KM" can never be
+    // widowed again.
     setText(this.trackName, `${t.name.toUpperCase()}  —  ${diff}`);
-    setText(this.trackSub, t.subtitle);
+    setText(this.trackSub, `${t.subtitle}  ·  ${t.lengthKm.toFixed(1)} KM`);
   }
 
   // --- CC ----------------------------------------------------------------
@@ -787,14 +829,24 @@ export class MenuSystem implements ISubsystem {
     next.root.classList.add('ak-screen--on');
 
     const blur = id === 'pause';
+    const showcase = id === 'title' || id === 'main';
     setClass(this.scrim, 'ak-scrim--on', true);
     setClass(this.scrim, 'ak-scrim--blur', blur);
+    // THE TITLE SCREEN'S ONLY ATMOSPHERE IS THE 3-D BACKDROP, SO STOP BURYING IT.
+    // Two layers were stacked over it: this scrim (0.55 alpha at the centre
+    // rising to 0.86 at the edges) and `.ak-title-bg` at 0.45 over an OPAQUE
+    // gradient. Multiplied out, the cinematic camera's render came through at
+    // ~25 % in the middle of the frame and ~8 % at the corners — measured, and
+    // the critic independently put it at 45 % to 14 % from the scrim alone.
+    // On the two screens that have a backdrop worth showing, the scrim drops to
+    // a soft bottom-weighted vignette and the flat gradient nearly vanishes.
+    setClass(this.scrim, 'ak-scrim--showcase', showcase);
     setClass(this.root, 'ak-menus--active', true);
     // A lap counter and a speedometer behind the logo reads as a bug. The HUD
     // gates itself on this plus the race phase.
     tryCall(this.game.hud, 'setMenuActive', true);
-    this.titleBg.style.display = id === 'title' || id === 'main' ? 'block' : 'none';
-    this.titleBg.style.opacity = this.hasCinematicCamera() ? '0.45' : '1';
+    this.titleBg.style.display = showcase ? 'block' : 'none';
+    this.titleBg.style.opacity = this.hasCinematicCamera() ? '0.18' : '1';
     if (id === 'title' || id === 'main') this.requestCinematicCamera();
 
     // Force a reflow-free stagger restart.

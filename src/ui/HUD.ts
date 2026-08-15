@@ -48,8 +48,13 @@ const MAX_PLATES = 12;
 const MAX_VISIBLE_PLATES = 5;
 /** Centreline samples used to build the minimap ribbon. */
 const MINIMAP_SAMPLES = 220;
-/** Keep in step with `.ak-map`'s width in ui.css. */
-const MINIMAP_DESIGN_PX = 178;
+/**
+ * Keep in step with `.ak-map`'s width in ui.css — this sizes the canvas backing
+ * store, that sizes the element, and if they disagree the ribbon is rasterised
+ * at one scale and displayed at another. `.probe-tmp/hudscale.ts` asserts the
+ * two numbers are equal by reading both files.
+ */
+const MINIMAP_DESIGN_PX = 216;
 
 type ThreatKind = 'red' | 'blue' | 'none';
 

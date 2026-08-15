@@ -300,29 +300,43 @@
    Lap counter
    ========================================================================= */
 
+/* THE HUD READS AS TELEMETRY WHEN ITS TYPE IS TELEMETRY-SIZED.
+   Measured at 800x450 before this pass: TIME/LAP/BEST 1.02 % of viewport height
+   (4.58 px), the lap-time value 1.48 %, the lap numeral 4.44 %. MK8DX's lap
+   counter is 4-5 % of height and its supporting labels are nowhere near 1 %.
+   Every size in this section (and in the timer, rival, drift, minimap, speed
+   and nameplate blocks below) was raised together, because they have to stay in
+   proportion to each other — this is one scale, not fourteen decisions.
+
+   The boxes were raised with them. `.probe-tmp/hudscale.ts` computes the ink
+   width of each widget's worst-case string from THIS file's own `font-size` and
+   `letter-spacing`, computes the box from THIS file's own `width` /
+   `min-width` / `padding` / `gap`, and asserts one against the other — so a size
+   bumped here without its box goes red. It also checks the corner stacks do not
+   grow into each other. Run it before touching any number below. */
 .ak-lap {
   display: flex;
   align-items: baseline;
   gap: calc(8 * var(--u));
-  padding: calc(7 * var(--u)) calc(18 * var(--u)) calc(9 * var(--u)) calc(16 * var(--u));
+  padding: calc(8 * var(--u)) calc(20 * var(--u)) calc(10 * var(--u)) calc(18 * var(--u));
   transform-origin: left center;
 }
 .ak-lap__label {
-  font-size: max(var(--u-min), calc(21 * var(--u)));
+  font-size: max(var(--u-min), calc(26 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.14em;
   color: #a9c8ef;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.8);
 }
-.ak-lap__cur { font-size: calc(48 * var(--u)); }
+.ak-lap__cur { font-size: calc(56 * var(--u)); }
 .ak-lap__sep {
-  font-size: calc(28 * var(--u));
+  font-size: calc(34 * var(--u));
   font-weight: 900;
   color: rgba(190, 214, 246, 0.6);
   margin: 0 calc(-2 * var(--u));
 }
 .ak-lap__tot {
-  font-size: calc(28 * var(--u));
+  font-size: calc(34 * var(--u));
   font-weight: 900;
   color: #cfe2ff;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.8);
@@ -339,12 +353,16 @@
    Timer stack
    ========================================================================= */
 
+/* `min-width` is the floor, not the size: the plate is content-sized and grows
+   past it whenever the strings need more. The number is chosen so the plate does
+   not visibly resize as `0'00"000` becomes `1'02"345`, and the probe checks it
+   still covers the widest row (`BEST` + `--'--"---`) at every viewport. */
 .ak-timer {
-  padding: calc(7 * var(--u)) calc(12 * var(--u)) calc(8 * var(--u));
-  min-width: calc(168 * var(--u));
+  padding: calc(8 * var(--u)) calc(15 * var(--u)) calc(9 * var(--u));
+  min-width: calc(300 * var(--u));
   display: flex;
   flex-direction: column;
-  gap: calc(2 * var(--u));
+  gap: calc(3 * var(--u));
   border-radius: calc(14 * var(--u));
   border-width: calc(2.5 * var(--u));
 }
@@ -352,27 +370,27 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: calc(12 * var(--u));
+  gap: calc(14 * var(--u));
 }
 .ak-timer__k {
-  font-size: max(var(--u-min), calc(11 * var(--u)));
+  font-size: max(var(--u-min), calc(24 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.2em;
   color: rgba(168, 198, 236, 0.75);
 }
 .ak-timer__v {
-  font-size: max(var(--u-min), calc(24 * var(--u)));
+  font-size: max(var(--u-min), calc(40 * var(--u)));
   font-weight: 850;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   color: #f2f8ff;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.7);
 }
-.ak-timer__row--sub .ak-timer__v { font-size: max(var(--u-min), calc(16 * var(--u))); color: #b9d3f4; }
+.ak-timer__row--sub .ak-timer__v { font-size: max(var(--u-min), calc(30 * var(--u))); color: #b9d3f4; }
 .ak-timer__delta {
   align-self: flex-end;
   margin-top: calc(3 * var(--u));
-  font-size: max(var(--u-min), calc(16 * var(--u)));
+  font-size: max(var(--u-min), calc(24 * var(--u)));
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   padding: calc(1 * var(--u)) calc(8 * var(--u));
@@ -435,19 +453,38 @@
    Item slot
    ========================================================================= */
 
-/* A solid roundel. It was a dashed rectangle when empty, captioned "ITEM · E" —
-   a keybind legend parked on the most important element of the HUD. */
+/* A ROUNDED SQUARE, AND NOTHING AT ALL WHEN EMPTY.
+   Third pass on this element. It was a roundel, and a roundel at the top centre
+   of the screen with sky behind it is a sphere however you shade it: the owner
+   called it "objects or balloons that appear unnaturally suspended in the air",
+   the lit-sphere gradient, white top rim, drop shadow and glass blur were all
+   stripped in response, and the visual critic STILL read the remaining thin grey
+   ring as a floating sphere — "on volcanoRush it looks like a moon".
+
+   The circle was the problem, not its shading, so the silhouette changes: MK8DX's
+   item slot is a rounded square and a rounded square is never a moon. And when
+   the player holds nothing there is nothing to show, so `.ak-item--empty` paints
+   zero pixels rather than a softer ghost of the same disc — an empty slot is a
+   frame around no information. It fades back in with the roulette, which is the
+   moment it starts meaning something.
+
+   The box keeps its size in both states so the top-centre column never reflows. */
 .ak-item {
   position: relative;
   width: calc(118 * var(--u));
   height: calc(118 * var(--u));
   display: grid;
   place-items: center;
+  transition: opacity 200ms var(--ak-spring), transform 320ms var(--ak-back);
+}
+.ak-item--empty {
+  opacity: 0;
+  transform: scale(0.82);
 }
 .ak-item__frame {
   position: absolute;
   inset: 0;
-  border-radius: 50%;
+  border-radius: calc(28 * var(--u));
   border: calc(4 * var(--u)) solid var(--ak-rim);
   background:
     radial-gradient(ellipse at 50% 14%, rgba(96, 150, 226, 0.4) 0%, rgba(10, 16, 34, 0.86) 62%),
@@ -459,14 +496,10 @@
   transition: border-color 180ms ease;
 }
 /*
- * EMPTY must read as an empty FRAME, not as an object.
- *
- * This used to be styled "a real, solid slot — just unlit", which gave it a 50 %
- * border radius, a top-weighted radial highlight, an inset white top rim, a drop
- * shadow and a 0.90–0.94 alpha navy fill. Sitting over the sky at the top centre
- * of the screen, that is not a UI slot: it is a shaded sphere with a cast shadow.
- * The owner reported it as "objects or balloons that appear unnaturally suspended
- * in the air", on every circuit.
+ * Kept flat as well as hidden, belt and braces: if anything ever un-hides the
+ * empty state (a transition mid-flight, a future `--empty` variant that wants a
+ * hint), what shows must still not have a lit top, a cast shadow or glass depth,
+ * because those are the cues that made it read as a suspended object.
  *
  * Diagnosed by elimination against the live build: with the sky dome, sun shafts,
  * every VFX system, the weather, all props, the terrain, the karts, the
@@ -475,10 +508,6 @@
  * screen. It was never in the scene. `document.elementFromPoint` had earlier
  * pointed at the canvas, which is misleading: the HUD is `pointer-events: none`,
  * so that API looks straight through it.
- *
- * The slot still has to be findable when empty, so the ring stays. What goes is
- * every cue that implies volume — the lit-sphere gradient, the white top rim, the
- * drop shadow and the glass blur.
  */
 .ak-item--empty .ak-item__frame {
   border-color: rgba(216, 232, 255, 0.34);
@@ -519,7 +548,9 @@
 .ak-item__ring {
   position: absolute;
   inset: 0;
-  border-radius: 50%;
+  /* Tracks `.ak-item__frame`'s radius — a circular shockwave around a square
+     slot reads as two unrelated objects. */
+  border-radius: calc(28 * var(--u));
   border: calc(4 * var(--u)) solid rgba(255, 255, 255, 0.95);
   opacity: 0;
   pointer-events: none;
@@ -535,16 +566,19 @@
   100% { filter: none; }
 }
 
+/* The slot is a rounded square again, so the badge goes back on the corner.
+   `min-width` has to hold TWO digits: `applyItem` writes `Math.max(3, count)`
+   for a triple, and the count is not capped at 9. At 23u/38u it did not — the
+   probe measured "10" at 28.5px in an 18.0px box at 1080p, which is the badge's
+   own border and padding pushed off both ends. */
 .ak-item__count {
   position: absolute;
-  /* On a roundel the corner is inside the circle, so pull the badge onto the
-     45-degree tangent instead of the (now nonexistent) bottom-right corner. */
-  right: calc(-2 * var(--u));
-  bottom: calc(2 * var(--u));
-  min-width: calc(38 * var(--u));
+  right: calc(-6 * var(--u));
+  bottom: calc(-4 * var(--u));
+  min-width: calc(62 * var(--u));
   padding: calc(1 * var(--u)) calc(7 * var(--u)) calc(3 * var(--u));
   text-align: center;
-  font-size: max(var(--u-min), calc(23 * var(--u)));
+  font-size: max(var(--u-min), calc(30 * var(--u)));
   font-weight: 900;
   color: #08101f;
   background: linear-gradient(180deg, #ffffff, #ffd447 70%, #f0a713);
@@ -561,10 +595,14 @@
    Minimap
    ========================================================================= */
 
+/* KEEP `MINIMAP_DESIGN_PX` IN `HUD.ts` EQUAL TO THIS WIDTH. The canvas backing
+   store is sized from that constant; if the two drift apart the ribbon is drawn
+   at one scale and displayed at another. 178u measured 74x74 px at 800x450,
+   which the visual critic called out as too small to read. */
 .ak-map {
   position: relative;
-  width: calc(178 * var(--u));
-  height: calc(178 * var(--u));
+  width: calc(216 * var(--u));
+  height: calc(216 * var(--u));
   border-radius: calc(20 * var(--u));
   overflow: hidden;
   border: calc(3 * var(--u)) solid var(--ak-rim);
@@ -578,7 +616,7 @@
   position: absolute;
   top: calc(6 * var(--u));
   left: calc(10 * var(--u));
-  font-size: max(var(--u-min), calc(10 * var(--u)));
+  font-size: max(var(--u-min), calc(15 * var(--u)));
   font-weight: 800;
   letter-spacing: 0.22em;
   color: rgba(160, 195, 240, 0.6);
@@ -597,29 +635,30 @@
   border-radius: calc(11 * var(--u));
   border-width: calc(2 * var(--u));
   /* Wide enough that a normal racer name never reaches the ellipsis; the cap is
-     a guard against a pathological name, not a routine truncation. */
-  min-width: calc(178 * var(--u));
-  max-width: calc(244 * var(--u));
+     a guard against a pathological name, not a routine truncation. The longest
+     real name is ZEPHYR, and the fallback `RACER 12` is longer still. */
+  min-width: calc(250 * var(--u));
+  max-width: calc(330 * var(--u));
   opacity: 0;
   transform: translateX(calc(20 * var(--u)));
   transition: opacity 220ms var(--ak-spring), transform 320ms var(--ak-spring);
 }
 .ak-rival--show { opacity: 1; transform: none; }
 .ak-rival__pos {
-  width: calc(26 * var(--u));
-  height: calc(26 * var(--u));
+  width: calc(32 * var(--u));
+  height: calc(32 * var(--u));
   display: grid;
   place-items: center;
   border-radius: calc(8 * var(--u));
-  font-size: max(var(--u-min), calc(14 * var(--u)));
+  font-size: max(var(--u-min), calc(19 * var(--u)));
   font-weight: 900;
   color: #08101f;
   background: linear-gradient(180deg, #e8f3ff, #92b6e2);
 }
-.ak-rival__swatch { width: calc(6 * var(--u)); height: calc(20 * var(--u)); border-radius: calc(3 * var(--u)); }
+.ak-rival__swatch { width: calc(7 * var(--u)); height: calc(26 * var(--u)); border-radius: calc(3 * var(--u)); }
 .ak-rival__name {
   flex: 1;
-  font-size: max(var(--u-min), calc(14 * var(--u)));
+  font-size: max(var(--u-min), calc(20 * var(--u)));
   font-weight: 850;
   letter-spacing: 0.06em;
   color: #dcebff;
@@ -627,7 +666,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ak-rival__gap { font-size: max(var(--u-min), calc(15 * var(--u))); font-weight: 900; font-variant-numeric: tabular-nums; }
+.ak-rival__gap { font-size: max(var(--u-min), calc(21 * var(--u))); font-weight: 900; font-variant-numeric: tabular-nums; }
 .ak-rival--ahead .ak-rival__gap { color: #ff9d9d; }
 .ak-rival--behind .ak-rival__gap { color: #8ff0b6; }
 
@@ -730,7 +769,7 @@
   gap: calc(6 * var(--u));
   padding: calc(5 * var(--u)) calc(13 * var(--u)) calc(6 * var(--u));
   border-radius: calc(12 * var(--u));
-  font-size: max(var(--u-min), calc(21 * var(--u)));
+  font-size: max(var(--u-min), calc(26 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -762,9 +801,17 @@
    actually reads (the number) plus a boost bar, at ~1/4 the footprint and with
    no per-frame canvas.
    ------------------------------------------------------------------------- */
+/* THE DECLARED WIDTH HAS TO HOLD THE READOUT, WHICH IT DID NOT.
+   `.ak-speed__num` reserves three digits (52u x 1.82 = 94.6u) and the KM/H unit
+   needs another ~41u plus the gap, so the row's min-content was 140u inside a
+   declared 118u column — it had been hanging 22u off the left edge of its own
+   box at every viewport, and the unit growing to 18u would have made that 38u.
+   Nothing clipped, so nothing looked wrong; the box was simply lying about its
+   size, and every layout decision made against it was made against a false
+   number. Sized to the content it actually carries. */
 .ak-speed {
   position: relative;
-  width: calc(118 * var(--u));
+  width: calc(176 * var(--u));
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -784,7 +831,7 @@
   text-align: right;
 }
 .ak-speed__unit {
-  font-size: max(var(--u-min), calc(13 * var(--u)));
+  font-size: max(var(--u-min), calc(18 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.16em;
   color: rgba(180, 212, 250, 0.85);
@@ -863,10 +910,10 @@
 }
 .ak-drift__label {
   position: absolute;
-  top: calc(-17 * var(--u));
+  top: calc(-22 * var(--u));
   left: 50%;
   transform: translateX(-50%);
-  font-size: max(var(--u-min), calc(11 * var(--u)));
+  font-size: max(var(--u-min), calc(15 * var(--u)));
   font-weight: 900;
   letter-spacing: 0.26em;
   color: rgba(190, 220, 255, 0.8);
@@ -1101,7 +1148,7 @@
   /* Fixed width, so every tag is the same size whatever the name length. Uniform
      tags read better AND make the footprint a single known number, which is what
      the de-collision pass in HUD.ts measures once per resize. */
-  width: calc(116 * var(--u));
+  width: calc(140 * var(--u));
   padding: calc(2 * var(--u)) calc(9 * var(--u)) calc(3 * var(--u)) calc(3 * var(--u));
   border-radius: calc(20 * var(--u));
   background: rgba(6, 11, 26, 0.72);
@@ -1112,12 +1159,12 @@
   visibility: hidden;
 }
 .ak-plate3d__pos {
-  width: calc(22 * var(--u));
-  height: calc(22 * var(--u));
+  width: calc(27 * var(--u));
+  height: calc(27 * var(--u));
   display: grid;
   place-items: center;
   border-radius: 50%;
-  font-size: max(var(--u-min), calc(12 * var(--u)));
+  font-size: max(var(--u-min), calc(16 * var(--u)));
   font-weight: 900;
   color: #060b16;
   background: linear-gradient(180deg, #ffffff, #9dc0e8);
@@ -1127,7 +1174,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: max(var(--u-min), calc(14 * var(--u)));
+  font-size: max(var(--u-min), calc(17 * var(--u)));
   font-weight: 850;
   letter-spacing: 0.07em;
   color: #e8f2ff;
@@ -1185,6 +1232,18 @@
   transition: opacity 380ms var(--ak-spring);
 }
 .ak-scrim--on { opacity: 1; }
+/* Title and main menu: the live 3-D backdrop is the whole atmosphere of the
+   screen, so the scrim stops being a full-frame wash and becomes a vignette that
+   only darkens where type actually sits — the bottom third (menu rows, PRESS
+   START, the hint bar) and a soft corner falloff. Measured through-transmission
+   at the centre of the frame goes from ~45 % to ~90 %. The logo carries its own
+   layered outline and a 26u ambient glow, so it does not need a scrim to read. */
+.ak-scrim--showcase {
+  background:
+    linear-gradient(180deg, rgba(2, 4, 12, 0.34) 0%, rgba(2, 4, 12, 0) 26%),
+    linear-gradient(0deg, rgba(2, 4, 12, 0.78) 0%, rgba(2, 4, 12, 0.28) 26%, rgba(2, 4, 12, 0) 46%),
+    radial-gradient(ellipse at 50% 46%, rgba(6, 10, 24, 0) 34%, rgba(2, 4, 12, 0.52) 100%);
+}
 .ak-scrim--blur { backdrop-filter: blur(calc(14 * var(--u))) saturate(0.85) brightness(0.7); -webkit-backdrop-filter: blur(calc(14 * var(--u))) saturate(0.85) brightness(0.7); }
 
 /* Menu screens get the same safe centring as the results board, for the same
@@ -1512,8 +1571,19 @@
   grid-template-columns: repeat(4, var(--ak-card-w));
 }
 
+/* THE CAPTION IS A BAND, NOT AN OVERLAY.
+   `.ak-card__name` used to be `position: absolute; bottom: 0` with a gradient
+   behind it, so on the kart grid the name sat across the vehicle and the tag
+   chip sat across the roof — the critic's "the name text and the category chip
+   are laid over the art and clip it top and bottom" — and on the track grid the
+   course name was set directly on the spline, which ran straight through the
+   words BOSTON and TAIPEI. The art now gets the whole of its own box and the
+   caption gets its own strip underneath. The tag chip stays on the art, in the
+   top-left corner, which every thumbnail deliberately leaves as backdrop. */
 .ak-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   border-radius: calc(20 * var(--u));
   overflow: hidden;
   cursor: pointer;
@@ -1537,18 +1607,24 @@
 .ak-card--track .ak-card__art { aspect-ratio: 16 / 10; }
 .ak-card--kart .ak-card__art { aspect-ratio: 4 / 3; }
 .ak-card__name {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: calc(16 * var(--u)) calc(10 * var(--u)) calc(7 * var(--u));
+  padding: calc(7 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u));
   font-size: max(var(--u-min), calc(18 * var(--u)));
   font-weight: 900;
-  letter-spacing: 0.1em;
+  /* 0.1em of tracking on a 9-character course name is most of a wrapped line.
+     The names are set tight here and the band is allowed to take two lines, but
+     never three — see the `balance` note below. */
+  letter-spacing: 0.05em;
+  line-height: 1.14;
   text-align: center;
   color: #fff;
   text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.85);
-  background: linear-gradient(180deg, rgba(4, 7, 16, 0), rgba(4, 7, 16, 0.9) 55%);
+  background: linear-gradient(180deg, rgba(10, 17, 38, 0.96), rgba(4, 7, 16, 0.98));
+  box-shadow: inset 0 calc(2 * var(--u)) 0 rgba(150, 190, 240, 0.18);
+  /* `balance` stops "SUNSET COASTLINE · 1.6 KM" leaving KM alone on a third
+     line — the widow the critic called out. The length has also been taken off
+     the card entirely (it is in the caption under the grid), so the string this
+     has to set is now just the course name. */
+  text-wrap: balance;
 }
 .ak-card__tag {
   position: absolute;
@@ -1615,7 +1691,10 @@
      wrapping when the floor takes over from `--u`. Without this the controls
      screen wrapped every second column and measured 100.4 % of an 800x450 frame.
      Still one input, still no media query, still nothing keyed off the window. */
-  width: min(max(calc(430 * var(--u)), calc(36 * var(--u-min))), 84vw);
+  /* Widened from 430u/36 when the stat rows gained a delta column: the bar is
+     what is left after the label, the value and the delta, and it has to stay
+     long enough to read a 0.25 change on. */
+  width: min(max(calc(486 * var(--u)), calc(40 * var(--u-min))), 88vw);
   padding: calc(16 * var(--u)) calc(20 * var(--u)) calc(18 * var(--u));
   border-radius: calc(18 * var(--u));
   background: linear-gradient(180deg, rgba(16, 26, 54, 0.8), rgba(6, 10, 24, 0.86));
@@ -1683,7 +1762,39 @@
   background: linear-gradient(90deg, #3ba7ff, #7ef0ff);
   box-shadow: 0 0 calc(12 * var(--u)) rgba(70, 190, 255, 0.55);
   will-change: transform;
+  transition: transform 260ms var(--ak-spring);
 }
+/* THE GHOST IS THE RACER'S OWN VALUE, UNDER THE COMBINED FILL.
+   The kart screen is captioned "DELTAS SHOWN AGAINST YOUR RACER" and had no
+   reference mark of any kind, so the delta was a number the player had to
+   remember from the previous screen. This is the "against": the fill running
+   past the ghost is the chassis adding, the ghost showing beyond the fill is the
+   chassis taking away. Hidden on the racer screen, where there is no delta and
+   the two lengths would be identical. */
+.ak-stat__bar > i.ak-stat__ghost {
+  background: none;
+  box-shadow: none;
+  border-radius: calc(7 * var(--u)) 0 0 calc(7 * var(--u));
+  background-image: repeating-linear-gradient(135deg,
+    rgba(226, 240, 255, 0.55) 0 calc(2 * var(--u)),
+    rgba(226, 240, 255, 0) calc(2 * var(--u)) calc(6 * var(--u)));
+  opacity: 0;
+}
+.ak-stat__ghost--on { opacity: 1; }
+/* The signed figure the header promises. Fixed width so six rows stay aligned
+   whether or not a given stat moved. */
+.ak-stat__d {
+  width: max(calc(46 * var(--u)), calc(3.4 * var(--u-min)));
+  text-align: right;
+  font-size: max(var(--u-min), calc(13 * var(--u)));
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: rgba(150, 180, 220, 0.5);
+  white-space: nowrap;
+}
+.ak-stat--delta-up .ak-stat__d { color: var(--ak-green); }
+.ak-stat--delta-down .ak-stat__d { color: var(--ak-red); }
 .ak-stat__bar::after {
   content: "";
   position: absolute;
@@ -1782,7 +1893,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: calc(12 * var(--u));
+  gap: calc(9 * var(--u));
   /* Safe centring: never above the top edge. See the note above. */
   margin: auto 0;
   padding: calc(10 * var(--u)) 0;
@@ -1798,7 +1909,7 @@
 }
 .ak-rrow {
   display: grid;
-  grid-template-columns: calc(66 * var(--u)) calc(46 * var(--u)) 1fr calc(150 * var(--u)) calc(140 * var(--u)) calc(66 * var(--u));
+  grid-template-columns: calc(66 * var(--u)) calc(58 * var(--u)) 1fr calc(150 * var(--u)) calc(140 * var(--u)) calc(66 * var(--u));
   align-items: center;
   gap: calc(10 * var(--u));
   padding: calc(4 * var(--u)) calc(16 * var(--u)) calc(5 * var(--u));
@@ -1858,7 +1969,7 @@
 .ak-rrow { position: relative; overflow: hidden; }
 .ak-rrow__pos { font-size: max(var(--u-min), calc(26 * var(--u))); }
 .ak-rrow__pos.ak-num { --ak-stroke-w: 0.07em; }
-.ak-rrow__art { width: calc(30 * var(--u)); height: calc(30 * var(--u)); border-radius: calc(8 * var(--u)); object-fit: cover; box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.4); }
+.ak-rrow__art { width: calc(34 * var(--u)); height: calc(34 * var(--u)); border-radius: calc(10 * var(--u)); object-fit: cover; box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.4); }
 .ak-rrow__name { font-size: max(var(--u-min), calc(20 * var(--u))); font-weight: 900; letter-spacing: 0.06em; color: #eef6ff; }
 .ak-rrow__time, .ak-rrow__best { font-size: max(var(--u-min), calc(19 * var(--u))); font-weight: 850; font-variant-numeric: tabular-nums; text-align: right; color: #d7e8ff; }
 .ak-rrow__best { color: #9fd2ff; font-size: max(var(--u-min), calc(16 * var(--u))); }
@@ -1868,10 +1979,17 @@
   display: flex;
   align-items: flex-end;
   gap: calc(10 * var(--u));
-  height: calc(104 * var(--u));
+  /* THE COLUMN HAS TO CONTAIN ITS OWN STACK AT EVERY VIEWPORT.
+     A podium column is art + position numeral + name + gaps + padding, and both
+     the numeral and the name carry the legibility floor — so at a short frame
+     they stop shrinking while a purely `--u` height keeps going, and the name
+     drops out of the bottom of the plinth. The floor term is what stops that;
+     `.probe-tmp/hudscale.ts` computes the stack and checks it fits, and also
+     that the whole 12-row Grand Prix board still fits the frame. */
+  height: max(calc(140 * var(--u)), calc(5.5 * var(--u-min)));
 }
 .ak-podium__col {
-  width: calc(112 * var(--u));
+  width: calc(140 * var(--u));
   border-radius: calc(14 * var(--u)) calc(14 * var(--u)) 0 0;
   background: linear-gradient(180deg, rgba(60, 88, 150, 0.9), rgba(14, 22, 46, 0.9));
   box-shadow: inset 0 0 0 calc(2.5 * var(--u)) rgba(200, 224, 255, 0.35);
@@ -1887,8 +2005,8 @@
 }
 .ak-podium__col--1 { background: linear-gradient(180deg, rgba(190, 148, 30, 0.95), rgba(70, 48, 6, 0.92)); box-shadow: inset 0 0 0 calc(3 * var(--u)) var(--ak-gold-b), 0 0 calc(34 * var(--u)) rgba(255, 180, 40, 0.4); }
 @keyframes ak-podium-rise { to { transform: scaleY(1); } }
-.ak-podium__art { width: calc(44 * var(--u)); height: calc(44 * var(--u)); border-radius: calc(10 * var(--u)); box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.5); }
-.ak-podium__name { font-size: max(var(--u-min), calc(13 * var(--u))); font-weight: 900; letter-spacing: 0.08em; }
+.ak-podium__art { width: calc(64 * var(--u)); height: calc(64 * var(--u)); border-radius: calc(14 * var(--u)); box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.5); }
+.ak-podium__name { font-size: max(var(--u-min), calc(17 * var(--u))); font-weight: 900; letter-spacing: 0.08em; }
 .ak-podium__pos { font-size: max(var(--u-min), calc(26 * var(--u))); }
 
 /* Grand Prix standings -------------------------------------------------- */

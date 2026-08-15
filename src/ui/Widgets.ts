@@ -46,8 +46,12 @@ import { LIVE_ITEMS } from '@/items/ItemRoulette';
 // used to hold a second, older copy of every item drawing (see `ItemIcons.paint`).
 import { ITEM_NAMES, TRIPLE_ITEMS, paintItemIcon } from '@/items/ItemModels';
 // Portrait data, derived there from `DRIVERS` — this module draws, it never
-// authors a palette or a hat shape of its own.
+// authors a palette or a hat shape of its own. The chassis silhouettes are there
+// for the same reason and one more: `Catalogue` is DOM-free, so a probe can
+// import the six shapes and measure that they are actually six shapes.
+import { KART_SILHOUETTES } from './Catalogue';
 import type { BustSpec } from './Catalogue';
+import type { KartBodyId } from '@/karts/KartBodies';
 
 // ===========================================================================
 // Host shapes
@@ -1537,100 +1541,176 @@ export function characterPortrait(
   return canvas;
 }
 
-/** Placeholder kart body thumbnail — 3/4 view silhouette. */
-export function kartThumb(colorA: string, colorB: string, w = 240, h = 180): HTMLCanvasElement {
+/**
+ * Chassis thumbnail for the kart-select grid.
+ *
+ * This used to be one shape for all six bodies — an oval with a dark cockpit
+ * ellipse in it — so the grid was six coloured doughnuts and the only thing
+ * telling Sport Bike from Heavy Cruiser was the caption. The shape now comes
+ * from `KART_SILHOUETTES[bodyId]` in `./Catalogue`: a hull polygon, a parts list
+ * and a wheel list, authored per real `KartBodyId`. This function owns the
+ * lighting, the tyres and the staging; it authors no shape of its own, which is
+ * what lets `.probe-tmp/kartshape.ts` measure the silhouettes directly.
+ */
+export function kartThumb(
+  bodyId: KartBodyId, colorA: string, colorB: string, w = 240, h = 180,
+): HTMLCanvasElement {
   const canvas = makeCanvas(w, h);
   const c = ctx2d(canvas);
   if (!c) return canvas;
 
+  const spec = KART_SILHOUETTES[bodyId];
+  const X = (u: number): number => u * w;
+  const Y = (v: number): number => v * h;
+  const trace = (poly: readonly (readonly [number, number])[]): void => {
+    c.beginPath();
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i];
+      if (i === 0) c.moveTo(X(p[0]), Y(p[1])); else c.lineTo(X(p[0]), Y(p[1]));
+    }
+    c.closePath();
+  };
+
+  // --- studio backdrop ----------------------------------------------------
   const bg = c.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, 'rgba(38,58,104,0.95)');
+  bg.addColorStop(0.62, 'rgba(17,26,54,0.97)');
   bg.addColorStop(1, 'rgba(8,12,28,0.98)');
   c.fillStyle = bg;
   c.fillRect(0, 0, w, h);
 
-  // Floor glow.
-  const fg = c.createRadialGradient(w * 0.5, h * 0.84, w * 0.02, w * 0.5, h * 0.84, w * 0.46);
-  fg.addColorStop(0, 'rgba(120,190,255,0.4)');
+  const gy = Y(spec.ground);
+  const fg = c.createRadialGradient(w * 0.5, gy, w * 0.02, w * 0.5, gy, w * 0.5);
+  fg.addColorStop(0, 'rgba(120,190,255,0.42)');
   fg.addColorStop(1, 'rgba(120,190,255,0)');
   c.fillStyle = fg;
-  c.fillRect(0, h * 0.5, w, h * 0.5);
+  c.fillRect(0, Y(0.42), w, h - Y(0.42));
 
-  const cx = w * 0.5;
-  const by = h * 0.66;
-  const bw = w * 0.34;
-
-  // Rear wheels.
-  c.fillStyle = '#12161f';
-  for (const s of [-1, 1]) {
-    c.beginPath();
-    c.ellipse(cx + s * bw * 0.92, by + h * 0.09, w * 0.075, w * 0.075, 0, 0, Math.PI * 2);
-    c.fill();
-    c.lineWidth = w * 0.014;
-    c.strokeStyle = '#05070d';
-    c.stroke();
-    c.beginPath();
-    c.arc(cx + s * bw * 0.92, by + h * 0.09, w * 0.032, 0, Math.PI * 2);
-    c.fillStyle = '#c9d6e8';
-    c.fill();
-    c.fillStyle = '#12161f';
-  }
-
-  // Body.
-  c.beginPath();
-  c.moveTo(cx - bw, by + h * 0.12);
-  c.quadraticCurveTo(cx - bw * 1.12, by - h * 0.08, cx - bw * 0.6, by - h * 0.14);
-  c.quadraticCurveTo(cx, by - h * 0.3, cx + bw * 0.6, by - h * 0.14);
-  c.quadraticCurveTo(cx + bw * 1.12, by - h * 0.08, cx + bw, by + h * 0.12);
-  c.quadraticCurveTo(cx, by + h * 0.24, cx - bw, by + h * 0.12);
-  c.closePath();
-  const g = c.createLinearGradient(cx, by - h * 0.3, cx, by + h * 0.2);
-  g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.22, colorA);
-  g.addColorStop(1, colorB);
-  c.fillStyle = g;
-  c.fill();
-  c.lineWidth = w * 0.016;
-  c.strokeStyle = '#060a14';
-  c.stroke();
-
-  // Cockpit.
-  c.beginPath();
-  c.ellipse(cx, by - h * 0.08, bw * 0.42, h * 0.07, 0, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(8,14,28,0.85)';
-  c.fill();
-  c.strokeStyle = '#0a1020';
-  c.lineWidth = w * 0.012;
-  c.stroke();
-
-  // Spoiler.
-  c.fillStyle = '#e9f2ff';
-  roundRect(c, cx - bw * 0.62, by - h * 0.3, bw * 1.24, h * 0.045, w * 0.012);
-  c.fill();
-  c.strokeStyle = '#060a14';
-  c.lineWidth = w * 0.012;
-  c.stroke();
-
-  // Front wheels (smaller, in front).
-  c.fillStyle = '#12161f';
-  for (const s of [-1, 1]) {
-    c.beginPath();
-    c.ellipse(cx + s * bw * 0.66, by + h * 0.17, w * 0.058, w * 0.058, 0, 0, Math.PI * 2);
-    c.fill();
-    c.lineWidth = w * 0.013;
-    c.strokeStyle = '#05070d';
-    c.stroke();
-  }
-
-  // Specular sweep.
+  // --- contact shadow -----------------------------------------------------
+  // Anti-grav floats, so its shadow is detached and soft; everything else has
+  // tyres on the floor and a tight one.
   c.save();
-  c.globalAlpha = 0.35;
+  const shadowY = spec.antigrav ? gy + h * 0.045 : gy;
+  const sh = c.createRadialGradient(w * 0.5, shadowY, 1, w * 0.5, shadowY, w * 0.42);
+  sh.addColorStop(0, spec.antigrav ? 'rgba(90,200,255,0.42)' : 'rgba(0,0,0,0.62)');
+  sh.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = sh;
   c.beginPath();
-  c.moveTo(cx - bw * 0.8, by - h * 0.14);
-  c.quadraticCurveTo(cx, by - h * 0.26, cx + bw * 0.8, by - h * 0.14);
-  c.lineWidth = h * 0.03;
-  c.strokeStyle = '#ffffff';
+  c.ellipse(w * 0.5, shadowY, w * 0.42, h * (spec.antigrav ? 0.055 : 0.035), 0, 0, Math.PI * 2);
+  c.fill();
+  c.restore();
+
+  // --- far-side wheels, dimmed so the near pair reads in front ------------
+  const paintWheel = (cx: number, cy: number, r: number, knobbly: boolean, far: boolean): void => {
+    c.save();
+    if (far) c.globalAlpha = 0.45;
+    if (knobbly) {
+      // Tread blocks around the rim — an off-road tyre must not be a smooth disc.
+      c.fillStyle = '#0d1119';
+      const blocks = 12;
+      for (let i = 0; i < blocks; i++) {
+        const a = (i / blocks) * Math.PI * 2;
+        c.beginPath();
+        c.ellipse(cx + Math.cos(a) * r * 0.94, cy + Math.sin(a) * r * 0.94, r * 0.26, r * 0.20, a, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    c.beginPath();
+    c.arc(cx, cy, r, 0, Math.PI * 2);
+    const tyre = c.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.05, cx, cy, r);
+    tyre.addColorStop(0, '#2b333f');
+    tyre.addColorStop(1, '#0b0e15');
+    c.fillStyle = tyre;
+    c.fill();
+    c.lineWidth = Math.max(1, w * 0.010);
+    c.strokeStyle = '#05070d';
+    c.stroke();
+    // Hub.
+    c.beginPath();
+    c.arc(cx, cy, r * 0.40, 0, Math.PI * 2);
+    const hub = c.createLinearGradient(cx, cy - r * 0.4, cx, cy + r * 0.4);
+    hub.addColorStop(0, '#e8f1ff');
+    hub.addColorStop(1, '#8ba2bd');
+    c.fillStyle = hub;
+    c.fill();
+    c.restore();
+  };
+
+  for (const wl of spec.wheels) {
+    if (wl.far) paintWheel(X(wl.cx), Y(wl.cy), X(wl.r), wl.knobbly, true);
+  }
+
+  // --- hull ---------------------------------------------------------------
+  trace(spec.hull);
+  const body = c.createLinearGradient(0, Y(0.18), 0, Y(0.80));
+  body.addColorStop(0, '#ffffff');
+  body.addColorStop(0.24, colorA);
+  body.addColorStop(1, colorB);
+  c.fillStyle = body;
+  c.fill();
+  c.lineWidth = Math.max(1.2, w * 0.013);
+  c.strokeStyle = '#060a14';
   c.stroke();
+
+  // --- parts --------------------------------------------------------------
+  for (const part of spec.parts) {
+    trace(part.poly);
+    switch (part.fill) {
+      case 'body': c.fillStyle = colorA; break;
+      case 'shade': c.fillStyle = colorB; break;
+      case 'dark': c.fillStyle = 'rgba(9,14,26,0.88)'; break;
+      case 'glass': {
+        const g = c.createLinearGradient(0, Y(0.22), 0, Y(0.55));
+        g.addColorStop(0, 'rgba(190,230,255,0.85)');
+        g.addColorStop(1, 'rgba(30,60,110,0.75)');
+        c.fillStyle = g;
+        break;
+      }
+      case 'chrome': {
+        const g = c.createLinearGradient(0, Y(0.18), 0, Y(0.62));
+        g.addColorStop(0, '#f4f9ff');
+        g.addColorStop(0.5, '#b9c9dd');
+        g.addColorStop(1, '#6d7f96');
+        c.fillStyle = g;
+        break;
+      }
+      case 'glow': c.fillStyle = 'rgba(120,225,255,0.95)'; break;
+    }
+    c.fill();
+    c.lineWidth = Math.max(1, w * 0.008);
+    c.strokeStyle = 'rgba(6,10,20,0.9)';
+    c.stroke();
+    if (part.fill === 'glow') {
+      c.save();
+      c.globalAlpha = 0.55;
+      c.shadowColor = '#7ae1ff';
+      c.shadowBlur = w * 0.06;
+      c.fill();
+      c.restore();
+    }
+  }
+
+  // --- near wheels --------------------------------------------------------
+  for (const wl of spec.wheels) {
+    if (!wl.far) paintWheel(X(wl.cx), Y(wl.cy), X(wl.r), wl.knobbly, false);
+  }
+
+  // --- specular sweep along the hull top ----------------------------------
+  c.save();
+  c.globalAlpha = 0.3;
+  c.beginPath();
+  let started = false;
+  for (const p of spec.hull) {
+    if (p[1] > 0.58) continue;
+    if (!started) { c.moveTo(X(p[0]), Y(p[1]) + h * 0.012); started = true; }
+    else c.lineTo(X(p[0]), Y(p[1]) + h * 0.012);
+  }
+  if (started) {
+    c.lineWidth = h * 0.022;
+    c.lineCap = 'round';
+    c.strokeStyle = '#ffffff';
+    c.stroke();
+  }
   c.restore();
 
   return canvas;
@@ -1666,12 +1746,25 @@ export function trackPreview(
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
     }
-    const pad = Math.min(w, h) * 0.16;
-    const sx = (w - pad * 2) / Math.max(1e-3, maxX - minX);
-    const sy = (h - pad * 2) / Math.max(1e-3, maxY - minY);
+    // THE LOOP IS FITTED TO A SAFE BOX, NOT TO THE WHOLE CARD.
+    // The course name used to be set over this art, and the spline ran straight
+    // through the words BOSTON and TAIPEI. The name has since moved to its own
+    // band under the card, but two things still sit on the art — the tag chip
+    // top-left and the difficulty pips top-right — so the top strip is reserved
+    // and the ribbon is centred in what is left. `pad` was a flat 16 % of the
+    // short side, which on a 16:10 card put the loop's top edge right under the
+    // chip.
+    const topReserve = h * 0.24;
+    const pad = Math.min(w, h) * 0.13;
+    const boxX = pad;
+    const boxY = topReserve;
+    const boxW = w - pad * 2;
+    const boxH = h - topReserve - pad;
+    const sx = boxW / Math.max(1e-3, maxX - minX);
+    const sy = boxH / Math.max(1e-3, maxY - minY);
     const s = Math.min(sx, sy);
-    const ox = (w - (maxX - minX) * s) * 0.5 - minX * s;
-    const oy = (h - (maxY - minY) * s) * 0.5 - minY * s;
+    const ox = boxX + (boxW - (maxX - minX) * s) * 0.5 - minX * s;
+    const oy = boxY + (boxH - (maxY - minY) * s) * 0.5 - minY * s;
 
     c.beginPath();
     for (let i = 0; i < path.length; i++) {
@@ -1711,12 +1804,15 @@ export function trackPreview(
     c.restore();
   }
 
-  // Bottom fade so the caption stays legible.
-  const fade = c.createLinearGradient(0, h * 0.55, 0, h);
-  fade.addColorStop(0, 'rgba(4,7,16,0)');
-  fade.addColorStop(1, 'rgba(4,7,16,0.9)');
-  c.fillStyle = fade;
-  c.fillRect(0, h * 0.55, w, h * 0.45);
+  // Top scrim only. The bottom fade existed to keep an overlaid course name
+  // legible; the name is a band under the card now, so darkening the bottom of
+  // the art just hides the half of the circuit drawn there. What is still on the
+  // art is the tag chip and the difficulty pips, both along the top.
+  const scrim = c.createLinearGradient(0, 0, 0, h * 0.34);
+  scrim.addColorStop(0, 'rgba(4,7,16,0.62)');
+  scrim.addColorStop(1, 'rgba(4,7,16,0)');
+  c.fillStyle = scrim;
+  c.fillRect(0, 0, w, h * 0.34);
 
   return canvas;
 }

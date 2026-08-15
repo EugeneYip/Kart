@@ -127,6 +127,248 @@ export interface KartBodyDef {
   tag: string;
 }
 
+// ---------------------------------------------------------------------------
+//  Chassis silhouettes
+// ---------------------------------------------------------------------------
+
+/**
+ * WHY THE SHAPES LIVE HERE AND NOT IN THE PAINTER.
+ *
+ * The kart-select grid drew all six chassis with one `kartThumb(colorA, colorB)`
+ * routine: an oval body with a dark cockpit ellipse in the middle of it. Six
+ * cards, six colours, one shape. The visual critic's words were "the same
+ * coloured oval with a dark hole in the middle — a doughnut", and that
+ * Sport Bike, Heavy Cruiser, Speedster, Trail Buggy and Hover Racer were
+ * indistinguishable from each other and from Standard Kart.
+ *
+ * A colour is not a silhouette. So the shape is now DATA, one entry per real
+ * `KartBodyId`, and it lives in this module rather than in `Widgets.ts` for the
+ * same reason everything else here does: this file is deliberately DOM-free and
+ * CSS-free, so `.probe-tmp/kartshape.ts` can import the real geometry and
+ * measure it. Grading a copy of the shapes reproduced inside a probe would prove
+ * nothing, and the canvas shim returns rgb(0,0,0) for every texel so the drawn
+ * pixels cannot be measured at all.
+ *
+ * Coordinates are a side elevation in a 0..1 box, x rearward-to-forward (the
+ * nose is at high x), y downward. `ground` is where the tyres meet the floor, so
+ * the painter can place the contact shadow without knowing which chassis it has.
+ */
+export type Vec2 = readonly [number, number];
+
+/** How a part is painted. The painter owns the ramps; this only names them. */
+export type KartPartFill = 'body' | 'shade' | 'dark' | 'glass' | 'chrome' | 'glow';
+
+export interface KartPart {
+  readonly poly: readonly Vec2[];
+  readonly fill: KartPartFill;
+}
+
+export interface KartWheel {
+  readonly cx: number;
+  readonly cy: number;
+  readonly r: number;
+  /** Off-road tread — drawn as blocks around the rim rather than a smooth tyre. */
+  readonly knobbly: boolean;
+  /**
+   * The far side of the axle, drawn first and dimmed.
+   *
+   * These are authored rather than derived by offsetting the near pair inside
+   * the painter, and the difference is not cosmetic: with the far wheels
+   * implicit, `wheels.length` was 2 for a kart AND 2 for a bike, so a probe
+   * asserting "the Sport Bike has two wheels" was really asserting "the array
+   * has the length every array has". Spelling all four out makes the count
+   * genuinely discriminating — 4 on the four-wheelers, 2 on the bike, 0 on the
+   * anti-grav — and lets a chassis put its far wheels wherever its track width
+   * says they go.
+   */
+  readonly far: boolean;
+}
+
+export interface KartSilhouette {
+  /** Closed hull outline — the shape that has to read at thumbnail size. */
+  readonly hull: readonly Vec2[];
+  /** Wing, cage, fairing, exhausts: drawn over the hull. */
+  readonly parts: readonly KartPart[];
+  /** Empty for anti-grav. Two for a bike. Four for everything else. */
+  readonly wheels: readonly KartWheel[];
+  /** Anti-grav floats: no tyre contact, a lift gap and a ground glow instead. */
+  readonly antigrav: boolean;
+  /** y of the floor contact line. */
+  readonly ground: number;
+}
+
+/**
+ * Exhaustive by construction — `Record<KartBodyId, …>`, so a seventh chassis
+ * added in `KartBodies.ts` is a compile error here rather than a seventh
+ * doughnut on the grid.
+ */
+export const KART_SILHOUETTES: Record<KartBodyId, KartSilhouette> = {
+  // Classic open kart: low tub, seat back, stubby nose, four even wheels.
+  standard: {
+    ground: 0.80,
+    antigrav: false,
+    hull: [
+      [0.09, 0.70], [0.10, 0.52], [0.16, 0.47], [0.28, 0.45], [0.35, 0.53],
+      [0.48, 0.52], [0.62, 0.49], [0.80, 0.51], [0.90, 0.57], [0.91, 0.68],
+      [0.86, 0.73], [0.13, 0.73],
+    ],
+    parts: [
+      // Rear spoiler.
+      { fill: 'chrome', poly: [[0.04, 0.38], [0.26, 0.38], [0.26, 0.44], [0.04, 0.44]] },
+      // Seat.
+      { fill: 'dark', poly: [[0.17, 0.47], [0.28, 0.46], [0.33, 0.55], [0.20, 0.56]] },
+      // Steering wheel / cowl.
+      { fill: 'shade', poly: [[0.46, 0.44], [0.55, 0.44], [0.56, 0.52], [0.47, 0.52]] },
+    ],
+    wheels: [
+      { cx: 0.205, cy: 0.670, r: 0.097, knobbly: false, far: true },
+      { cx: 0.725, cy: 0.688, r: 0.081, knobbly: false, far: true },
+      { cx: 0.240, cy: 0.690, r: 0.110, knobbly: false, far: false },
+      { cx: 0.760, cy: 0.708, r: 0.092, knobbly: false, far: false },
+    ],
+  },
+
+  // Two wheels IN LINE, a tall fairing and a fork. Nothing else on the grid has
+  // a gap through the middle of its silhouette.
+  bike: {
+    ground: 0.80,
+    antigrav: false,
+    hull: [
+      [0.24, 0.66], [0.26, 0.50], [0.34, 0.44], [0.46, 0.42], [0.58, 0.40],
+      [0.68, 0.36], [0.76, 0.38], [0.78, 0.48], [0.70, 0.54], [0.56, 0.56],
+      [0.44, 0.60], [0.34, 0.66],
+    ],
+    parts: [
+      // Front fairing / screen.
+      { fill: 'glass', poly: [[0.68, 0.30], [0.79, 0.34], [0.78, 0.41], [0.68, 0.37]] },
+      // Fork down to the front wheel.
+      { fill: 'chrome', poly: [[0.72, 0.44], [0.78, 0.45], [0.80, 0.66], [0.75, 0.66]] },
+      // Seat hump over the rear wheel.
+      { fill: 'dark', poly: [[0.24, 0.48], [0.38, 0.44], [0.40, 0.50], [0.26, 0.55]] },
+      // Swingarm.
+      { fill: 'shade', poly: [[0.26, 0.60], [0.52, 0.55], [0.53, 0.60], [0.28, 0.65]] },
+    ],
+    // Two, and only two. A bike seen from the side hides its far side exactly
+    // behind its near side, so there is no dimmed pair to author.
+    wheels: [
+      { cx: 0.220, cy: 0.665, r: 0.135, knobbly: false, far: false },
+      { cx: 0.800, cy: 0.665, r: 0.135, knobbly: false, far: false },
+    ],
+  },
+
+  // Long, low and heavy: the hull runs nearly the full width, the rear tyres are
+  // the biggest on the grid and there are stacks over the engine bay.
+  cruiser: {
+    ground: 0.80,
+    antigrav: false,
+    hull: [
+      [0.03, 0.72], [0.04, 0.58], [0.12, 0.54], [0.26, 0.53], [0.34, 0.57],
+      [0.52, 0.56], [0.70, 0.55], [0.86, 0.57], [0.95, 0.61], [0.97, 0.71],
+      [0.93, 0.76], [0.07, 0.76],
+    ],
+    parts: [
+      // Chrome bull-bar across the nose.
+      { fill: 'chrome', poly: [[0.88, 0.60], [0.98, 0.62], [0.98, 0.74], [0.88, 0.73]] },
+      // Twin exhaust stacks.
+      { fill: 'chrome', poly: [[0.30, 0.36], [0.35, 0.36], [0.35, 0.55], [0.30, 0.55]] },
+      { fill: 'chrome', poly: [[0.38, 0.40], [0.43, 0.40], [0.43, 0.56], [0.38, 0.56]] },
+      // Deep rear fender over the big tyre.
+      { fill: 'shade', poly: [[0.06, 0.56], [0.30, 0.55], [0.31, 0.63], [0.07, 0.64]] },
+      // Bench seat.
+      { fill: 'dark', poly: [[0.14, 0.48], [0.26, 0.47], [0.28, 0.55], [0.16, 0.55]] },
+    ],
+    wheels: [
+      { cx: 0.185, cy: 0.645, r: 0.119, knobbly: false, far: true },
+      { cx: 0.765, cy: 0.675, r: 0.092, knobbly: false, far: true },
+      { cx: 0.220, cy: 0.665, r: 0.135, knobbly: false, far: false },
+      { cx: 0.800, cy: 0.695, r: 0.105, knobbly: false, far: false },
+    ],
+  },
+
+  // Formula car: a long pointed nose that reaches the floor, a narrow tub and a
+  // rear wing standing well clear of the body.
+  speedster: {
+    ground: 0.80,
+    antigrav: false,
+    hull: [
+      [0.06, 0.62], [0.08, 0.52], [0.18, 0.50], [0.28, 0.48], [0.36, 0.56],
+      [0.50, 0.58], [0.66, 0.61], [0.84, 0.66], [0.98, 0.72], [0.98, 0.76],
+      [0.60, 0.72], [0.34, 0.70], [0.10, 0.70],
+    ],
+    parts: [
+      // Rear wing on its pylon — the tallest thing on the card.
+      { fill: 'chrome', poly: [[0.02, 0.26], [0.24, 0.26], [0.24, 0.33], [0.02, 0.33]] },
+      { fill: 'dark', poly: [[0.11, 0.33], [0.16, 0.33], [0.16, 0.51], [0.11, 0.51]] },
+      // Airbox behind the driver's head.
+      { fill: 'shade', poly: [[0.22, 0.40], [0.32, 0.44], [0.33, 0.50], [0.23, 0.49]] },
+      // Cockpit opening.
+      { fill: 'dark', poly: [[0.33, 0.49], [0.44, 0.51], [0.45, 0.57], [0.34, 0.55]] },
+      // Side pod.
+      { fill: 'shade', poly: [[0.36, 0.58], [0.62, 0.61], [0.62, 0.70], [0.36, 0.69]] },
+    ],
+    wheels: [
+      { cx: 0.165, cy: 0.660, r: 0.106, knobbly: false, far: true },
+      { cx: 0.705, cy: 0.675, r: 0.092, knobbly: false, far: true },
+      { cx: 0.200, cy: 0.680, r: 0.120, knobbly: false, far: false },
+      { cx: 0.740, cy: 0.695, r: 0.105, knobbly: false, far: false },
+    ],
+  },
+
+  // Raised, caged and knobbly: the only silhouette with daylight under the hull
+  // and a roll bar over the top of it.
+  buggy: {
+    ground: 0.80,
+    antigrav: false,
+    hull: [
+      [0.14, 0.56], [0.16, 0.46], [0.30, 0.44], [0.42, 0.47], [0.58, 0.46],
+      [0.74, 0.47], [0.86, 0.50], [0.88, 0.58], [0.80, 0.62], [0.20, 0.62],
+    ],
+    parts: [
+      // Roll cage.
+      { fill: 'chrome', poly: [[0.22, 0.44], [0.27, 0.44], [0.34, 0.26], [0.29, 0.26]] },
+      { fill: 'chrome', poly: [[0.29, 0.26], [0.62, 0.24], [0.62, 0.30], [0.30, 0.32]] },
+      { fill: 'chrome', poly: [[0.58, 0.25], [0.63, 0.25], [0.70, 0.46], [0.65, 0.46]] },
+      // Light bar on the cage.
+      { fill: 'glow', poly: [[0.36, 0.20], [0.56, 0.19], [0.56, 0.25], [0.36, 0.26]] },
+      // Bucket seat.
+      { fill: 'dark', poly: [[0.32, 0.34], [0.44, 0.33], [0.46, 0.46], [0.34, 0.47]] },
+      // Skid plate under the raised floor.
+      { fill: 'shade', poly: [[0.24, 0.60], [0.78, 0.60], [0.76, 0.65], [0.26, 0.65]] },
+    ],
+    wheels: [
+      { cx: 0.205, cy: 0.630, r: 0.132, knobbly: true, far: true },
+      { cx: 0.725, cy: 0.630, r: 0.132, knobbly: true, far: true },
+      { cx: 0.240, cy: 0.650, r: 0.150, knobbly: true, far: false },
+      { cx: 0.760, cy: 0.650, r: 0.150, knobbly: true, far: false },
+    ],
+  },
+
+  // Anti-grav: NO wheels at all, a delta hull and two thruster pods over a lift
+  // gap. `wheels` is empty and `antigrav` is true, which is what tells the
+  // painter to draw a glow under it rather than tyre contact.
+  hover: {
+    ground: 0.80,
+    antigrav: true,
+    hull: [
+      [0.08, 0.52], [0.20, 0.44], [0.42, 0.40], [0.66, 0.40], [0.86, 0.45],
+      [0.96, 0.53], [0.90, 0.60], [0.62, 0.63], [0.30, 0.63], [0.10, 0.59],
+    ],
+    parts: [
+      // Canopy.
+      { fill: 'glass', poly: [[0.34, 0.40], [0.58, 0.38], [0.66, 0.44], [0.36, 0.47]] },
+      // Thruster pods, hanging below the hull over the lift gap.
+      { fill: 'dark', poly: [[0.16, 0.60], [0.36, 0.60], [0.34, 0.68], [0.18, 0.68]] },
+      { fill: 'dark', poly: [[0.62, 0.60], [0.84, 0.60], [0.82, 0.68], [0.64, 0.68]] },
+      // Emissive rings on the pods — the anti-grav read.
+      { fill: 'glow', poly: [[0.18, 0.66], [0.34, 0.66], [0.33, 0.70], [0.19, 0.70]] },
+      { fill: 'glow', poly: [[0.64, 0.66], [0.82, 0.66], [0.81, 0.70], [0.65, 0.70]] },
+      // Swept tail fin.
+      { fill: 'shade', poly: [[0.06, 0.34], [0.18, 0.44], [0.14, 0.53], [0.06, 0.50]] },
+    ],
+    wheels: [],
+  },
+};
+
 export interface TrackDef {
   id: string;
   name: string;
@@ -362,11 +604,23 @@ const THEME_TAG: Record<TrackTheme, string> = {
   volcano: 'VOLCANO',
 };
 
-/** Editorial: difficulty pips and the corner-of-card label, by real id. */
+/**
+ * Editorial: difficulty pips and the corner-of-card label, by real id.
+ *
+ * EVERY CIRCUIT NEEDS ITS OWN TAG. Three of the six cards read "CITY SERIES",
+ * because `neonMetropolis` was the only city with an override and the other two
+ * fell through to `THEME_TAG.city`. A label repeated across half the grid is not
+ * a label — it stops distinguishing the thing it is attached to. These name what
+ * each circuit actually is; the theme map below is now only a safety net for a
+ * circuit nobody has written a line for yet.
+ */
 const TRACK_EDITORIAL: Partial<Record<string, { difficulty: number; tag: string }>> = {
   sunsetCoastline: { difficulty: 1, tag: 'RESORT' },
   neonMetropolis: { difficulty: 2, tag: 'NIGHT CITY' },
   volcanoRush: { difficulty: 3, tag: 'VOLCANO' },
+  bostonHarbor: { difficulty: 2, tag: 'HARBOUR' },
+  taipeiCircuit: { difficulty: 2, tag: 'SKYLINE' },
+  tokyoNeon: { difficulty: 3, tag: 'DOWNTOWN' },
 };
 
 /**
