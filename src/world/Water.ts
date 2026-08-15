@@ -101,6 +101,7 @@ const _hidden: THREE.Object3D[] = [];
 const _frustum = new THREE.Frustum();
 const _projScreen = new THREE.Matrix4();
 const _sphere = new THREE.Sphere();
+const _reflDir = new THREE.Vector3();
 
 /**
  * Scene roots that are never worth a planar-reflection pass. Particle systems
@@ -270,6 +271,34 @@ export class Water implements ISubsystem {
   private reflectionsWanted = false;
   private reflectionsOn = false;
   private time = 0;
+  // --- reflection cadence ---
+  /**
+   * Render the mirror every Nth frame and keep the target in between.
+   *
+   * Measured in the browser with `EXT_disjoint_timer_query_webgl2`, driving
+   * frames back-to-back on sunsetCoastline at ultra: the reflection was the
+   * single most expensive thing in the frame, at **128.7 draw calls and 649 292
+   * triangles, every frame**, ahead of the main RenderPass. It re-renders
+   * terrain, mountains, sky, track and twelve karts into a 512 px buffer that is
+   * then Fresnel-mixed at 0.82 and distorted by the wave normal.
+   *
+   * Nothing about that survives a frame of latency visibly, which is why the
+   * shadow cascades in `world/Lighting.ts` already work this way — `intervalFor`
+   * runs cascade 1 every frame, 2 every other, 3 every fourth, with a phase
+   * offset so they never land together. Same argument, larger prize.
+   *
+   * `renderReflection` returns early as a whole when it is not due, so the
+   * texture AND `textureMatrix` stay in lockstep. Updating the matrix without
+   * re-rendering would project this frame's camera onto last frame's pixels,
+   * which slides the mirror across the surface — worse than the staleness.
+   */
+  private reflectInterval = 2;
+  private reflectFrame = 0;
+  /** Never skipped while false — the target has no valid pixels yet. */
+  private reflectPrimed = false;
+  /** Pose at the last real reflection, so a camera CUT is never left stale. */
+  private lastReflPos = new THREE.Vector3();
+  private lastReflDir = new THREE.Vector3();
   /**
    * Armed by the first `update()`, not at build time — see Terrain's `culling`
    * field for the full argument. Short version: three culls before any draw
@@ -294,6 +323,9 @@ export class Water implements ISubsystem {
     this.field = ctx.field;
     this.waterLevel = ctx.waterLevel;
     this.reflectionsWanted = quality.tier === 'high' || quality.tier === 'ultra';
+    // `high` is the tier that is already struggling, so it gets the longer gap.
+    // Below `high` the pass does not run at all and this is never read.
+    this.reflectInterval = quality.tier === 'ultra' ? 2 : 3;
   }
 
   get level(): number { return this.waterLevel; }
@@ -927,6 +959,9 @@ export class Water implements ISubsystem {
       generateMipmaps: false,
     });
     this.reflRT.texture.colorSpace = THREE.NoColorSpace;
+    // A brand-new target holds nothing, so the cadence must not be allowed to
+    // skip the first frame into it. Also covers a quality change rebuilding it.
+    this.reflectPrimed = false;
     if (this.waterMat) {
       this.waterMat.uniforms.uReflMap.value = this.reflRT.texture;
       this.waterMat.uniforms.uReflAmount.value = 0.82;
@@ -971,6 +1006,41 @@ export class Water implements ISubsystem {
     return rel >= lo && rel <= hi;
   }
 
+  /**
+   * Is the mirror due this frame? Records the pose when it says yes.
+   *
+   * Three ways to be due, and the last two are the reason this is a method and
+   * not `frame % 2`:
+   *
+   *  1. the cadence came round;
+   *  2. the target has never been filled, so skipping would sample garbage —
+   *     this is what makes the very first frame after `setupReflection` safe,
+   *     and the first frame after a quality change that rebuilt the target;
+   *  3. the camera CUT. A stale mirror is invisible while the camera moves
+   *     continuously, because at interval 2 the pose only advances 0.9 m at
+   *     racing speed. It is very visible across a respawn, a race start, a
+   *     results-screen framing or a `harness.takeCameraControl` jump, where the
+   *     mirror would show the wrong place entirely for a frame. 8 m and 25 deg
+   *     are far outside anything a continuous camera does in one frame and well
+   *     inside every cut.
+   */
+  private reflectionDue(camera: THREE.PerspectiveCamera): boolean {
+    _camPos.setFromMatrixPosition(camera.matrixWorld);
+    _reflDir.set(0, 0, -1).transformDirection(camera.matrixWorld);
+
+    const cut = !this.reflectPrimed
+      || _camPos.distanceToSquared(this.lastReflPos) > 64          // 8 m
+      || _reflDir.dot(this.lastReflDir) < 0.906;                   // 25 deg
+
+    if (!cut && (this.reflectFrame++ % this.reflectInterval) !== 0) return false;
+
+    this.reflectFrame = 1;
+    this.reflectPrimed = true;
+    this.lastReflPos.copy(_camPos);
+    this.lastReflDir.copy(_reflDir);
+    return true;
+  }
+
   private renderReflection(
     renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
@@ -982,6 +1052,7 @@ export class Water implements ISubsystem {
     // Nothing above the water to mirror if we're looking from below.
     if (camera.position.y < this.waterLevel + 0.25) return;
     if (!this.planeInFrustum(camera)) return;
+    if (!this.reflectionDue(camera)) return;
 
     this.reflecting = true;
 
