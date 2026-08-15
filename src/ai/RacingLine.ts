@@ -64,7 +64,32 @@ export interface RacingLineOptions {
   refinementRounds: number;
   /** Iterations per refinement round. */
   refinementIterations: number;
-  /** Clearance kept from the road edge for the optimal line, metres. */
+  /**
+   * Clearance kept from the DRIVABLE road edge for the optimal line, metres.
+   *
+   * ⚠️ KNOWN, MEASURED, NOT FIXED. This is clearance from `chalf` — the drivable
+   * half-width — and the barrier is not there. `Track.collideWalls` puts the wall
+   * face at `halfWidth + kerb(0.7) + shoulder + 0.12`, so what this constant
+   * actually buys is `2.77 m + shoulderWidth` of clearance to the thing you can
+   * hit. It is a constant; the shoulder is not.
+   *
+   * Measured across the six circuits (`.probe-tmp/volcline.ts`), clearance from
+   * the optimal line to the right-hand barrier:
+   *
+   *     volcanoRush crater rim  (shoulder 8.0 m)   10.8 m
+   *     volcanoRush final kink  (shoulder 6.0 m)    8.8 m
+   *     volcanoRush SPIRAL      (shoulder 1.4 m)    4.2 m   <-- 340 m of it
+   *     volcanoRush lava tube   (shoulder 1.6 m)    4.4 m
+   *
+   * So the tightest sustained clearance in the game lands on the longest corner
+   * in the game, and nothing in the line builder knows. A static clearance audit
+   * passes it (4.2 m clears the 2.78 m minimum) but a kart 3.4 m off its line is
+   * in the rail there against 8–10 m anywhere else.
+   *
+   * Not changed here on purpose: `edgeMargin` is shared by all six circuits and
+   * every number measured this session was measured against 1.95. Making it
+   * shoulder-aware is a real fix and it needs its own before/after pass.
+   */
   edgeMargin: number;
   /** Clearance for the defensive / overtaking lines, metres. */
   variantMargin: number;

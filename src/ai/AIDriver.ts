@@ -273,8 +273,10 @@ export const SPEED = {
    * The horizon is `DRIFT.farSeconds` of line — see the note at the test itself
    * for why the braking lead's 0.42 s cannot supply it and why the drift
    * detector's existing scan can, for free.
+   *
+   * The constant itself is the fraction over the corner's yaw ceiling at which the
+   * brake becomes licensed.
    */
-  /** Fraction over the corner's yaw ceiling before the brake is licensed. */
   yawBrakeMargin: 1.04,
   /**
    * ∫κ ds over the near window above which a driver is "in a corner" and may not
@@ -389,6 +391,38 @@ export const DRIFT = {
   bailLead: 0.055,
   /** Road needed before starting a drift at all, metres + `bailLead` seconds. */
   entryMargin: 2.4,
+  /**
+   * ⚠️ A DRIFT MUST BE ABLE TO END. This is `volcanoRush`.
+   *
+   * Every exit from `hold` was conditional on something external happening: the
+   * corner ending (`cornerAlive`), running out of road (`bailRoom`), a stun, a
+   * landing, or the physics dropping the slide. There was no maximum duration —
+   * so on a corner that does not end, neither does the drift.
+   *
+   * `volcanoRush`'s spiral is a 360-degree helix: 340 m of *constant* R 44–51 m,
+   * arc 860–1200 m (t 0.56–0.78), on a 9.5 m half-width road with 1.4 m shoulders
+   * and a guardrail 4.2 m from the racing line. At 27 m/s that is TWELVE SECONDS
+   * of `|∫κ ds| ≈ 0.5` over the near window — `cornerAlive` is true the whole way
+   * and `|nearInt| < exit·2.1` never becomes true, so the slide is held for the
+   * entire corner and the kart oscillates ±8 m across a 19 m road.
+   *
+   * Measured, 4 seeds x 260 s on volcanoRush (`.probe-tmp/ablate.ts`):
+   *
+   *     config              contacts     worst kart/lap   off-road s
+   *     shipped               115.0±11.1      17.7            62
+   *     drifting disabled       0.3± 0.3       0.1             0
+   *
+   * Ninety-nine percent. Disabling drifting is not the answer — it costs the
+   * mini-turbos (63 -> 0), 17 of 29 overtakes and 1.3 s of lap-time spread — but a
+   * cap is: once the target tier is earned the slide has already paid for itself,
+   * and `DRIFT.cooldown` is 0.1 s, so a driver through a long corner now does what
+   * a human does — drift, release for the boost, gather it up, drift again —
+   * instead of holding one twelve-second slide.
+   *
+   * Gated on `haveMin` so a driver that has not yet earned a blue spark still gets
+   * to finish its slide; that case is bounded by the corner instead.
+   */
+  maxHoldSeconds: 1.6,
 } as const;
 
 export const AVOID = {
@@ -1995,8 +2029,13 @@ export class AIDriver {
         if (cornerAlive) {
           this.overshoot = 0;
           // Corner still going: keep holding. Release early only if we already
-          // have the tier we wanted AND the corner is nearly done.
+          // have the tier we wanted AND the corner is nearly done…
           if (stage >= wantStage && Math.abs(nearInt) < exit * 2.1) {
+            this.endDrift(st, true);
+            break;
+          }
+          // …or the slide has simply gone on too long. See DRIFT.maxHoldSeconds.
+          if (this.driftTimer > DRIFT.maxHoldSeconds && haveMin) {
             this.endDrift(st, true);
           }
           break;
