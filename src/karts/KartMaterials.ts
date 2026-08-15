@@ -735,6 +735,22 @@ export interface FaceSpec {
    * This is what gives `thoughtful` / `sleepy` something to do.
    */
   idle?: FaceExpression;
+  /**
+   * Expression the RACER-SELECT CARD wears. Defaults to `happy`.
+   *
+   * ⚠️ THIS EXISTS BECAUSE `happy` CLOSES A CAPYBARA'S EYES. The animal cell
+   * draws `happy` as "eyes squeezed with joy" — `lid = 1, squint = true` — which
+   * takes the `drawAnimalEye` early-out and paints one lid stroke and nothing
+   * else: no sclera, no iris, no catchlight. That is a lovely gameplay reaction
+   * and it is a disaster on a 100 px product shot, where Capy was the only
+   * racer on the board with no eyes at all. `idle` is no help either — hers is
+   * `sleepy`, which is also `lid = 1`.
+   *
+   * So the card's expression is now a separate, deliberate choice per character
+   * rather than one constant in `Portrait.ts`, and `.probe-tmp/facecard.ts`
+   * asserts that no racer's portrait expression is a shut-eye one.
+   */
+  portrait?: FaceExpression;
 }
 
 /**
@@ -756,6 +772,22 @@ export type FaceExpression = (typeof FACE_EXPRESSIONS)[number];
 
 /** Where the pale muzzle field starts, as a texture `v`. Shared with Driver.ts. */
 export const ANIMAL_MUZZLE_SPLIT = 0.45;
+
+/**
+ * The band of the cell a `visor` face uses, as texture `v`.
+ *
+ * A visor panel is a wide, short strip wrapped round the front of a helmet —
+ * roughly 2.8 times as long as it is tall — while the atlas cell is square. If
+ * the panel took the whole cell every eye would be squashed to a 2.8:1 slot.
+ * Mapping the panel onto a band **this tall** instead makes one cell pixel
+ * square on the panel, so a circle drawn in the cell arrives as a circle:
+ *
+ *     v1 - v0  ==  panelHeight / panelArcLength
+ *
+ * `Driver.ts`'s `visorPatch()` sizes each helmet's panel to hold that identity
+ * to within a few per cent, and `.probe-tmp/facecard.ts` checks it.
+ */
+export const VISOR_BAND = { v0: 0.37, v1: 0.63 } as const;
 
 /**
  * Nx2 atlas: columns = expression, rows = [eyes open, eyes blinking].
@@ -1195,6 +1227,139 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     }
   };
 
+  // -------------------------------------------------------------------------
+  //  Visor cell — the face of a driver who is inside a helmet
+  // -------------------------------------------------------------------------
+  //  ⚠️ THREE OF TEN RACERS HAD NO FACE AT ALL. Measured on the real card
+  //  framing (`.probe-tmp/facecard.ts`): Blitz 0 %, Pip 0 %, Ember 0 % of their
+  //  card was visible face, because a `verticalLoft` helmet shell reaches
+  //  1.18–1.24 R forward and the square face patch sat at 0.92 R — *inside* it.
+  //  Their eyes were rendered every frame, behind an opaque shell, on the
+  //  product shot the whole roster is judged on.
+  //
+  //  The fix is not to cut an aperture in a lofted solid. It is to accept what
+  //  a helmet actually is at 100 px and make THE VISOR THE FACE: a dark glass
+  //  strip carrying two luminous eyes. Two bright shapes on a dark field is the
+  //  highest-contrast face a card can have, it costs no silhouette (the panel
+  //  hugs a surface that is already there), and the eye SHAPE still carries the
+  //  full six-expression vocabulary, so these three keep an inner life.
+  //
+  //  The eye colour is `spec.glow`, which `makeFaceEmissive()` then lifts into
+  //  the emissive map — so the eyes bloom, which is what sells them as light
+  //  coming through tint rather than as two stickers.
+  // -------------------------------------------------------------------------
+  const drawVisorCell = (expr: FaceExpression, blink: boolean) => {
+    const glowC = spec.glow ?? '#8fd8ff';
+    const glass = spec.eye;
+    const y0 = cell * VISOR_BAND.v0;
+    const y1 = cell * VISOR_BAND.v1;
+    const midY = (y0 + y1) * 0.5;
+    const bandH = y1 - y0;
+
+    // --- the glass field ---------------------------------------------------
+    // Fill the whole cell, not just the band: the panel's UVs are clamped, and
+    // a driver seen from an extreme angle should never sample bare canvas.
+    g.fillStyle = glass;
+    g.fillRect(0, 0, cell, cell);
+    const depth = g.createLinearGradient(0, y0 - bandH * 0.5, 0, y1 + bandH * 0.5);
+    depth.addColorStop(0, 'rgba(0,0,0,0.62)');       // top lip, facing the sky
+    depth.addColorStop(0.5, 'rgba(0,0,0,0.10)');
+    depth.addColorStop(1, mixHex(glass, glowC, 0.20)); // bounce off the chest
+    g.fillStyle = depth;
+    g.fillRect(0, 0, cell, cell);
+
+    // Sheen. One broad diagonal streak is the single strongest "this is glass"
+    // cue there is; a clean tinted rectangle reads as painted plastic.
+    g.save();
+    g.beginPath();
+    g.rect(0, y0, cell, bandH);
+    g.clip();
+    const sheen = g.createLinearGradient(cell * 0.10, y0, cell * 0.66, y1);
+    sheen.addColorStop(0, 'rgba(255,255,255,0)');
+    sheen.addColorStop(0.42, 'rgba(226,240,255,0.20)');
+    sheen.addColorStop(0.52, 'rgba(226,240,255,0.26)');
+    sheen.addColorStop(0.70, 'rgba(255,255,255,0)');
+    g.fillStyle = sheen;
+    g.fillRect(0, y0, cell, bandH);
+    // A hard specular line just under the top edge — the lit rim of the glass.
+    g.strokeStyle = 'rgba(236,246,255,0.34)';
+    g.lineWidth = cell * 0.008;
+    g.beginPath();
+    g.moveTo(cell * 0.06, y0 + bandH * 0.16);
+    g.bezierCurveTo(cell * 0.34, y0 + bandH * 0.05, cell * 0.66, y0 + bandH * 0.05,
+      cell * 0.94, y0 + bandH * 0.17);
+    g.stroke();
+    g.restore();
+
+    // --- the eyes ----------------------------------------------------------
+    const rx = cell * 0.088 * eyeSize;
+    const ry = cell * 0.070 * eyeSize;
+    const shut = blink || expr === 'sleepy';
+
+    const visorEye = (x: number, mirror: number) => {
+      g.save();
+      g.fillStyle = glowC;
+      g.strokeStyle = glowC;
+      g.shadowColor = glowC;
+      g.shadowBlur = cell * 0.055;
+      g.lineCap = 'round';
+      g.lineJoin = 'round';
+
+      if (shut) {
+        g.lineWidth = ry * 0.44;
+        g.beginPath();
+        g.moveTo(x - rx * 0.86, midY);
+        g.lineTo(x + rx * 0.86, midY);
+        g.stroke();
+      } else if (expr === 'hit') {
+        g.lineWidth = ry * 0.42;
+        g.beginPath(); g.moveTo(x - rx * 0.7, midY - ry * 0.7); g.lineTo(x + rx * 0.7, midY + ry * 0.7); g.stroke();
+        g.beginPath(); g.moveTo(x + rx * 0.7, midY - ry * 0.7); g.lineTo(x - rx * 0.7, midY + ry * 0.7); g.stroke();
+      } else if (expr === 'happy') {
+        // Two upward crescents — the one expression that has to read instantly,
+        // because it is what the racer-select card wears.
+        g.lineWidth = ry * 0.62;
+        g.beginPath();
+        g.moveTo(x - rx, midY + ry * 0.34);
+        g.quadraticCurveTo(x, midY - ry * 1.10, x + rx, midY + ry * 0.34);
+        g.stroke();
+      } else {
+        // An eye with a canted inner edge: the top is a straight brow line and
+        // the bottom is a curve, which is what turns a lozenge into a LOOK.
+        const squash = expr === 'determined' ? 0.52 : expr === 'thoughtful' ? 0.78 : 1;
+        const tilt = expr === 'determined' ? ry * 0.42 : 0;
+        const gaze = expr === 'thoughtful' ? mirror * rx * 0.26 : 0;
+        const h = ry * squash;
+        g.beginPath();
+        g.moveTo(x - rx + gaze, midY - h + mirror * tilt);
+        g.lineTo(x + rx + gaze, midY - h - mirror * tilt);
+        g.quadraticCurveTo(x + rx * 0.82 + gaze, midY + h * 1.25, x + gaze, midY + h * 1.32);
+        g.quadraticCurveTo(x - rx * 0.82 + gaze, midY + h * 1.25, x - rx + gaze, midY - h + mirror * tilt);
+        g.closePath();
+        g.fill();
+        // A cooler core so the eye is not one flat lozenge of light.
+        g.shadowBlur = 0;
+        g.fillStyle = mixHex(glowC, '#ffffff', 0.55);
+        g.beginPath();
+        g.ellipse(x + gaze - rx * 0.18, midY - h * 0.10, rx * 0.30, h * 0.42, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.restore();
+    };
+    visorEye(cell * 0.31, 1);
+    visorEye(cell * 0.69, -1);
+
+    // A dim reflected horizon under the eyes, so the glass keeps reading as a
+    // curved surface rather than as a black hole with two lights in it.
+    g.strokeStyle = 'rgba(180,206,240,0.13)';
+    g.lineWidth = cell * 0.006;
+    g.beginPath();
+    g.moveTo(cell * 0.10, y1 - bandH * 0.20);
+    g.bezierCurveTo(cell * 0.36, y1 - bandH * 0.12, cell * 0.64, y1 - bandH * 0.12,
+      cell * 0.90, y1 - bandH * 0.21);
+    g.stroke();
+  };
+
   const drawCell = (col: number, row: number) => {
     const ox = col * cell, oy = row * cell;
     const blink = row === 1;
@@ -1203,6 +1368,11 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
     g.translate(ox, oy);
     if (animal) {
       drawAnimalCell(expr, blink);
+      g.restore();
+      return;
+    }
+    if (spec.style === 'visor') {
+      drawVisorCell(expr, blink);
       g.restore();
       return;
     }
@@ -1479,19 +1649,53 @@ function makeFaceAtlas(spec: FaceSpec, cell = 256): THREE.CanvasTexture {
   return t;
 }
 
-/** Emissive companion for glowing (robot / alien) faces. */
+/**
+ * Which atlas pixels become emissive, given a driver's `glow`.
+ *
+ * ⚠️ TWO BUGS, AND THEY WERE CANCELLING EACH OTHER OUT.
+ *
+ *  1. WRONG COLOUR SPACE. The target was `new THREE.Color(glow).r * 255`, and
+ *     three's colour management converts a CSS string sRGB -> LINEAR on `set`.
+ *     So an sRGB byte from `getImageData` was being compared against a
+ *     linearised value: for the robot's `#59ffd0` the filter was actually
+ *     hunting for (26, 255, 161) rather than (89, 255, 208).
+ *  2. A CITY-BLOCK THRESHOLD OF 150 IS ENORMOUS. Summed over three channels it
+ *     admits anything within an average of 50 per channel, which for a pale
+ *     mint alien on a mint glow is the WHOLE FACE. Vex's skin `#9fe3b8` sits
+ *     128 from a `#3cf0c8` iris in that metric — inside the gate — so his
+ *     entire head would have been lifted into an emissive map running at
+ *     intensity 2.2 and blown to white. It only escaped because bug 1 moved
+ *     the target far enough away by accident.
+ *
+ * Fixing the space alone would have shipped the blowout. Both are fixed here:
+ * sRGB against sRGB, and a per-channel (Chebyshev) distance, which is what
+ * "is this pixel that colour" actually means — a sum lets one wildly wrong
+ * channel hide behind two close ones.
+ *
+ * Exported so `.probe-tmp/facecard.ts` can assert the rule that matters: a
+ * driver's own face background must never be admitted by their own filter.
+ */
+export const EMISSIVE_CHANNEL_TOLERANCE = 80;
+
+export function emissiveKeeps(glow: string, r: number, g: number, b: number): boolean {
+  const hex = new THREE.Color(glow).getHexString(); // back to sRGB
+  const gr = parseInt(hex.slice(0, 2), 16);
+  const gg = parseInt(hex.slice(2, 4), 16);
+  const gb = parseInt(hex.slice(4, 6), 16);
+  return Math.max(Math.abs(r - gr), Math.abs(g - gg), Math.abs(b - gb))
+    < EMISSIVE_CHANNEL_TOLERANCE;
+}
+
+/** Emissive companion for glowing (robot / alien / visor) faces. */
 function makeFaceEmissive(spec: FaceSpec, base: THREE.CanvasTexture): THREE.CanvasTexture | null {
   if (!spec.glow) return null;
   const src = base.image as HTMLCanvasElement;
   const { c, g } = canvas2d(src.width, src.height);
   g.drawImage(src, 0, 0);
-  // Keep only the bright glow-coloured pixels.
-  const glowCol = new THREE.Color(spec.glow);
+  // Keep only the pixels that really are the glow colour.
   const img = g.getImageData(0, 0, c.width, c.height);
-  const gr = glowCol.r * 255, gg = glowCol.g * 255, gb = glowCol.b * 255;
   for (let i = 0; i < img.data.length; i += 4) {
-    const d = Math.abs(img.data[i] - gr) + Math.abs(img.data[i + 1] - gg) + Math.abs(img.data[i + 2] - gb);
-    const keep = d < 150 ? 1 : 0;
+    const keep = emissiveKeeps(spec.glow, img.data[i], img.data[i + 1], img.data[i + 2]) ? 1 : 0;
     img.data[i] = img.data[i] * keep;
     img.data[i + 1] = img.data[i + 1] * keep;
     img.data[i + 2] = img.data[i + 2] * keep;
@@ -1527,10 +1731,13 @@ export class FaceMaterial {
     this.map = makeFaceAtlas(spec, cell);
     this.emissiveMap = makeFaceEmissive(spec, this.map);
     const animal = spec.style === 'fox' || spec.style === 'capy';
+    // A visor is glass: it wants a tight specular and a little reflectance, or
+    // the panel reads as matte paint with two lights printed on it.
     this.material = new THREE.MeshStandardMaterial({
       map: this.map,
-      roughness: spec.style === 'robot' ? 0.28 : animal ? 0.88 : 0.72,
-      metalness: spec.style === 'robot' ? 0.55 : 0.0,
+      roughness: spec.style === 'robot' ? 0.28 : spec.style === 'visor' ? 0.16
+        : animal ? 0.88 : 0.72,
+      metalness: spec.style === 'robot' ? 0.55 : spec.style === 'visor' ? 0.32 : 0.0,
       vertexColors: true,
       emissive: this.emissiveMap ? new THREE.Color(spec.glow ?? '#ffffff') : new THREE.Color(0x000000),
       emissiveIntensity: this.emissiveMap ? 2.2 : 0,

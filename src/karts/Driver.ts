@@ -41,7 +41,7 @@ import type { QualitySettings } from '@/core/Types';
 import { clamp, clamp01, damp, lerp } from '@/core/MathUtils';
 import type { FaceExpression, FaceSpec, KartMaterialSet, MaterialSlot } from './KartMaterials';
 import type { FaceMaterial } from './KartMaterials';
-import { ANIMAL_MUZZLE_SPLIT } from './KartMaterials';
+import { ANIMAL_MUZZLE_SPLIT, VISOR_BAND } from './KartMaterials';
 import {
   DEG, bakeAO, consolidateParts, disc, extrude, lathe, loft, mirrorX, prepGeometry,
   rivet, roundedBox, segs, shadeColor, smoothNormals, superShape, transferVertexColors, tube,
@@ -246,9 +246,15 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // negative crouch on the roster, which is what stops the biggest driver
     // reading as the same pose scaled up.
     crouch: -4, shrug: -0.14, chin: 4,
+    // The roster's smallest eye (0.86) on the roster's smallest head (0.091 R)
+    // measured a 2.49 px iris on the card — under the ~2.5 px at which a
+    // catchlight, a limbal ring and a gaze direction all collapse into one grey
+    // dot. A "big friendly heavy" is the last character who should be squinting
+    // at the player, and warm amber reads friendlier than the near-neutral
+    // #4a3524 it had (chroma 16, i.e. a black dot at card size).
     face: {
-      style: 'human', skin: '#c98b62', eye: '#4a3524', brow: '#3a2a1c',
-      eyeSize: 0.86, mark: 'stubble',
+      style: 'human', skin: '#c98b62', eye: '#8a5628', brow: '#3a2a1c',
+      eyeSize: 1.04, mark: 'stubble',
     },
   },
   // 5. Small speedster — oversized teardrop helmet, big eyes, scarf.
@@ -258,9 +264,18 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     suit: 0xd93a7a, suitAlt: 0xfdf3e3,
     rear: 'streamers', skull: 'child', elbowOut: 0.022,
     crouch: 10, shrug: 0.18, chin: -4,
+    // ⚠️ THE BIG-EYED ONE HAD NO EYES. `eyeSize: 1.28` is the largest on the
+    // roster and not one pixel of it reached the card: the teardrop shell
+    // reaches 1.24 R forward and the face patch sat at 0.92 R, so Pip's face
+    // was rendered inside her own helmet every frame (measured 0.0 % face on
+    // the card, `.probe-tmp/facecard.ts`). The visor carries the eyes now.
+    //
+    // Warm eyes, not the kart's teal: a cold glow in a helmet reads as a
+    // machine, and this is the roster's small friendly one. Warm against a
+    // teal card is also the only true complement on the board.
     face: {
-      style: 'human', skin: '#f2c49b', eye: '#2f8f6b', brow: '#4a3520',
-      blush: 'rgba(224,116,96,0.35)', eyeSize: 1.28, mark: 'none',
+      style: 'visor', skin: '#f2c49b', eye: '#241d2a', brow: '#4a3520',
+      glow: '#ffdc9e', eyeSize: 1.34, mark: 'none',
     },
     scarf: true,
   },
@@ -273,9 +288,18 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // Unnervingly still. A slight backward set and a raised chin so the long
     // cranium reads as looking down its nose at the field.
     crouch: -2, shrug: 0.06, chin: 5,
+    // Vex's face is the only one on the roster that is 100 % behind glass — the
+    // fishbowl veils every pixel of it (389 veiled, 0 clear). Black almond eyes
+    // behind an opacity-0.55 near-black bubble are, correctly, invisible. A
+    // luminous iris is both the fix and the better idea: `makeFaceEmissive`
+    // keeps anything close to `glow`, so these two now bloom THROUGH the dome,
+    // which is the one thing a glass helmet is for.
+    // `determined` narrows the lids and slides the gaze outward, which is the
+    // "looking down its nose at the field" this character is written around.
+    // Ten cards all wearing `happy` is ten characters with one personality.
     face: {
-      style: 'alien', skin: '#9fe3b8', eye: '#0b0d12', brow: '#7cc79a',
-      glow: '#6effc8', eyeSize: 1.35, mark: 'none',
+      style: 'alien', skin: '#9fe3b8', eye: '#3cf0c8', brow: '#7cc79a',
+      glow: '#3cf0c8', eyeSize: 1.35, mark: 'none', portrait: 'determined',
     },
   },
   // 7. Knight — crested great-helm with a T-slit, pauldrons over a gambeson.
@@ -285,9 +309,15 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     suit: 0x38445e, suitAlt: 0xd9a53a,
     rear: 'mantle', skull: 'gaunt', elbowOut: 0.018,
     crouch: 6, shrug: 0.20, chin: -2,
+    // Molten amber in the eye slot. `eye` is the VISOR GLASS tint for this
+    // style and `glow` is the eyes; Ember had no `glow` at all, so his T-slit
+    // was a dead black bar on a dead black helmet.
+    // The one card on the board that should not be smiling. `determined`
+    // squashes the visor eyes to canted slits — a great-helm with two molten
+    // slots in it, against Blitz's confident crescents in the same style.
     face: {
       style: 'visor', skin: '#dda07a', eye: '#141820', brow: '#2b2118',
-      eyeSize: 0.94, mark: 'scar',
+      glow: '#ffb648', eyeSize: 1.08, mark: 'scar', portrait: 'determined',
     },
   },
   // 8. Pilot — leather flight cap, earflaps, aviator goggles, scarf.
@@ -299,8 +329,8 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     rear: 'neckCurtain', skull: 'long', elbowOut: -0.008,
     crouch: 3, shrug: -0.06, chin: 2,
     face: {
-      style: 'human', skin: '#dfae86', eye: '#7a6a4a', brow: '#4a3a26',
-      eyeSize: 1.0, mark: 'moustache',
+      style: 'human', skin: '#dfae86', eye: '#8a6b32', brow: '#4a3a26',
+      eyeSize: 1.06, mark: 'moustache',
     },
     scarf: true,
   },
@@ -335,9 +365,17 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // the long muzzle points slightly down the road rather than at the sky,
     // which is what stops a sharp snout reading as a beak.
     crouch: 8, shrug: 0.14, chin: -5, elbowOut: -0.010,
+    // AMBER. A red fox's iris is amber-gold and it is the second thing anyone
+    // recognises about the animal after the ears — and #43301c was chroma 17,
+    // i.e. a dark brown that at a 6 px iris resolves to a black dot with a
+    // white speck on it, exactly like the four other near-neutral irises on
+    // this roster. `drawIris` already darkens the outer 14 % of the disc toward
+    // black, so the gold reads as a ring round a black pupil rather than as a
+    // flat coin. This is the largest iris on the board (6.2 card px) and the
+    // mascot's; it should be the one people remember.
     face: {
       style: 'fox', skin: '#a53f0c', snout: '#f3e3cb', nose: '#241713',
-      eye: '#43301c', brow: '#8a4a16', eyeSize: 1.10, mark: 'whiskers',
+      eye: '#c8891f', brow: '#8a4a16', eyeSize: 1.16, mark: 'whiskers',
       idle: 'thoughtful',
     },
   },
@@ -378,10 +416,23 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // negative-crouch heavy this is the only other reclined driver, and the two
     // are 0.94 vs -0.14 apart on `shrug` so they still separate.
     crouch: -6, shrug: -0.10, chin: 6, elbowOut: 0.034,
+    // ⚠️ CAPY WAS THE ONLY RACER ON THE BOARD WITH NO EYES. The card is
+    // rendered with `happy`, and the animal cell draws `happy` on a capybara as
+    // "eyes squeezed with joy" — `lid = 1, squint = true` — which takes
+    // `drawAnimalEye`'s early-out and paints one lid stroke: no sclera, no
+    // iris, no catchlight. Her `idle` is `sleepy`, which is also `lid = 1`, so
+    // there was no state in which a parked Capy had eyes either.
+    //
+    // `neutral` is her "content" face: lids at 0.44, a soft mouth, iris and
+    // catchlight fully drawn. It is the calm unbothered look the character is
+    // written around, and it is the one she now wears on the card.
+    //
+    // The iris went from #2c1e16 (chroma 10 — a black dot) to a warm brown that
+    // still reads dark but has a colour in it at 4.8 px.
     face: {
       style: 'capy', skin: '#786047', snout: '#b59e7c', nose: '#2b2118',
-      eye: '#2c1e16', brow: '#6b4c30', eyeSize: 1.0, mark: 'whiskers',
-      idle: 'sleepy',
+      eye: '#5a3a20', brow: '#6b4c30', eyeSize: 1.10, mark: 'whiskers',
+      idle: 'sleepy', portrait: 'neutral',
     },
   },
 };
@@ -623,6 +674,87 @@ function facePatch(
   g.computeVertexNormals();
   return g;
 }
+
+/**
+ * A FACE PANEL WRAPPED ONTO A HELMET VISOR.
+ *
+ * ⚠️ WHY THIS EXISTS. Three racers had zero visible face on the racer-select
+ * card — Blitz, Pip and Ember — because a `verticalLoft` helmet shell reaches
+ * 1.12–1.24 R forward and `facePatch` sat at 0.92 R, i.e. *inside the helmet*.
+ * Measured in `.probe-tmp/facecard.ts`: 0.0 % of each of those three cards was
+ * face. You cannot boolean an aperture out of a lofted solid, and pushing the
+ * square patch through the shell would read as a mask bulging out of a helmet.
+ * So the visor becomes the face — see the `visor` cell in `KartMaterials.ts`.
+ *
+ * The section is a PARABOLA, not an arc: `bow` is how far the ends recede from
+ * the centre. A great-helm is a boxy superellipse (eSide 4.8) whose front is
+ * nearly flat, and a cylindrical strip that clears its centre buries its own
+ * ends in it — the panel has to follow the same flatness the shell has.
+ *
+ *   x(s) = halfW * s,  z(s) = -(zFront - bow * s^2),  s in [-1, 1]
+ *
+ * `v` is mapped onto `VISOR_BAND` so one atlas pixel is square on the panel;
+ * pick `halfH` ≈ 0.26 × the arc length or the eyes come out as slots.
+ */
+function visorPatch(
+  halfW: number, zFront: number, bow: number, halfH: number,
+  segU = 14, segV = 3,
+): THREE.BufferGeometry {
+  const cols = segU + 1;
+  const rows = segV + 1;
+  const pos = new Float32Array(cols * rows * 3);
+  const uv = new Float32Array(cols * rows * 2);
+  let p = 0;
+  for (let j = 0; j < rows; j++) {
+    const t = j / segV;
+    for (let i = 0; i < cols; i++) {
+      const u = i / segU;
+      const s = u * 2 - 1;
+      pos[p * 3] = halfW * s;
+      pos[p * 3 + 1] = (t * 2 - 1) * halfH;
+      pos[p * 3 + 2] = -(zFront - bow * s * s);
+      uv[p * 2] = u;
+      uv[p * 2 + 1] = lerp(VISOR_BAND.v0, VISOR_BAND.v1, t);
+      p++;
+    }
+  }
+  // Outward is -Z. cross(+v, +u) = cross(+Y, +X) = -Z, so the winding is
+  // (a, d, b) / (b, d, c) — asserted by `.probe-tmp/facecard.ts`.
+  const idx: number[] = [];
+  for (let j = 0; j < segV; j++) {
+    for (let i = 0; i < segU; i++) {
+      const a = j * cols + i, b = j * cols + i + 1;
+      const c = (j + 1) * cols + i + 1, d = (j + 1) * cols + i;
+      idx.push(a, d, b, b, d, c);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * Where each helmet's visor panel sits, in units of `headR`.
+ *
+ * `zFront` clears the shell's own forward extent (`hUp`) by 0.04–0.08 R at the
+ * centre, and `bow` matches how fast that shell's superellipse falls away
+ * sideways, so the panel is proud all the way across instead of only in the
+ * middle. `halfH` holds `halfH ≈ 0.13 × arcLength` (see `VISOR_BAND`).
+ */
+const VISOR_FIT: Partial<Record<HeadKind, {
+  halfW: number; zFront: number; bow: number; halfH: number; y: number;
+}>> = {
+  // shell hUp 1.145..1.18 R over the panel's height; hw 1.16 R, eSide 3.2.
+  fullHelmet: { halfW: 0.90, zFront: 1.225, bow: 0.200, halfH: 0.245, y: 0.14 },
+  // shell hUp 1.05..1.10 R; hw 1.10 R, eSide 4.8 — nearly a flat face, so a
+  // small bow. This panel replaces the great-helm's horizontal T-slit bar.
+  greatHelm: { halfW: 0.80, zFront: 1.160, bow: 0.070, halfH: 0.210, y: 0.18 },
+  // shell hUp 1.21..1.23 R; hw 1.12 R, eSide 3.2.
+  aero: { halfW: 0.85, zFront: 1.280, bow: 0.190, halfH: 0.225, y: 0.12 },
+};
 
 /** A thin curved shell (visor, brim, pauldron) swept around Y. */
 function shell(
@@ -1695,6 +1827,28 @@ function buildTail(b: RigBucket, d: DriverDef, s: Skeleton): void {
  * carries the philtrum, mouth and whiskers. Both are tagged `face`, so they
  * merge into one buffer — the split is free.
  */
+/**
+ * The furthest a `verticalLoft` profile reaches forward over a height range.
+ *
+ * `verticalLoft` reads a section's `z` as height and `y + hUp` as its forward
+ * extent, so this is the surface an eye panel at that height has to clear.
+ * Sampled rather than taken over the sections, because the band that matters
+ * usually falls between two of them.
+ */
+function loftFrontOver(sections: LoftSection[], y0: number, y1: number): number {
+  let m = -Infinity;
+  for (let i = 0; i <= 16; i++) {
+    const y = lerp(y0, y1, i / 16);
+    // Piecewise-linear interpolation of (y + hUp) against section height.
+    let k = 1;
+    while (k < sections.length - 1 && sections[k].z < y) k++;
+    const a = sections[k - 1], c = sections[k];
+    const t = clamp01((y - a.z) / Math.max(1e-6, c.z - a.z));
+    m = Math.max(m, lerp(a.y + a.hUp, c.y + c.hUp, t));
+  }
+  return m;
+}
+
 function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
   const R = d.headR;
   const hy = s.headY;
@@ -1702,7 +1856,7 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
   const mz = R * (d.muzzle ?? 1);
 
   // --- cranium -----------------------------------------------------------
-  b.add('head', 'fur', verticalLoft(fox
+  const cranium: LoftSection[] = fox
     // A fox skull is a wedge: wide at the cheeks, narrow jaw, tapering crown.
     ? [
       { z: -R * 0.92, y: -R * 0.08, hw: R * 0.48, hUp: R * 0.54, hDown: R * 0.60, eSide: 3.0, eTop: 2.8, eBot: 3.2 },
@@ -1729,7 +1883,16 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       { z: R * 0.26, y: 0, hw: R * 1.26, hUp: R * 0.88, hDown: R * 1.12, eSide: 5.4, eTop: 6.4, eBot: 4.8 },
       { z: R * 0.80, y: -R * 0.02, hw: R * 1.14, hUp: R * 0.80, hDown: R * 0.98, eSide: 4.8, eTop: 5.6, eBot: 4.2 },
       { z: R * 1.06, y: -R * 0.04, hw: R * 0.78, hUp: R * 0.56, hDown: R * 0.66, eSide: 4.0, eTop: 4.2, eBot: 3.6 },
-    ], 22), { pos: [0, hy, 0], detail: 0 });
+    ];
+  b.add('head', 'fur', verticalLoft(cranium, 22), { pos: [0, hy, 0], detail: 0 });
+
+  // Where the eye band lands. Solved here, before anything else is placed, so
+  // the brow tufts and the fox's tear-stripe ridge can be positioned against
+  // it instead of against a constant that stops being true when it moves.
+  const eyeW = R * (fox ? 1.56 : 1.66);
+  const eyeH = R * (fox ? 0.74 : 0.62);
+  const eyeY = R * (fox ? 0.40 : 0.52);
+  const eyeZ = loftFrontOver(cranium, eyeY - eyeH * 0.5, eyeY + eyeH * 0.5) + R * 0.09;
 
   // --- snout -------------------------------------------------------------
   // `loft` sweeps along +Z and wants ascending z, so the tip is authored first.
@@ -1747,11 +1910,23 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // at the base) and from superellipse exponents up at 5, so the corners
     // chamfer instead of rounding. Shortening the muzzle to fake bluntness was
     // the earlier mistake and it cost the species read entirely.
+    // ⚠️ THE MUZZLE WAS SWALLOWING THE EYES. `hUp` ran 0.74–0.86 R about a
+    // centre at hy - 0.27 R, so the top of this block reached hy + 0.62 R —
+    // ABOVE the eye centre at hy + 0.31 R. Capy's eyes were painted on a panel
+    // that sits inside her own snout: of 608 face pixels the card draws for
+    // her, 462 were lost to `furAlt` and `fur`, and only 93 survived. She was
+    // the least-faced racer on the board and this was why.
+    //
+    // A capybara's muzzle is deep DOWNWARD from a high eye line — the whole
+    // point of the animal is that eyes, ears and nostrils sit on one plane
+    // above a heavy jaw. So `hUp` comes down and `hDown` is untouched: the
+    // block keeps 1.42 R of depth at its base and stays a blunt rectangle, it
+    // just stops being taller than the head it is attached to.
     : loft([
-      { z: tipZ, y: hy - R * 0.30, hw: R * 0.92, hUp: R * 0.74, hDown: R * 0.86, eSide: 5.0, eTop: 5.2, eBot: 4.4 },
-      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.29, hw: R * 0.98, hUp: R * 0.78, hDown: R * 0.90, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
-      { z: -R * 0.40, y: hy - R * 0.27, hw: R * 1.04, hUp: R * 0.82, hDown: R * 0.92, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
-      { z: R * 0.16, y: hy - R * 0.24, hw: R * 1.12, hUp: R * 0.86, hDown: R * 0.94, eSide: 4.8, eTop: 5.0, eBot: 4.2 },
+      { z: tipZ, y: hy - R * 0.30, hw: R * 0.92, hUp: R * 0.60, hDown: R * 0.98, eSide: 5.0, eTop: 5.2, eBot: 4.4 },
+      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.29, hw: R * 0.98, hUp: R * 0.63, hDown: R * 1.02, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: -R * 0.40, y: hy - R * 0.27, hw: R * 1.04, hUp: R * 0.65, hDown: R * 1.04, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: R * 0.16, y: hy - R * 0.24, hw: R * 1.12, hUp: R * 0.68, hDown: R * 1.06, eSide: 4.8, eTop: 5.0, eBot: 4.2 },
     ], { segments: 18 });
   b.add('head', 'furAlt', snout, { detail: 0 });
 
@@ -1816,18 +1991,29 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     }
     // Dark eye-to-muzzle line in relief, the fox's "tear stripe". Painting it in
     // the atlas alone leaves it flat; a shallow ridge catches the key light.
+    // Anchored to `eyeZ`, because when the eye band moved forward this ridge
+    // was left 0.3 R behind it, inside the skull, doing nothing.
     b.pair('head', 'head', 'furDark', superShape(R * 0.07, R * 0.05, R * 0.30, 2.6, 2.2, 6, 4), {
-      pos: [R * 0.40, hy - R * 0.02, -R * 0.66], rot: [-16, 10, -8], detail: 2, shade: 0.9,
+      pos: [R * 0.34, hy + eyeY - R * 0.28, -(eyeZ - R * 0.10)],
+      rot: [-16, 10, -8], detail: 2, shade: 0.9,
     });
   }
 
   // --- face panels -------------------------------------------------------
   // Upper band: eyes + brows, on the skull front.
-  const eyeW = R * (fox ? 1.56 : 1.66);
-  const eyeH = R * (fox ? 0.74 : 0.70);
-  const eyeZ = R * (fox ? 0.88 : 0.80);
-  b.add('head', 'face', facePatch(eyeW, eyeH, eyeZ, R * 0.24, 6, ANIMAL_MUZZLE_SPLIT, 1), {
-    pos: [0, hy + R * (fox ? 0.28 : 0.34), 0], detail: 0,
+  //
+  // ⚠️ THE DEPTH IS SOLVED, NOT GUESSED. Both animals' eye bands used to be
+  // authored at a flat 0.80–0.88 R while the cranium loft reaches 0.88–0.94 R
+  // forward, so the panel carrying the eyes was *inside the skull* and most of
+  // it never rasterised. It is now placed off the cranium's own profile over
+  // exactly the height range the band occupies, with a real clearance, and the
+  // dome is deeper so the panel's edges still sink back into the head.
+  //
+  // The band also sits HIGHER on both animals than it did. A fox's and a
+  // capybara's eyes both sit above the base of the muzzle; at the old heights
+  // the snout crossed in front of them.
+  b.add('head', 'face', facePatch(eyeW, eyeH, eyeZ, R * 0.20, 6, ANIMAL_MUZZLE_SPLIT, 1), {
+    pos: [0, hy + eyeY, 0], detail: 0,
   });
   // Lower band: philtrum + mouth + whiskers, on the snout's front face.
   const mW = R * (fox ? 0.64 : 1.12);
@@ -1892,8 +2078,10 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
 
   // Brow ridge tufts: a pale sliver over each eye. Cheap, and it gives the AO
   // bake something to darken so the eyes are not two decals on a sphere.
+  // Placed off `eyeZ` rather than off a hard-coded depth — when the eye band
+  // moved forward these stayed behind it and stopped existing.
   b.pair('head', 'head', 'furAlt', superShape(R * 0.20, R * 0.055, R * 0.10, 2.6, 2.4, 7, 4), {
-    pos: [R * 0.36, hy + R * (fox ? 0.52 : 0.56), -R * (fox ? 0.78 : 0.70)],
+    pos: [R * 0.36, hy + eyeY + R * 0.22, -(eyeZ - R * 0.06)],
     rot: [0, 0, fox ? -12 : -8], detail: 2, shade: 0.95,
   });
 }
@@ -2298,29 +2486,35 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
   const skullSlot: MaterialSlot = isRobot ? 'chrome' : 'skin';
 
   // --- cranium ---------------------------------------------------------
+  // Kept as a named profile so the face patch's depth can be SOLVED against it
+  // (`loftFrontOver`) instead of guessed. Every non-animal head used to author
+  // its face at a flat 0.92 R while these lofts reach 0.88–1.02 R forward.
+  let cranium: LoftSection[] = [];
   if (animal) {
     buildAnimalHead(b, d, s);
   } else if (d.head === 'bubble') {
     // Alien: tall, tapered, back-swept cranium.
-    b.add('head', 'skin', verticalLoft([
+    cranium = [
       { z: -R * 0.98, y: 0.004, hw: R * 0.54, hUp: R * 0.60, hDown: R * 0.52, eSide: 2.8, eTop: 2.6, eBot: 3.0 },
       { z: -R * 0.30, y: 0.000, hw: R * 0.86, hUp: R * 0.92, hDown: R * 0.86, eSide: 2.6, eTop: 2.4, eBot: 2.8 },
       { z: R * 0.34, y: -0.014, hw: R * 0.96, hUp: R * 0.80, hDown: R * 1.10, eSide: 2.6, eTop: 2.6, eBot: 2.6 },
       { z: R * 1.10, y: -0.030, hw: R * 0.62, hUp: R * 0.44, hDown: R * 0.90, eSide: 2.6, eTop: 2.6, eBot: 2.6 },
-    ], 22), { pos: [0, hy, 0], detail: 0 });
+    ];
+    b.add('head', 'skin', verticalLoft(cranium, 22), { pos: [0, hy, 0], detail: 0 });
   } else if (isRobot) {
-    b.add('head', 'metal', verticalLoft([
+    cranium = [
       { z: -R * 0.92, y: 0, hw: R * 0.62, hUp: R * 0.64, hDown: R * 0.60, eSide: 4.4, eTop: 4.0, eBot: 4.4 },
       { z: -R * 0.20, y: 0, hw: R * 0.94, hUp: R * 0.92, hDown: R * 0.90, eSide: 5.0, eTop: 4.4, eBot: 4.6 },
       { z: R * 0.56, y: 0, hw: R * 0.90, hUp: R * 0.86, hDown: R * 0.86, eSide: 5.0, eTop: 4.4, eBot: 4.6 },
       { z: R * 0.94, y: 0, hw: R * 0.64, hUp: R * 0.60, hDown: R * 0.60, eSide: 4.2, eTop: 3.6, eBot: 3.8 },
-    ], 20), { pos: [0, hy, 0], detail: 0 });
+    ];
+    b.add('head', 'metal', verticalLoft(cranium, 20), { pos: [0, hy, 0], detail: 0 });
   } else {
     // Human skull. `verticalLoft` reads `z` as HEIGHT (so -0.98 R is the chin
     // and +0.92 R the crown), `hUp` as the forward/face extent and `hDown` as
     // the back of the head. Six distinct crania — see `DriverDef.skull`.
-    b.add('head', skullSlot, verticalLoft(humanSkull(d.skull ?? 'round', R), 22),
-      { pos: [0, hy, 0], detail: 0 });
+    cranium = humanSkull(d.skull ?? 'round', R);
+    b.add('head', skullSlot, verticalLoft(cranium, 22), { pos: [0, hy, 0], detail: 0 });
 
     // Jaw / chin block. A separate volume, because the single loft above could
     // only ever taper to a point and every human ended up with the same soft
@@ -2349,18 +2543,46 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
 
   // --- face patch ------------------------------------------------------
   // Animals already placed their own split panels and snout nose.
-  if (!animal) {
-    const faceW = d.head === 'bubble' ? R * 1.62 : R * 1.52;
-    const faceH = d.head === 'bubble' ? R * 1.42 : R * 1.56;
-    const faceZ = -(R * (d.head === 'bubble' ? 0.84 : 0.92));
-    b.add('head', 'face', facePatch(faceW, faceH, -faceZ, R * 0.30, 6), {
-      pos: [0, hy + R * (isRobot ? 0.04 : 0.02), 0], detail: 0,
+  const visorFace = d.face.style === 'visor' && VISOR_FIT[d.head] !== undefined;
+  if (visorFace) {
+    // The helmet swallows the cranium, so the FACE IS THE VISOR. The square
+    // patch is not drawn at all — it was 100 % occluded and cost triangles for
+    // nothing. See `visorPatch()`.
+    const f = VISOR_FIT[d.head]!;
+    b.add('head', 'face', visorPatch(
+      R * f.halfW, R * f.zFront, R * f.bow, R * f.halfH,
+    ), { pos: [0, hy + R * f.y, 0], detail: 0 });
+  } else if (!animal) {
+    // ⚠️ THE FACE PATCH USED TO SIT INSIDE THE SKULL. `faceZ` was a flat
+    // -0.92 R for everybody while these crania reach 0.88–1.02 R forward, so on
+    // most of the heads the face was BEHIND its own forehead and the card
+    // showed 1–3 % face. The depth is now solved from the cranium's own profile
+    // over the band of height the patch occupies, with a real clearance.
+    //
+    // The dome (`curve`) is what sinks the patch's EDGES back into the head so
+    // it does not read as a mask. It is a trade against visible area, and 0.36
+    // is where measurement put it: at 0.44 the edges swallowed nearly half the
+    // patch again, at 0.24 the rim of the plate stood proud of the cheek.
+    const bubble = d.head === 'bubble';
+    const faceW = bubble ? R * 1.62 : R * 1.52;
+    const faceH = bubble ? R * 1.42 : R * 1.56;
+    const faceY = R * (isRobot ? 0.04 : 0.02);
+    const faceZ = -(loftFrontOver(cranium, faceY - faceH * 0.5, faceY + faceH * 0.5) + R * 0.075);
+    b.add('head', 'face', facePatch(faceW, faceH, -faceZ, R * 0.36, 6), {
+      pos: [0, hy + faceY, 0], detail: 0,
     });
 
-    if (!isRobot && d.head !== 'bubble') {
+    if (!isRobot && !bubble) {
       // Nose — tiny, but its shadow is what makes a face read in 3D.
+      //
+      // Sat at `faceZ - 0.06 R` when `faceZ` was a flat 0.92 R, so it barely
+      // cleared the skull. Solving `faceZ` onto each cranium moved it forward
+      // with the face and it began projecting 0.27 R past the forehead on the
+      // `long` skull — a beak, and a real change to that card's outline for no
+      // design reason. Pulled back INSIDE the patch's own front so the shadow
+      // survives and the profile does not grow.
       const nose = superShape(R * 0.11, R * 0.10, R * 0.13, 2.4, 2.2, 8, 6);
-      b.add('head', 'skin', nose, { pos: [0, hy - R * 0.02, faceZ - R * 0.06], detail: 1 });
+      b.add('head', 'skin', nose, { pos: [0, hy - R * 0.02, faceZ + R * 0.05], detail: 1 });
     }
   }
 
@@ -2406,8 +2628,17 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       // Visor aperture, tinted, wraps around the front.
       const visor = shell(R * 1.20, 1.05, R * 0.34, -R * 0.34, 0.012, 22);
       b.add('head', 'glass', visor, { pos: [0, hy + R * 0.14, 0], rot: [0, 180, 0], detail: 0 });
-      const surround = shell(R * 1.24, 1.10, R * 0.42, -R * 0.42, 0.016, 22);
-      b.add('head', 'metal', surround, { pos: [0, hy + R * 0.14, 0], rot: [0, 180, 0], detail: 1, shade: 0.6 });
+      // ⚠️ THE "SURROUND" WAS A LID, NOT A FRAME. `shell()` lathes a five-point
+      // profile that spans its whole `yBot..yTop` range, so one call at
+      // radius 1.24 R by ±0.42 R was a SOLID metal panel completely covering
+      // the 1.20 R by ±0.34 R glass visor underneath it. Blitz's tinted visor
+      // has never been visible. It is now two thin lips with the visor —
+      // and the face panel — open between them.
+      for (const [yT, yB] of [[R * 0.42, R * 0.30], [-R * 0.30, -R * 0.42]]) {
+        b.add('head', 'metal', shell(R * 1.24, 1.10, yT, yB, 0.016, 22), {
+          pos: [0, hy + R * 0.14, 0], rot: [0, 180, 0], detail: 1, shade: 0.6,
+        });
+      }
       // Chin bar
       b.add('head', 'paint2', verticalLoft([
         { z: -0.012, y: -R * 0.62, hw: R * 0.78, hUp: R * 0.52, hDown: R * 0.30, eSide: 3.2, eTop: 3.0, eBot: 3.4 },
@@ -2591,12 +2822,23 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
         { z: R * 0.52, y: -0.004, hw: R * 1.04, hUp: R * 1.04, hDown: R * 1.02, eSide: 5.0, eTop: 4.2, eBot: 4.4 },
         { z: R * 1.02, y: -0.004, hw: R * 0.78, hUp: R * 0.78, hDown: R * 0.78, eSide: 4.2, eTop: 3.4, eBot: 3.6 },
       ], 22), { pos: [0, hy + R * 0.06, 0], detail: 0 });
-      // T-slit: horizontal eye slot + vertical breath slot, both dark glass.
-      b.add('head', 'glass', roundedBox(R * 1.60, R * 0.22, R * 0.10, 5.0), {
-        pos: [0, hy + R * 0.18, -R * 1.02], detail: 0,
-      });
+      // ⚠️ THE T-SLIT WAS INSIDE THE HELMET. Both bars sat at z = -1.02 R with
+      // a 0.10 R depth, so their front faces reached -1.07 R — while the shell
+      // in front of them reaches -1.05..-1.12 R. Ember's one identifying facial
+      // feature was buried in his own visor, which is why a raycast through his
+      // face found `paint` 43 times out of 49.
+      //
+      // The horizontal bar is gone: the `visorPatch` face panel IS the eye
+      // slot now, and it carries two glowing eyes instead of a dead strip. The
+      // breath slot survives, moved proud of the shell, and runs down between
+      // the eyes (they sit at ±0.30 R, it is ±0.10 R wide) so the T still reads.
       b.add('head', 'glass', roundedBox(R * 0.20, R * 0.70, R * 0.10, 5.0), {
-        pos: [0, hy - R * 0.20, -R * 1.02], detail: 0,
+        pos: [0, hy - R * 0.28, -R * 1.12], detail: 0,
+      });
+      // Brow bar: a hard chromed lip over the eye slot. A great-helm's slot
+      // needs a shadow line above it or the panel reads as a decal.
+      b.add('head', 'chrome', roundedBox(R * 1.76, R * 0.13, R * 0.13, 4.4), {
+        pos: [0, hy + R * 0.46, -R * 1.06], rot: [-6, 0, 0], detail: 1, shade: 0.72,
       });
       // Crest
       const crest = extrude([
@@ -2676,35 +2918,59 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
         _b.set(R * 0.52, hy - R * 1.52, -R * 0.16),
         R * 0.030, R * 0.030, 6, 2, 0,
       ), { detail: 1, shade: 0.68 });
-      // GOGGLES PUSHED UP ONTO THE FOREHEAD, standing proud with a gap beneath.
-      // This is the classic aviator read and it is worth far more silhouette than
-      // goggles worn flat over the eyes, which just fill the face with a band.
-      // Goggles stay AT THE EYES. Pushing them onto the forehead was tried and
-      // measured worse (4.83 -> 4.32): a band across the crown is solid area in
-      // the exact region the outline is decided, and it flattened the card.
-      const strap = shell(R * 1.06, 1.45, 0.024, -0.024, 0.011, 20);
-      b.add('head', 'rubber', strap, { pos: [0, hy + R * 0.24, 0], rot: [0, 180, 0], detail: 0, shade: 0.65 });
+      // GOGGLES ON THE BROW LINE, standing proud with a gap beneath.
+      //
+      // ⚠️ THEY USED TO SIT ON THE IRISES. The rubber strap, the chrome rims and
+      // the tinted lenses were centred at hy + 0.24 R, z = -0.90 R — directly on
+      // Strata's eyes, which is why only 60 % of his iris discs survived a depth
+      // test and the rest lost to `chrome` and `rubber`. Worse, once the face
+      // patch was solved onto the `long` cranium's real 1.02 R front, the
+      // LENSES ENDED UP BEHIND THE FACE: dark glass discs floating inside a
+      // head, hidden and paying for triangles.
+      //
+      // There is a note in the history saying goggles-on-the-forehead measured
+      // worse for card complexity (4.83 -> 4.32). That measurement was taken
+      // through `basisFor('threeQ')`, i.e. from BEHIND the head (see
+      // `.probe-tmp/facecard.ts`), where the difference between goggles at the
+      // eyes and goggles on the brow is close to meaningless. Re-measured on
+      // the real card framing after this move: complexity 4.89 -> 4.94.
+      // The iris disc reaches hy + 0.22 R and the rim's tube reaches 0.405 R
+      // below its centre, so 0.66 R is the lowest the goggles can sit without
+      // clipping the eye; the strap radius follows the cap's own 0.90 R front
+      // at that height rather than the 1.10 R it has lower down.
+      const goggleY = hy + R * 0.66;
+      const goggleZ = -R * 0.96;
+      const strap = shell(R * 0.96, 1.45, 0.024, -0.024, 0.011, 20);
+      b.add('head', 'rubber', strap, { pos: [0, goggleY, 0], rot: [0, 180, 0], detail: 0, shade: 0.65 });
       b.pair('head', 'head', 'glass', disc(R * 0.34, 0.014, 0, 18), {
-        pos: [R * 0.42, hy + R * 0.24, -R * 0.90], rot: [0, 8, 0], detail: 0,
+        pos: [R * 0.42, goggleY, goggleZ], rot: [0, 8, 0], detail: 0,
       });
       b.pair('head', 'head', 'chrome', new THREE.TorusGeometry(R * 0.35, R * 0.055, 6, 14), {
-        pos: [R * 0.42, hy + R * 0.24, -R * 0.90], rot: [0, 8, 0], detail: 0,
+        pos: [R * 0.42, goggleY, goggleZ], rot: [0, 8, 0], detail: 0,
       });
       b.add('head', 'chrome', roundedBox(R * 0.24, R * 0.06, R * 0.06, 4.0), {
-        pos: [0, hy + R * 0.24, -R * 0.92], detail: 1,
+        pos: [0, goggleY, goggleZ - R * 0.02], detail: 1,
       });
       // Scarf streaming off the neck at HEAD height. The torso scarf is cropped
       // out of the racer-select card entirely, so it did nothing for the framing
       // the roster is judged on. This one lives on the head node, is long, thin
-      // and one-sided, and it is what finally separates Strata from Foxy — the
-      // two cards measured 0.819 against each other, the worst pair on the
-      // roster and the most embarrassing one.
+      // and one-sided, and it is what finally separates Strata from Foxy.
+      //
+      // ⚠️ IT WAS ON THE WRONG SIDE OF THE HEAD, AND THAT IS THE WHOLE STORY OF
+      // THIS ROUND IN ONE OBJECT. It was authored sweeping to -X, away from the
+      // portrait camera, because the probe that graded the card had its camera
+      // 112.9 degrees out — behind the driver — so the far side looked like the
+      // near side. On the real card the scarf was tucked behind the head and
+      // barely reached the outline. Mirrored to +X, into the open frame the
+      // lens actually sees, and nothing else changed: worst card pair
+      // 0.786 -> 0.768, p50 0.761 -> 0.744, Strata's own worst 0.786 -> 0.744,
+      // his card complexity 5.13 -> 5.21. No geometry added. Placement.
       b.add('head', 'clothAlt', taperTube([
-        new THREE.Vector3(-R * 0.62, hy - R * 1.20, R * 0.18),
-        new THREE.Vector3(-R * 1.26, hy - R * 0.86, R * 0.52),
-        new THREE.Vector3(-R * 1.86, hy - R * 0.30, R * 0.74),
-        new THREE.Vector3(-R * 2.10, hy + R * 0.34, R * 0.82),
-        new THREE.Vector3(-R * 1.86, hy + R * 0.86, R * 0.78),
+        new THREE.Vector3(R * 0.62, hy - R * 1.20, R * 0.18),
+        new THREE.Vector3(R * 1.26, hy - R * 0.86, R * 0.52),
+        new THREE.Vector3(R * 1.86, hy - R * 0.30, R * 0.74),
+        new THREE.Vector3(R * 2.10, hy + R * 0.34, R * 0.82),
+        new THREE.Vector3(R * 1.86, hy + R * 0.86, R * 0.78),
       ], [R * 0.20, R * 0.17, R * 0.14, R * 0.11, R * 0.045], 8, 16, 0.06), {
         detail: 0, shade: 0.96,
       });
@@ -2754,9 +3020,13 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       b.pair('head', 'head', 'plastic', new THREE.TorusGeometry(rimR, R * 0.030, 5, 12), {
         pos: [R * 0.40, lensY, lensZ], rot: [0, 9, 0], detail: 0,
       });
-      b.pair('head', 'head', 'glass', disc(rimR * 0.94, R * 0.014, 0, 10), {
-        pos: [R * 0.40, lensY, lensZ + R * 0.004], rot: [0, 9, 0], detail: 0,
-      });
+      // ⚠️ THE LENSES WERE VEILING THE MASCOT'S EYES. The shared `glass`
+      // material is opacity 0.55 over 0x11161f — near-black — so a lens disc
+      // directly over each eye put a dark filter on the only pair of eyes on
+      // the roster big enough to read (38 of Foxy's face pixels measured
+      // veiled). Real spectacle lenses are invisible; the RIMS are the read,
+      // and they are unchanged. Dropping the discs costs no silhouette either:
+      // at 0.94 of the rim radius they sit entirely inside the torus.
       b.add('head', 'plastic', limb(
         _a.set(-R * 0.09, lensY + R * 0.06, lensZ - R * 0.01),
         _b.set(R * 0.09, lensY + R * 0.06, lensZ - R * 0.01),

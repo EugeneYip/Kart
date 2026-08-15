@@ -132,8 +132,22 @@ const FILL = 0.90;
 const HEAD_RISE = 0.04;
 /** Head yaw back toward the lens (`DriverPose.look`, + = look right). */
 const LOOK = 0.22;
-/** Expression every portrait wears. */
+/**
+ * Default card expression. Per-character override in `FaceSpec.portrait`.
+ *
+ * ⚠️ THIS USED TO BE THE ONLY ANSWER AND IT CLOSED A CHARACTER'S EYES. The
+ * animal cell draws `happy` on a capybara as "eyes squeezed with joy" —
+ * `lid = 1, squint = true` — so Capy, one of the two named characters, was the
+ * only racer on the board with no eyes at all. A product shot is not a reaction
+ * shot; which face a character wears for their portrait is a per-character
+ * decision, so it lives with the character.
+ */
 const PORTRAIT_EXPRESSION: FaceExpression = 'happy';
+
+/** The expression this racer's card wears. */
+function portraitExpression(spec: FaceSpec): FaceExpression {
+  return spec.portrait ?? PORTRAIT_EXPRESSION;
+}
 /** Supersample factor. Cheaper and cleaner than MSAA plus a resolve. */
 const SUPERSAMPLE = 2;
 /** Iterations of the distance solve. Converges to <0.5 % in three. */
@@ -353,14 +367,15 @@ export class PortraitStudio {
     // Per-slot materials (`merged = null`): the portrait is the one place the
     // tiling fur / knit normal maps earn their draw calls, and the merged atlas
     // is the one thing that cannot carry them.
+    const expression = portraitExpression(subject.faceSpec);
     const rig = new DriverRig(build, mats, face, `portrait:${subject.id}`, null);
     rig.setLod(0);
-    rig.setExpression(PORTRAIT_EXPRESSION);
+    rig.setExpression(expression);
     // `snap` writes the pose with no easing — and ticks the blink timer, which is
     // why the atlas state is forced afterwards rather than before.
     rig.snap({ ...NEUTRAL_POSE, look: LOOK });
     face.setAtlasState({
-      expr: Math.max(0, FACE_EXPRESSIONS.indexOf(PORTRAIT_EXPRESSION)),
+      expr: Math.max(0, FACE_EXPRESSIONS.indexOf(expression)),
       blink: false,
     });
 
@@ -879,14 +894,115 @@ function compose(
   return out.c;
 }
 
+// ---------------------------------------------------------------------------
+//  Set-level colour discipline
+// ---------------------------------------------------------------------------
+/**
+ * ⚠️ THE ROSTER PASSED ITS COLOUR GATE AND STILL LOOKED LIKE TEN STICKERS.
+ *
+ * `.probe-tmp/charqa.ts` has a deltaE FLOOR — every driver separates from their
+ * own card. That is legibility, not a palette, and it is satisfied just as well
+ * by ten unrelated colours as by a designed set. Measured in
+ * `.probe-tmp/palette.ts`, the ten card grounds are:
+ *
+ *   - clustered in hue: five of them (Nova 38, Ember 50, Capy 53, Foxy 59,
+ *     Torque 66 degrees) inside a 28-degree wedge of orange, then gaps of 82
+ *     and 87 degrees elsewhere. An even ten-way split would be 36 degrees.
+ *   - wild in chroma: 23 (Strata, a muddy slate) to 103 (Vex, neon violet).
+ *   - wild in the accent: four near-white creams, two near-blacks, two golds,
+ *     one slate blue, one dark purple, with no relationship to each other.
+ *   - and the glow that lights the halo runs L 66 to 95, so Zephyr's card had
+ *     a halo three times brighter than Foxy's for no authored reason.
+ *
+ * The hues live in `src/karts/Characters.ts`, which this agent does not own and
+ * which is also the kart paint and the HUD colour — they are identity and they
+ * should not move. What CAN be fixed here is everything else: the ten cards now
+ * share one lighting model and one stage, and differ by hue, which is what
+ * makes a set a set.
+ *
+ * Chroma is compressed toward the roster's midpoint rather than clamped, so the
+ * ordering survives and nobody's colour is overruled; lightness is deliberately
+ * NOT touched, because the deltaE floor between a driver's pelt and their card
+ * is carried almost entirely by lightness and squeezing it would eat the gate.
+ * `.probe-tmp/palette.ts` re-measures that floor against these exact functions.
+ */
+const CHROMA_TARGET = 62;
+const CHROMA_PULL = 0.60;
+/** Halo luminance every card is normalised to, and its chroma window. */
+const HALO_L = 84;
+const HALO_C = { min: 38, max: 66 };
+/** The shared stage the whole roster stands on. */
+const STAGE = '#0d1220';
+const STAGE_LOW = '#141c2e';
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+function linearToSrgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
+}
+
+/** sRGB hex -> CIE LCh(ab). */
+function toLch(v: number): { L: number; C: number; h: number } {
+  const r = srgbToLinear(((v >> 16) & 255) / 255);
+  const g = srgbToLinear(((v >> 8) & 255) / 255);
+  const b = srgbToLinear((v & 255) / 255);
+  const X = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+  const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const Z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+  const f = (t: number): number => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const L = 116 * f(Y) - 16;
+  const A = 500 * (f(X) - f(Y));
+  const B = 200 * (f(Y) - f(Z));
+  let h = Math.atan2(B, A) * 180 / Math.PI;
+  if (h < 0) h += 360;
+  return { L, C: Math.hypot(A, B), h };
+}
+
+/** CIE LCh(ab) -> css hex. */
+function fromLch(L: number, C: number, h: number): string {
+  const rad = h * Math.PI / 180;
+  const A = Math.cos(rad) * C;
+  const B = Math.sin(rad) * C;
+  const fy = (L + 16) / 116;
+  const fx = fy + A / 500;
+  const fz = fy - B / 200;
+  const inv = (t: number): number => (t ** 3 > 0.008856 ? t ** 3 : (t - 16 / 116) / 7.787);
+  const X = inv(fx) * 0.95047, Y = inv(fy), Z = inv(fz) * 1.08883;
+  const r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+  const g = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+  const b = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+  const to255 = (c: number): string => Math.round(clamp01(linearToSrgb(clamp01(c))) * 255)
+    .toString(16).padStart(2, '0');
+  return `#${to255(r)}${to255(g)}${to255(b)}`;
+}
+
+/**
+ * The racer's own hue, with its chroma pulled toward the roster midpoint.
+ * Lightness untouched — see the note above.
+ */
+export function disciplinedGround(v: number): string {
+  const c = toLch(v);
+  return fromLch(c.L, CHROMA_TARGET + (c.C - CHROMA_TARGET) * CHROMA_PULL, c.h);
+}
+
+/** The racer's emissive accent, normalised to one halo strength for the set. */
+export function disciplinedHalo(v: number): string {
+  const c = toLch(v);
+  // A near-neutral glow has no hue worth preserving; give it the cool studio
+  // tint rather than amplifying whatever rounding produced its 3 degrees.
+  if (c.C < 6) return fromLch(HALO_L, 14, 232);
+  return fromLch(HALO_L, clamp(c.C, HALO_C.min, HALO_C.max), c.h);
+}
+
 /** The procedural card behind the bust. Canvas 2D, like the rest of the UI art. */
 function paintCard(
   g: CanvasRenderingContext2D, size: number,
   subject: PortraitSubject, framing: PortraitFraming,
 ): void {
-  const a = hex(subject.colorA);
-  const b = hex(subject.colorB);
-  const glow = hex(subject.glow);
+  const a = disciplinedGround(subject.colorA);
+  const bRaw = toLch(subject.colorB);
+  const glow = disciplinedHalo(subject.glow);
 
   // Head centre in canvas pixels — NDC y is up, canvas y is down.
   const hx = (framing.headCentre.x * 0.5 + 0.5) * size;
@@ -928,11 +1044,23 @@ function paintCard(
 
   // Base wash: the racer's paint high, their accent low, dark at the very bottom
   // so the card has a floor for the shadow to sit on.
+  //
+  // THE TOP LIGHT AND THE FLOOR ARE THE SAME ON ALL TEN. They used to be
+  // derived from each racer's own hexes, so the "light" was warm on one card
+  // and cold on the next, and the floor ran from a near-white cream (Nova,
+  // Pip, Strata, Foxy) to a near-black (Ember, Zephyr) — the single loudest
+  // reason the board read as unrelated stickers rather than as one set. The
+  // light is now one warm studio white and the floor is one deep stage tone,
+  // carrying only a 30 % tint of the racer's accent HUE at a bounded chroma so
+  // it still belongs to them.
+  const floor = bRaw.C < 8
+    ? STAGE_LOW
+    : mix(STAGE_LOW, fromLch(38, Math.min(bRaw.C, 48), bRaw.h), 0.30);
   const wash = g.createLinearGradient(0, 0, size * 0.35, size);
-  wash.addColorStop(0, mix(a, '#ffffff', 0.30));
+  wash.addColorStop(0, mix(a, '#fff6e8', 0.28));
   wash.addColorStop(0.52, a);
-  wash.addColorStop(0.86, mix(b, '#101725', 0.45));
-  wash.addColorStop(1, '#0d1220');
+  wash.addColorStop(0.86, floor);
+  wash.addColorStop(1, STAGE);
   g.fillStyle = wash;
   g.fillRect(0, 0, size, size);
 
@@ -964,10 +1092,6 @@ function make2d(w: number, h: number): { c: HTMLCanvasElement; g: CanvasRenderin
   c.height = h;
   const g = c.getContext('2d');
   return g ? { c, g } : null;
-}
-
-function hex(v: number): string {
-  return `#${_col.setHex(v).getHexString()}`;
 }
 
 function rgba(css: string, alpha: number): string {
