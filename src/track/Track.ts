@@ -717,7 +717,17 @@ export class Track implements ITrackService, ISubsystem {
           // A deck or a bore is a structure, not ground: at volcano t=0.565 the
           // carriageway is 40 m above the basin floor. Anything authored beside
           // it was authored in the deck's frame and must stay there.
-          elevated: (_at.flags & (TF.Bridge | TF.Tunnel)) !== 0,
+          //
+          // `TF.AntiGravity` belongs in this set and was missing. Neon's wall ride
+          // is authored `bank: 46` rising to `bank: 84` — a carriageway running up
+          // a vertical face, which is a structure by any reading. While the terrain
+          // bake still mounded earth up that face the omission was invisible,
+          // because there was ground under those props to catch them. Now that the
+          // bake correctly declines to invent a 12 m cone of dirt against an 88
+          // degree wall, they fall: measured re-seat corrections on neonMetropolis
+          // went p90 3.70 -> 9.68 m and max 17.67 -> 31.44 m, all `agPylon`
+          // instances authored in the wall-ride's frame.
+          elevated: (_at.flags & (TF.Bridge | TF.Tunnel | TF.AntiGravity)) !== 0,
         },
       });
     };
