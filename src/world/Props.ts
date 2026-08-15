@@ -5733,13 +5733,37 @@ export class Props implements ISubsystem {
         b.prism(0, y, 0, r * 0.5, 6.5, 8, 0x2a3038, { taper: 0.4 });
         b.prism(0, y + 6.5, 0, 0.3, 9, 6, 0x9aa1a9, { taper: 0.4 });
         const glow = this.builder();
-        // Ring of crown lights + a beacon at the mast tip.
+        // ---- LIT OVER ITS WHOLE HEIGHT, not just at the setbacks -------------
+        // Found by `.probe-tmp/landmark.ts`, not reported by the owner: the gate
+        // it applies to every authored group over 90 m on a night circuit is
+        // structural rather than a list of the three city-series names, so it
+        // also judged this one. It scored `lit% 40` — five setback rings and a
+        // beacon, with the 6.5 m cap, the 9 m mast and the whole face of every
+        // drum dark. Same defect as Tokyo's two towers and the same fix: the
+        // vertical members carry the light, so the silhouette is what is lit.
         let gy = 0, gr = 11.5;
         for (let i = 0; i < 5; i++) {
           const seg = 8.5 - i * 0.6;
           glow.torus(0, gy + seg + 0.3, 0, gr * 0.99, 0.16, 16, 5, 0x2ef0ff, 1);
+          // Eight service risers up each drum, following its taper.
+          const rt = gr * 0.9;
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2;
+            glow.tube(Math.cos(a) * gr * 1.01, gy, Math.sin(a) * gr * 1.01,
+              Math.cos(a) * rt * 1.01, gy + seg, Math.sin(a) * rt * 1.01,
+              0.2, 4, i % 2 ? 0x2ef0ff : 0x8f6cff);
+          }
           gy += seg + 0.55;
           gr *= 0.84;
+        }
+        // The cap and the mast, so the top third is not a dark stub.
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2;
+          glow.tube(Math.cos(a) * r * 0.52, y, Math.sin(a) * r * 0.52,
+            Math.cos(a) * r * 0.22, y + 6.5, Math.sin(a) * r * 0.22, 0.17, 4, 0x2ef0ff);
+        }
+        for (const f of [0.35, 0.7, 1.0]) {
+          glow.sphere(0, y + 6.5 + 9 * f, 0, 0.5, 8, 6, 0xff3b6a);
         }
         glow.sphere(0, y + 15.8, 0, 0.55, 8, 6, 0xff3b6a);
         return {
@@ -6607,15 +6631,23 @@ export class Props implements ISubsystem {
         b.box(0, TOP + 1.7, 0, 3.7, 1.7, 3.7, pale, { taper: 0.86, shade: { top: 1.16 } });
         b.prism(0, TOP + 3.4, 0, 0.58, MAST - TOP - 3.4, 8, red, { taper: 0.2 });
         // ---- FLOODLIT OVER ITS WHOLE HEIGHT --------------------------------
-        // Measured on the old recipe: `lit% 15` — 3 of 20 height bands carried
+        // Measured on the old recipe: `lit% 35` — 7 of 20 height bands carried
         // any emissive geometry (a deck ring, a crown bar, the mast beacon), on
-        // a night circuit. A tower that is dark for 85 % of its own height is
+        // a night circuit, at an emissive area x intensity of 880 against a
+        // background-tower median of 10 358. A tower that is dark for 85 % of its own height is
         // not a landmark at night however good its daytime silhouette is, and
         // the real one is uplit from the ground to the mast.
         //
         // The light is authored ON the four legs rather than as a separate glow
         // cage: one emissive member per leg per level, so it follows the batter
         // exactly and the lit line reads as the tower's own edge.
+        // Every member type carries light, not just the legs: measured with only
+        // the four legs lit, this came to an emissive area x intensity of 3 297
+        // against a median of 10 358 for the ordinary background towers on the
+        // same circuit — the landmark was a third as bright as the buildings it
+        // is supposed to dominate, and an eighth before the material fix below. Lighting the braces and the level rings as
+        // well is also what the real floodlighting does: it picks out the
+        // lattice, and the lattice is the whole silhouette.
         const glow = this.builder();
         for (let l = 0; l < LV; l++) {
           const y0 = l === 0 ? 0.35 : (l / LV) * TOP;
@@ -6625,8 +6657,13 @@ export class Props implements ISubsystem {
           // AGENTS section 3 means by "even a small hue shift reads as art
           // directed", and it stops 36 members being one flat orange.
           const warm = mixHex(0xff8a2a, 0xffd9a0, l / LV);
-          for (const [ax, az] of corners) {
-            glow.tube(ax * r0, y0, az * r0, ax * r1, y1, az * r1, 0.22, 4, warm);
+          for (let c = 0; c < 4; c++) {
+            const [ax, az] = corners[c];
+            const [bx, bz] = corners[(c + 1) % 4];
+            glow.tube(ax * r0, y0, az * r0, ax * r1, y1, az * r1, 0.26, 4, warm);
+            glow.tube(ax * r0, y0, az * r0, bx * r1, y1, bz * r1, 0.19, 4, warm);
+            glow.tube(bx * r0, y0, bz * r0, ax * r1, y1, az * r1, 0.19, 4, warm);
+            glow.tube(ax * r1, y1, az * r1, bx * r1, y1, bz * r1, 0.21, 4, warm);
           }
         }
         // Deck soffit and crown bands, then the mast beacon ladder.
@@ -6639,9 +6676,11 @@ export class Props implements ISubsystem {
         for (const f of [0.42, 0.72, 1.0]) {
           glow.sphere(0, TOP + 3.4 + (MAST - TOP - 3.4) * f + 0.4, 0, 0.6, 8, 5, 0xff3b2e);
         }
+        // Bright `glow`, not `glowSoft` — same reason as `broadcastSpire`, whose
+        // note explains it: 1.35 against a circuit whose every window is at 3.7.
         return {
           geo: b.build('latticeTower'), glow: glow.build('latticeGlow'),
-          softGlow: true, cull: CULL_FAR,
+          cull: CULL_FAR,
         };
       }
 
@@ -6653,12 +6692,16 @@ export class Props implements ISubsystem {
         //
         //   slenderness 10.0  — height / full width. The most needle-like object
         //                       in the game; the background towers run 2.4-3.4.
-        //   lit% 15           — 3 of 20 equal height bands carried any emissive
+        //   lit% 25           — 5 of 20 equal height bands carried any emissive
         //                       geometry at all: two deck rings and the beacon.
         //                       On a `skyPreset: 'night'` circuit whose every
         //                       other building has a full window grid and a
         //                       shopfront band, that is why it read as a pale
-        //                       vertical line against the sky.
+        //                       vertical line against the sky. Worse, its
+        //                       emissive area x `emissiveIntensity` came to 532
+        //                       against a background-tower MEDIAN of 10 358 on
+        //                       the same lap: the landmark was nineteen times
+        //                       dimmer than the ordinary buildings behind it.
         //   923 triangles     — the least geometry of any landmark on the lap,
         //                       for the tallest thing on it.
         //
@@ -6763,6 +6806,16 @@ export class Props implements ISubsystem {
           b.prism(0, dy + dh * H, 0, r * 1.06, 0.6, 14, cool, { shade: { top: 1.2 } });
         }
         // ---- illumination ----------------------------------------------------
+        // ---- HOW MUCH LIGHT, not just how far up it goes ---------------------
+        // `lit%` reaching 100 says the scheme covers the height. It does not say
+        // the landmark out-shines the skyline behind it, and measured, the first
+        // version did not: emissive area x `emissiveIntensity` came to 11 440
+        // against a background-tower median of 10 358 and a p90 of 15 056 on this
+        // circuit. Level with the buildings is not a landmark. Every emissive
+        // member is therefore on BOTH the columns and the diagonals, and the ribs
+        // run at 0.3 m rather than 0.2 — the truss itself reads as lit, which is
+        // what the real lighting scheme does, and the tower clears its own
+        // background's p90 instead of sitting on its median.
         const glow = this.builder();
         for (let l = 0; l < LV; l++) {
           const f = (l / LV) * TOPF, f2 = ((l + 1) / LV) * TOPF;
@@ -6772,23 +6825,46 @@ export class Props implements ISubsystem {
           // over 20 levels also stops a single flat emissive column.
           const hue = l % 2 ? 0x6fd8ff : 0xb08cff;
           for (let k = 0; k < COL; k++) {
-            const a = (k / COL) * Math.PI * 2;
-            glow.tube(Math.cos(a) * r, f * H, Math.sin(a) * r,
-              Math.cos(a) * r2, f2 * H, Math.sin(a) * r2, 0.2, 4, hue);
+            const a0 = (k / COL) * Math.PI * 2, a1 = ((k + 1) / COL) * Math.PI * 2;
+            glow.tube(Math.cos(a0) * r, f * H, Math.sin(a0) * r,
+              Math.cos(a0) * r2, f2 * H, Math.sin(a0) * r2, 0.3, 4, hue);
+            const [ba, bb2] = l % 2 ? [a0, a1] : [a1, a0];
+            glow.tube(Math.cos(ba) * r, f * H, Math.sin(ba) * r,
+              Math.cos(bb2) * r2, f2 * H, Math.sin(bb2) * r2, 0.22, 4, hue);
           }
         }
         for (const [df, dh] of [[0.545, 0.06], [0.720, 0.045]] as const) {
-          glow.prism(0, df * H - 0.75, 0, rAt(df + dh * 0.5) * 1.13, 0.5, 14, 0xd6ecff);
-          glow.prism(0, (df + dh) * H + 0.05, 0, rAt(df + dh * 0.5) * 1.09, 0.4, 14, 0xd6ecff);
+          const dr = rAt(df + dh * 0.5);
+          glow.prism(0, df * H - 0.85, 0, dr * 1.15, 0.75, 14, 0xd6ecff);
+          glow.prism(0, (df + dh) * H - 0.05, 0, dr * 1.11, 0.6, 14, 0xd6ecff);
+          // The deck's own window band: the drum is a building and a building at
+          // 110 m with the lights on is the single most legible thing on a night
+          // skyline.
+          glow.prism(0, df * H + dh * H * 0.34, 0, dr * 1.01, dh * H * 0.36, 14, 0xfff0c8);
         }
         // Aviation beacons up the needle, not just one at the tip: a ladder of
         // red lights is what says "very tall" at night from far away.
         for (const f of [0.88, 0.94, 1.0]) {
           glow.sphere(0, f * H + 1.0, 0, 0.8, 8, 5, 0xff3b2e);
         }
+        // ---- NOT `softGlow`, AND THAT IS THE WHOLE FIX FOR "IT IS THE DIMMEST
+        // ---- THING ON THE HORIZON". -----------------------------------------
+        // `glowSoft` is `emissiveIntensity 1.35`; `glow` is 3.4 and the night
+        // window material is 3.7. This tower and the lattice tower were the only
+        // two landmarks on a night circuit authored onto the soft material, so
+        // every shopfront band, every neon sign and every lit window on the lap
+        // was emitting 2.5-2.7x per unit area MORE than the thing they are all
+        // arranged around. No amount of extra emissive geometry fixes a landmark
+        // that is authored two and a half stops under its own background; the
+        // material was the bug and the geometry above is what makes the fix
+        // read.
+        //
+        // `glowSoft` also carries `bob: 0.22`, which is inert here (`aFlap`
+        // defaults to 0 on every non-cloth primitive) but is a balloon's motion
+        // and has no business on a 196 m broadcast tower in the first place.
         return {
           geo: b.build('broadcastSpire'), metal: metal.build('spireTruss'),
-          glow: glow.build('spireGlow'), softGlow: true, cull: CULL_FAR,
+          glow: glow.build('spireGlow'), cull: CULL_FAR,
         };
       }
 
