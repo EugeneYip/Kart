@@ -52,6 +52,18 @@ export const PFLAG = {
   CPU: 16,
   /** Opt out of the soft-depth fade (for things that must stay crisp). */
   HARD: 32,
+  /**
+   * Orbit a fixed centre instead of following a ballistic arc. `iP0` is the
+   * centre, `iV0` becomes (angular rate rad/s, radius m, rise m/s) and `iX.w`
+   * carries the starting phase — see `spawnOrbit`.
+   *
+   * Exists because "stunned" stars are supposed to circle the victim's head on
+   * a readable ring. Emitting them as a ballistic cone with a low gravity
+   * instead produced a random scatter that sat on top of the kart, which is the
+   * one thing a spin-out effect must never do: hide the vehicle whose state it
+   * is communicating.
+   */
+  ORBIT: 64,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -261,7 +273,7 @@ attribute vec4 iS;    // size, spinRate, stretch, softDist
 attribute vec4 iD;    // gravity, drag, turbAmp, turbFreq
 attribute vec4 iM;    // spriteIndex, rampRow, curveRow, flags
 attribute vec4 iC;    // tint.rgb * intensity, alphaMul
-attribute vec4 iX;    // groundY, restitution, additive, unused
+attribute vec4 iX;    // groundY, restitution, additive, orbit phase
 
 uniform float uTime;
 uniform float uSizeScale;
@@ -339,12 +351,20 @@ void main() {
 
   bool isPlane = (flags & 8) != 0;
   bool isCpu = (flags & 16) != 0;
+  bool isOrbit = (flags & 64) != 0;
 
   vec3 wp;
   vec3 vel;
   if (isCpu || isPlane) {
     wp = iP0;
     vel = iV0;
+  } else if (isOrbit) {
+    // iP0 = centre, iV0 = (angular rate, radius, rise), iX.w = phase.
+    float oa = iX.w + iV0.x * age;
+    float oR = iV0.y;
+    float co = cos(oa), so = sin(oa);
+    wp = iP0 + vec3(co * oR, iV0.z * age, so * oR);
+    vel = vec3(-so * oR * iV0.x, iV0.z, co * oR * iV0.x);
   } else {
     float g = iD.x;
     float k = iD.y;
@@ -784,11 +804,39 @@ export class ParticleSystem {
     );
   }
 
+  /**
+   * A ring of `count` particles orbiting `centre` at `radius` metres and
+   * `rate` rad/s, drifting up at `rise` m/s. Phases are spread EVENLY rather
+   * than randomly — a ring is only readable if the eye can see it is a ring.
+   */
+  spawnOrbit(
+    d: EmitterDesc,
+    centre: THREE.Vector3,
+    count: number,
+    radius: number,
+    rate: number,
+    rise = 0,
+    sizeMul = 1,
+    lifeMul = 1,
+  ): void {
+    const n = Math.max(1, Math.round(count));
+    const skew = Math.random() * TAU;
+    for (let i = 0; i < n; i++) {
+      this.write(
+        d, centre.x, centre.y, centre.z,
+        rate, radius, rise,
+        centre.y - 50, sizeMul, lifeMul,
+        skew + (i / n) * TAU,
+      );
+    }
+  }
+
   private write(
     d: EmitterDesc,
     px: number, py: number, pz: number,
     vx: number, vy: number, vz: number,
     groundY: number, sizeMul: number, lifeMul: number,
+    phase = 0,
   ): void {
     const isCpu = (d.flags & PFLAG.CPU) !== 0;
     const b = isCpu ? this.cpu : this.gpu;
@@ -837,7 +885,7 @@ export class ParticleSystem {
     b.xx[i4] = groundY;
     b.xx[i4 + 1] = d.restitution;
     b.xx[i4 + 2] = d.additive;
-    b.xx[i4 + 3] = 0;
+    b.xx[i4 + 3] = phase;
 
     b.death[i] = this.time + life;
 

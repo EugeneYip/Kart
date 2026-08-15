@@ -110,6 +110,10 @@ export class ImpactEffects {
   private dPuff: EmitterDesc;
   private dCompress: EmitterDesc;
   private dStar: EmitterDesc;
+  private dStunRing: EmitterDesc;
+  /** Rate limit for the pinned wall-contact flash — see `wallHit`. */
+  private lastWallFlash = -1;
+  private readonly lastWallPos = new THREE.Vector3();
   private dGroundRing: EmitterDesc;
   private dChip: EmitterDesc;
 
@@ -297,12 +301,35 @@ export class ImpactEffects {
       gravity: 6.5, drag: 1.0, spin: 9, spinVar: 0.6,
       soft: 0.3, additive: 1, alpha: 1, intensity: 1.3,
     });
+    /**
+     * The stunned ring. Separate from `dStar` because it is a different effect
+     * with a different job: `dStar` is the impact spray (ballistic, brief),
+     * this one has to READ as a ring circling the victim's head for as long as
+     * the spin-out lasts, and it has to do that without covering the kart.
+     *
+     * Size is 0.26 against dStar's 0.45-at-emit. A 0.45 m billboard 4 m from a
+     * chase camera is ~60 px tall in an 800x450 frame and there were seven of
+     * them landing on the kart's own silhouette; 0.26 m on a 0.62 m orbit puts
+     * them clear of the roofline and each one around 35 px.
+     */
+    this.dStunRing = makeDesc({
+      sprite: SPRITE.STAR, ramp: RAMP.STAR_YELLOW, curve: CURVE.BELL,
+      flags: PFLAG.ORBIT,
+      size: 0.26, sizeVar: 0.12, life: 1.05, lifeVar: 0.12,
+      spin: 5.5, spinVar: 0.3,
+      soft: 0.3, additive: 1, alpha: 0.9, intensity: 1.25,
+    });
+    // Dust displaced by a landing/spin, laid flat on the road. `additive` and
+    // `alpha` were 0.15/0.70 over a sprite whose bright band was a tenth of the
+    // cell wide: a near-opaque brown annulus painted on the tarmac. With the
+    // band widened in `paintRing` this also wants to sit lighter — dust scatters
+    // light, it does not coat the road.
     this.dGroundRing = makeDesc({
       sprite: SPRITE.RING, ramp: RAMP.DUST, curve: CURVE.SWELL,
       flags: PFLAG.PLANE,
       size: 4.2, sizeVar: 0, life: 0.5, lifeVar: 0,
       spin: 0.4, spinVar: 0, soft: 0.7,
-      additive: 0.15, alpha: 0.7, intensity: 1,
+      additive: 0.28, alpha: 0.46, intensity: 1,
     });
     this.dChip = makeDesc({
       sprite: SPRITE.CHIP, ramp: RAMP.DEBRIS, curve: CURVE.CONST,
@@ -581,11 +608,31 @@ export class ImpactEffects {
   // =========================================================================
 
   /** `impact` 0..1. Sparks rake along the wall, dust puffs off it. */
+  /**
+   * A wall contact.
+   *
+   * SUSTAINED CONTACT IS THE COMMON CASE, NOT THE RARE ONE. On volcanoRush 99 %
+   * of wall contacts are drift excursions the AI cannot end, so this fires every
+   * frame for seconds at a time from several karts at once. Each call used to
+   * pin another `dCompress` plane — an additive ring up to 3.6 m across at alpha
+   * 0.95 and intensity 1.8 — flat against the barrier. A plane seen at the
+   * grazing angle a chase camera has on a wall it is scraping projects to a long
+   * bright band, and dozens of them overlapping is the "enormous flat white
+   * ribbons sweeping across ~35 % of the frame".
+   *
+   * So the contact flash is now rate-limited per location. Sparks and dust still
+   * emit every call (they are small, short-lived and they are what sells the
+   * scrape); the big pinned plane is allowed roughly four times a second, and
+   * a continuing scrape gets a much smaller, dimmer one.
+   */
   wallHit(pos: THREE.Vector3, normal: THREE.Vector3, impact: number, isPlayer: boolean): void {
     const p = this.ctx.particles;
     const th = this.ctx.throttle;
     const f = clamp01(impact);
     if (f < 0.03) return;
+    const now = this.ctx.time;
+    const sustained = now - this.lastWallFlash < 0.24
+      && pos.distanceToSquared(this.lastWallPos) < 90;
     tmpN.copy(normal);
     if (tmpN.lengthSq() < 1e-6) tmpN.set(0, 0, 1);
     tmpN.normalize();
@@ -610,11 +657,17 @@ export class ImpactEffects {
     p.emit(this.dPuff, Math.round((3 + 7 * f) * th), pos, tmpN, null, groundY, 1);
     p.emit(this.dChip, Math.round(5 * th * f), pos, tmpN, null, groundY, 1);
 
-    // A flat flash pinned to the wall reads as the point of contact.
-    this.dCompress.size = (1.4 + 2.2 * f);
-    this.dCompress.ramp = RAMP.METAL_SPARK;
-    p.spawnPlane(this.dCompress, pos, tmpN, 1, 1);
-    this.dCompress.ramp = RAMP.WHITE_SHARP;
+    // A flat flash pinned to the wall reads as the point of contact — once.
+    if (!sustained) {
+      this.lastWallFlash = now;
+      this.lastWallPos.copy(pos);
+      this.dCompress.size = (1.4 + 2.2 * f);
+      this.dCompress.alpha = 0.95;
+      this.dCompress.ramp = RAMP.METAL_SPARK;
+      p.spawnPlane(this.dCompress, pos, tmpN, 1, 1);
+      this.dCompress.ramp = RAMP.WHITE_SHARP;
+      this.dCompress.alpha = 0.95;
+    }
 
     if (isPlayer) this.ctx.shake(0.12 + 0.55 * f * f, 0.16 + 0.16 * f);
   }
@@ -753,19 +806,28 @@ export class ImpactEffects {
     this.decals.splat(pos, tmpN, 1.5 * scale, 9, 0.5, 0.30, 0.22, 0.05);
   }
 
-  /** The victim's reaction to a banana: puff plus spinning stars overhead. */
+  /**
+   * The victim's reaction to a banana: puff plus a ring of stars orbiting the
+   * head.
+   *
+   * This used to emit `dStar` as a 2.0 rad cone at 2.2 m/s under gravity 1.5 —
+   * a ballistic scatter of seven 0.45 m billboards centred 1.15 m above the
+   * kart's origin, which is roughly where the kart itself is. In a chase frame
+   * they covered the vehicle. Stars over a stunned racer are meant to ORBIT on
+   * a legible ring, which is also what keeps them off the silhouette.
+   */
   slip(pos: THREE.Vector3, scale: number): void {
     const p = this.ctx.particles;
     const th = this.ctx.throttle;
     this.dPuff.size = 0.7 * scale;
     p.emit(this.dPuff, Math.round(8 * th), pos, UP, null, pos.y - 0.5, scale);
-    tmpA.copy(pos).y += 1.15 * scale;
-    this.dStar.size = 0.45 * scale;
-    this.dStar.speed = 2.2;
-    this.dStar.gravity = 1.5;
-    p.emit(this.dStar, Math.round(7 * th), tmpA, UP, null, tmpA.y - 3, 1);
-    this.dStar.speed = 4.5;
-    this.dStar.gravity = 6.5;
+    // Clear of the roofline, not level with it.
+    tmpA.copy(pos).y += 1.42 * scale;
+    this.dStunRing.size = 0.26 * scale;
+    p.spawnOrbit(
+      this.dStunRing, tmpA, Math.max(3, Math.round(5 * th)),
+      0.62 * scale, 7.2, 0.32, 1, 1,
+    );
   }
 
   spinout(pos: THREE.Vector3, scale: number): void {

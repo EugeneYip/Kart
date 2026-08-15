@@ -117,12 +117,40 @@ const SKIP_NAMES: ReadonlySet<string> = new Set(['vfx', 'Projectiles', 'SunShaft
  * Five Gerstner waves. Steepness is budgeted so the sum stays below the
  * self-intersection limit, and the tangent frame is the exact derivative of the
  * displacement — the crests light correctly instead of looking painted on.
+ *
+ * DIRECTIONAL SPREAD. The offsets used to be 0.00 / 0.62 / -0.74 / 1.55 / -2.05
+ * radians, which is a 206° fan: waves 3 and 4 ran almost square across wave 0.
+ * A wind sea does not do that — real directional spreading is roughly a ±30°
+ * cosine lobe about the wind — and the sum of a 206° fan has no propagation
+ * direction at all, it is just heaving. That is the "no coherent wave
+ * direction" finding. The fan is now 55° (measured by `.probe-tmp/water-facet.ts`,
+ * which parses this very table out of the compiled shader source so the number
+ * in that report can never drift from the number here).
+ *
+ * WAVE LOD. This sum is evaluated PER VERTEX, and the disc it is evaluated on is
+ * radially warped: cells run 0.48 m under the camera and 27.2 m at the rim
+ * (measured). The shortest wave here is `uSwell.y * 0.13` = 4.4 m on the ocean
+ * preset. Past about two samples per wavelength a Gerstner term stops being a
+ * wave and becomes per-vertex white noise — and because the normal is the
+ * analytic derivative of the displacement, the NORMAL becomes white noise with
+ * it. Fresnel then paints each 13-49 px triangle either cyan (the refracted
+ * body) or sunset-orange (the sky), which is precisely the "chaotic mottle …
+ * hard-edged polygonal facets … crumpled foil" the critic saw. So every term
+ * now fades out as its own wavelength approaches the local grid spacing, which
+ * arrives as the baked `aCell` attribute (exact, from `buildDisc`, rather than
+ * re-derived from distance by inverting the warp cubic).
+ *
+ * The energy removed is reported back through `lodLoss` so the fragment shader
+ * can put it back as specular roughness instead of simply losing it — the
+ * sub-pixel normal variance a wave carries IS roughness, so converting one into
+ * the other is what keeps the far water from flattening into a mirror.
  */
 const GLSL_GERSTNER = /* glsl */ `
 uniform float uTime;
 uniform vec2  uSwell;      // amplitude, wavelength
 uniform float uChoppy;
 uniform vec2  uWindDir;
+attribute float aCell;     // local grid spacing at this vertex, metres
 
 const int WAVE_COUNT = 5;
 /** dir-angle offset, wavelength scale, amplitude scale, steepness.
@@ -130,29 +158,45 @@ const int WAVE_COUNT = 5;
     initialisers and three compiles ShaderMaterial as GLSL1 by default. */
 vec4 waveParams(int i){
   if (i == 0) return vec4( 0.00, 1.00, 1.00, 0.62);
-  if (i == 1) return vec4( 0.62, 0.61, 0.58, 0.48);
-  if (i == 2) return vec4(-0.74, 0.38, 0.34, 0.40);
-  if (i == 3) return vec4( 1.55, 0.22, 0.19, 0.30);
-  return vec4(-2.05, 0.13, 0.11, 0.24);
+  if (i == 1) return vec4( 0.31, 0.61, 0.58, 0.48);
+  if (i == 2) return vec4(-0.24, 0.38, 0.34, 0.40);
+  if (i == 3) return vec4( 0.52, 0.22, 0.19, 0.30);
+  return vec4(-0.44, 0.13, 0.11, 0.24);
 }
 
 /** Returns displacement; accumulates the tangent-frame partials. */
-vec3 gerstner(vec2 xz, out vec3 dPdx, out vec3 dPdz, out float fold){
+vec3 gerstner(vec2 xz, float cell, out vec3 dPdx, out vec3 dPdz,
+              out float fold, out float lodLoss){
   vec3 disp = vec3(0.0);
   dPdx = vec3(1.0, 0.0, 0.0);
   dPdz = vec3(0.0, 0.0, 1.0);
   fold = 0.0;
+  float energy = 1e-5;
+  float kept = 0.0;
   float baseAngle = atan(uWindDir.y, uWindDir.x);
   for (int i = 0; i < WAVE_COUNT; i++) {
     vec4 w = waveParams(i);
+    float L = max(uSwell.y * w.y, 0.6);
+    // Full strength at ~7 samples per wavelength, gone by ~2.5. Below that the
+    // term is noise, not water.
+    float lod = 1.0 - smoothstep(L * 0.14, L * 0.40, cell);
+    // a0 is the UNFADED amplitude and q must be built from it: q carries a 1/a
+    // so q*a is very nearly independent of a, and scaling a alone would have
+    // faded the vertical displacement while leaving the horizontal choppiness at
+    // full strength — the crests would have kept their sideways lean after their
+    // height had gone.
+    float a0 = uSwell.x * w.z;
+    energy += a0;
+    kept += a0 * lod;
+    if (lod <= 0.002) continue;
+
     float ang = baseAngle + w.x * uChoppy;
     vec2 d = vec2(cos(ang), sin(ang));
-    float L = max(uSwell.y * w.y, 0.6);
     float k = 6.28318530718 / L;
     float c = sqrt(9.81 / k);
-    float a = uSwell.x * w.z;
     float steep = min(w.w * uChoppy, 0.92);
-    float q = steep / (k * a * float(WAVE_COUNT) + 1e-4);
+    float q = steep / (k * a0 * float(WAVE_COUNT) + 1e-4);
+    float a = a0 * lod;
     float f = k * (dot(d, xz) - c * uTime);
     float sf = sin(f), cf = cos(f);
     float qa = q * a;
@@ -162,8 +206,9 @@ vec3 gerstner(vec2 xz, out vec3 dPdx, out vec3 dPdz, out float fold){
     float wa = k * a;
     dPdx += vec3(-q * d.x * d.x * wa * sf, d.x * wa * cf, -q * d.x * d.y * wa * sf);
     dPdz += vec3(-q * d.x * d.y * wa * sf, d.y * wa * cf, -q * d.y * d.y * wa * sf);
-    fold += max(0.0, sf) * w.z;
+    fold += max(0.0, sf) * w.z * lod;
   }
+  lodLoss = clamp(1.0 - kept / energy, 0.0, 1.0);
   return disp;
 }
 `;
@@ -386,11 +431,18 @@ export class Water implements ISubsystem {
         varying float vWave;
         varying vec4 vRefl;
         varying float vFar;
+        varying float vHorizon;
+        varying float vLodLoss;
 
         void main(){
           vec4 wp = modelMatrix * vec4(position, 1.0);
           float dist = length(wp.xz - cameraPosition.xz);
           vFar = smoothstep(90.0, 520.0, dist);
+          // Dissolve into the sky over the disc's last stretch. The height fog
+          // alone does not do it: at this circuit's density (0.0016) a grazing
+          // ray is only ~71 % fogged by the 760 m rim, so the ocean was ending on
+          // a visible line instead of a horizon.
+          vHorizon = smoothstep(430.0, 980.0, dist);
 
           // Sink anything well inland so terrain hides it; the fragment shader
           // still discards, but this stops shoreline z-fighting outright.
@@ -399,12 +451,14 @@ export class Water implements ISubsystem {
 
           vec3 dPdx, dPdz;
           float fold;
+          float lodLoss;
           // Damp the swell in shallow water — waves shoal like real ones.
           float shoal = clamp(depth * 0.55, 0.06, 1.0);
-          vec3 disp = gerstner(wp.xz, dPdx, dPdz, fold);
+          vec3 disp = gerstner(wp.xz, aCell, dPdx, dPdz, fold, lodLoss);
           disp *= shoal;
           vWave = disp.y;
           vFold = fold * shoal;
+          vLodLoss = lodLoss;
 
           wp.xyz += disp;
           if (depth < -2.5) wp.y = terrain - 6.0;
@@ -452,6 +506,8 @@ export class Water implements ISubsystem {
         varying float vWave;
         varying vec4 vRefl;
         varying float vFar;
+        varying float vHorizon;
+        varying float vLodLoss;
 
         vec3 sampleRipples(vec2 p, float fade){
           // Two scrolling scales, blended as derivatives (UDN) so the macro
@@ -548,7 +604,14 @@ export class Water implements ISubsystem {
           // variance *is* roughness, so widening the lobe with distance (and in
           // choppy shallows) converts that aliasing into the broad glitter road
           // that actually appears on water.
-          float wRough = clamp(uRough + vFar * 0.19 + (1.0 - min(depth, 6.0) / 6.0) * 0.03, 0.02, 0.55);
+          // vLodLoss is the share of wave amplitude the vertex LOD had to drop
+          // because the disc could no longer sample it. Those waves did not stop
+          // existing, they stopped being representable — so they come back here
+          // as roughness, which is what sub-pixel normal variance physically IS.
+          // Without this the far water flattens to a mirror as the LOD bites and
+          // the glitter road disappears with it.
+          float wRough = clamp(uRough + vFar * 0.19 + vLodLoss * 0.20
+                               + (1.0 - min(depth, 6.0) / 6.0) * 0.03, 0.02, 0.60);
           float wA = wRough * wRough;
           vec3 H = normalize(uSunDirection + V);
           float ndh = max(dot(N, H), 0.0);
@@ -558,15 +621,44 @@ export class Water implements ISubsystem {
           float ndl = max(dot(N, uSunDirection), 0.0);
           col += uSunColor * ggx * ndl * sunUp * uSunIntensity * uGlint * 0.030;
           // Broad sheet sheen under the sun, which is what carries the glitter
-          // road out to the horizon once the tight lobe has faded.
-          float sheet = pow(ndh, 18.0);
-          col += uSunColor * sheet * 0.26 * uGlint * sunUp;
+          // road out to the horizon once the tight lobe has faded. Two lobes: the
+          // tight one is the road itself, the wide one is the haze around it that
+          // makes the road read as attached to the sun rather than as a stripe.
+          float sheet = pow(ndh, 18.0) * 0.26 + pow(ndh, 3.5) * 0.055;
+          col += uSunColor * sheet * uGlint * sunUp;
 
           // --- foam ------------------------------------------------------------
           // Deep open water away from a crest needs neither churn tap.
           float shoreDepth = depth - vWave * 0.9;
+
+          // The band below is authored in metres of DEPTH, but what the eye reads
+          // is its width ON THE GROUND, which is band / |grad(depth)|. Measured
+          // over 1917 waterline crossings of this circuit
+          // (.probe-tmp/water-shore.ts): the coast gradient runs 0.09 at the
+          // beaches to 3.88 at the cliffs, so a fixed depth band gives a ground
+          // width of 1.4 m at p10 against 30 m at p90 — and over 31 % of the
+          // coastline it lands under ONE height-map texel (2.40 m). A band
+          // narrower than the texel it is reconstructed from cannot draw anything
+          // but the bilinear diamond grid underneath it, which is the "jagged
+          // aliased white band". Scaling the band by the local gradient holds its
+          // ground width roughly constant instead.
+          float slopeWiden = 1.0;
+          float nearShore = 1.0 - smoothstep(0.0, uFoamWidth * 9.0, shoreDepth);
+          if (nearShore > 0.002) {
+            vec3 tn = fieldNormal(vWorld.xz, 2.4);
+            float grad = sqrt(max(1.0 - tn.y * tn.y, 0.0)) / max(tn.y, 0.12);
+            // 0.22 is the measured median gradient, so median coast is unchanged.
+            slopeWiden = clamp(grad / 0.22, 0.55, 5.0);
+            // Ragged the leading edge at a scale FINER than the 2.40 m height
+            // texel, so what the eye locks onto is foam texture rather than the
+            // reconstruction grid under it.
+            float rag = (vnoise2(vWorld.xz * 0.85 + uTime * 0.05) - 0.5)
+                      + (vnoise2(vWorld.xz * 2.30 - uTime * 0.08) - 0.5) * 0.5;
+            shoreDepth += rag * uFoamWidth * 0.55 * slopeWiden * nearShore;
+          }
+
           float foamNeed = max(
-            1.0 - smoothstep(0.0, uFoamWidth * 2.4, shoreDepth),
+            1.0 - smoothstep(0.0, uFoamWidth * 2.4 * slopeWiden, shoreDepth),
             step(1.05, vFold) * (1.0 - vFar));
           float churn = 0.55;
           if (foamNeed > 0.004) {
@@ -592,13 +684,19 @@ export class Water implements ISubsystem {
           // to full alpha) drew a cut-edged white ribbon down the entire coast.
           // Real surf is a wide ragged band whose leading edge is displaced by
           // churn rather than merely faded, and which dissolves into wet sand.
-          float band = uFoamWidth * (0.75 + churn * 1.1);
+          float band = uFoamWidth * (0.75 + churn * 1.1) * slopeWiden;
           float shore = 1.0 - smoothstep(0.0, band, shoreDepth);
-          float swash = smoothstep(0.18, 0.92, shore * (0.42 + churn * 0.95));
+          float swash = smoothstep(0.10, 0.98, shore * (0.34 + churn * 0.90));
           float lip = smoothstep(0.0, 0.7, -shoreDepth + (churn - 0.62) * 0.85) * 0.7;
-          float foam = clamp(max(swash, lip) + cap * 0.9, 0.0, 1.0);
+          // Multiplying the coverage by churn rather than adding to it is what
+          // stops the inner band saturating to a flat white plateau — the old
+          // max(swash, lip) reached 1.0 across the whole inner metre, which is
+          // the "no foam gradient" half of the finding. Now the churn field is
+          // *inside* the coverage, so the band always has structure.
+          float foam = clamp(max(swash, lip) * (0.62 + 0.38 * churn) + cap * 0.9, 0.0, 1.0);
 
           vec3 foamCol = mix(vec3(0.86, 0.90, 0.93), uSunColor * 0.5 + 0.5, 0.25);
+          foamCol *= 0.82 + 0.30 * churn;
           foamCol *= (uAmbientIntensity * 0.5 + max(uSunDirection.y, 0.05) * uSunIntensity * 0.32);
           col = mix(col, foamCol, foam);
 
@@ -611,6 +709,16 @@ export class Water implements ISubsystem {
           float alpha = shallowFade;
           alpha = max(alpha, min(1.0, shallowFade + 0.4) * foam);
           alpha = max(alpha, F * 0.9 * clamp(depth * 2.4, 0.0, 1.0));
+
+          // --- horizon dissolve --------------------------------------------------
+          // The last stretch of the disc becomes the sky just above the horizon,
+          // so the surface has somewhere to go instead of stopping at its own rim.
+          // Opaque out there too: a disc that fades to alpha 0 at the horizon
+          // shows whatever is behind it, which is the inside of the sky dome at a
+          // different brightness — a seam in the other direction.
+          vec3 hz = normalize(vec3(-V.x, 0.03, -V.z));
+          col = mix(col, skyApprox(hz), vHorizon * 0.90);
+          alpha = max(alpha, vHorizon);
 
           col = applyHeightFog(col, vWorld, cameraPosition);
           gl_FragColor = vec4(col, alpha);
@@ -1073,22 +1181,37 @@ function buildDisc(res: number): THREE.BufferGeometry {
   const verts = res * res;
   const pos = new Float32Array(verts * 3);
   const uv = new Float32Array(verts * 2);
+  /** Local grid spacing in metres — see GLSL_GERSTNER's wave LOD. */
+  const cell = new Float32Array(verts);
 
   const warp = (t: number): number => {
     const a = Math.abs(t);
     const w = 0.05 * a + 0.95 * a * a * a;
     return Math.sign(t) * w * HALF_EXTENT;
   };
+  /**
+   * d|warp|/d|t| times one grid step: the metres between this vertex and its
+   * neighbour along that axis. Baked rather than re-derived in the shader from
+   * distance, because recovering `t` from a warped radius means inverting a
+   * cubic every vertex — and this is exact, including on the diagonal where the
+   * two axes disagree.
+   */
+  const step = 2 / cells;
+  const spacing = (t: number): number => (0.05 + 2.85 * t * t) * HALF_EXTENT * step;
 
-  let p = 0, q = 0;
+  let p = 0, q = 0, c = 0;
   for (let j = 0; j < res; j++) {
-    const z = warp((j / cells) * 2 - 1);
+    const tz = (j / cells) * 2 - 1;
+    const z = warp(tz);
+    const sz = spacing(tz);
     for (let i = 0; i < res; i++) {
-      pos[p] = warp((i / cells) * 2 - 1);
+      const tx = (i / cells) * 2 - 1;
+      pos[p] = warp(tx);
       pos[p + 1] = 0;
       pos[p + 2] = z;
       p += 3;
       uv[q] = i / cells; uv[q + 1] = j / cells; q += 2;
+      cell[c++] = Math.max(spacing(tx), sz);
     }
   }
 
@@ -1108,6 +1231,7 @@ function buildDisc(res: number): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('aCell', new THREE.BufferAttribute(cell, 1));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), HALF_EXTENT * 1.5);
   return geo;

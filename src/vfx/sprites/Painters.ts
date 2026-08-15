@@ -4,8 +4,25 @@
  * EVERY sprite is authored as **white RGB with all detail in the alpha
  * channel**. Colour comes from the per-emitter gradient LUT multiplied by a
  * per-particle HDR tint, which means one atlas serves every effect and there is
- * never a colour-space surprise. The only thing that matters here is that the
- * alpha channel is rich, high-contrast and free of "blurry blob" softness.
+ * never a colour-space surprise.
+ *
+ * ALPHA MUST NEVER REACH THE SPRITE BOUNDARY AT FULL OPACITY.
+ * -----------------------------------------------------------
+ * This file used to say the alpha channel should be "rich, high-contrast and
+ * free of blurry blob softness", and the painters that took that literally —
+ * `paintStar`, `paintChip`, `paintLeaf` — filled a canvas path with
+ * `rgba(255,255,255,1)` and stopped. The compositing around them is fine
+ * (ParticleSystem blends premultiplied, with a per-particle additive weight),
+ * so a sprite whose alpha steps 1 -> 0 across one texel composites as exactly
+ * what it is: opaque clip-art with a cut edge. That single authoring rule is
+ * what produced the whole of the critic's particle list — the 5-point stars,
+ * the mud-clod dirt, the torn-paper item shards.
+ *
+ * "High contrast" is still right; what was wrong is where the contrast sits. A
+ * sprite wants a bright, structured INTERIOR and a falloff of several texels at
+ * the silhouette, plus a vignette so nothing is ever clipped by the cell border.
+ * Shapes that need a crisp read (star points, debris facets) get that from a
+ * signed-distance edge a few texels wide, not from a hard fill.
  */
 
 import { fbm2, ridged2, warpedFbm2, ihash2 } from './Noise';
@@ -39,6 +56,46 @@ function perPixel(
     }
   }
   ctx.putImageData(img, 0, 0);
+}
+
+/**
+ * Signed distance to a closed polygon, negative inside. Lets a shape keep an
+ * exact silhouette (a star has to read as a star) while the alpha ramp across
+ * that silhouette stays as wide and soft as we like — which a canvas `fill()`
+ * cannot do at any price.
+ *
+ * `verts` is a flat [x0,y0,x1,y1,...] list in the same -1..1 space `perPixel`
+ * callers use.
+ */
+function polySdf(px: number, py: number, verts: readonly number[]): number {
+  const n = verts.length / 2;
+  let d = Infinity;
+  let sign = 1;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = verts[i * 2], yi = verts[i * 2 + 1];
+    const xj = verts[j * 2], yj = verts[j * 2 + 1];
+    const ex = xj - xi, ey = yj - yi;
+    const wx = px - xi, wy = py - yi;
+    const t = clamp01((wx * ex + wy * ey) / (ex * ex + ey * ey || 1e-9));
+    const bx = wx - ex * t, by = wy - ey * t;
+    const dd = bx * bx + by * by;
+    if (dd < d) d = dd;
+    // Crossing-number inside test (iq's formulation).
+    const c1 = py >= yi, c2 = py < yj, c3 = ex * wy > ey * wx;
+    if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) sign = -sign;
+  }
+  return Math.sqrt(d) * sign;
+}
+
+/** A 5-point star as a flat vertex list in -1..1 space. */
+function starVerts(outer: number, inner: number): number[] {
+  const v: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rad = i % 2 === 0 ? outer : inner;
+    v.push(Math.cos(ang) * rad, Math.sin(ang) * rad);
+  }
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,39 +232,50 @@ export const paintFlame: Painter = (ctx, s) => {
 // ---------------------------------------------------------------------------
 // 6 — 5-point star
 // ---------------------------------------------------------------------------
+/**
+ * Was a hard `fill('rgba(255,255,255,1)')` over a 10-vertex path with a 7 %
+ * shadow blur — an opaque yellow decal with a cut edge, and at the sizes
+ * `slip()` emits it that decal is 60-90 px across and lands on top of the
+ * player's own kart. Now: the same silhouette from an SDF, but the alpha ramps
+ * over ~8 % of the sprite at the edge, peaks at 0.86 rather than 1.0, carries a
+ * hot core so the interior is not flat, and sits inside a vignette so the
+ * points always dissolve before the cell border.
+ */
 export const paintStar: Painter = (ctx, s) => {
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s * 0.5);
-  g.addColorStop(0, 'rgba(255,255,255,0.55)');
-  g.addColorStop(0.35, 'rgba(255,255,255,0.16)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-
-  ctx.save();
-  ctx.translate(s / 2, s / 2);
-  ctx.beginPath();
-  const R = s * 0.44;
-  const r = s * 0.175;
-  for (let i = 0; i < 10; i++) {
-    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
-    const rad = i % 2 === 0 ? R : r;
-    const x = Math.cos(ang) * rad;
-    const y = Math.sin(ang) * rad;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.shadowColor = 'rgba(255,255,255,0.85)';
-  ctx.shadowBlur = s * 0.07;
-  ctx.fillStyle = 'rgba(255,255,255,1)';
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.restore();
+  const V = starVerts(0.72, 0.30);
+  perPixel(ctx, s, (u, v) => {
+    const x = (u - 0.5) * 2;
+    const y = (v - 0.5) * 2;
+    const r = Math.sqrt(x * x + y * y);
+    if (r >= 1) return 0;
+    const d = polySdf(x, y, V);
+    const edge = 0.085;
+    const body = sstep(edge, -edge, d);
+    // Interior structure: bright at the heart, falling toward the points.
+    const core = Math.exp(-r * r * 3.2);
+    // Outward halo, so the star sheds light instead of stopping dead.
+    const out = Math.max(d, 0);
+    const halo = Math.exp(-(out * out) / (2 * 0.14 * 0.14)) * 0.30;
+    const vign = sstep(1.0, 0.70, r);
+    return clamp01((body * (0.56 + 0.44 * core) * 0.86 + halo) * vign);
+  });
 };
 
 // ---------------------------------------------------------------------------
 // 7 — shockwave ring
 // ---------------------------------------------------------------------------
+/**
+ * Shockwave / dust ring.
+ *
+ * The band used to be a gaussian of sigma 0.055 about r = 0.74 — a bright
+ * annulus about a tenth of the sprite wide, peaking at alpha 1.0, laid flat on
+ * the road by `PFLAG.PLANE`. That is the drift dust "hard-edged brown torus
+ * that reads as a stain painted on the tarmac". Sigma is now 2.8x wider, the
+ * peak is 0.70, and a broad inner haze fills the middle, so it reads as a puff
+ * of displaced dust with a leading edge rather than as a drawn-on ring. The
+ * angular wobble is kept — it is what stops it looking machined — and the outer
+ * vignette starts much earlier so the disc never meets the cell border.
+ */
 export const paintRing: Painter = (ctx, s) => {
   perPixel(ctx, s, (u, v) => {
     const x = (u - 0.5) * 2;
@@ -215,12 +283,14 @@ export const paintRing: Painter = (ctx, s) => {
     const r = Math.sqrt(x * x + y * y);
     if (r >= 1) return 0;
     const th = Math.atan2(y, x);
-    const wob = 0.86 + 0.14 * Math.sin(th * 22 + 1.3) * Math.sin(th * 7);
-    const d = r - 0.74;
-    const band = Math.exp(-(d * d) / (2 * 0.055 * 0.055));
-    const inner = Math.exp(-(d * d) / (2 * 0.26 * 0.26)) * 0.17;
-    const edge = sstep(1.0, 0.9, r);
-    return clamp01((band * wob + inner) * edge);
+    const wob = 0.82 + 0.18 * Math.sin(th * 22 + 1.3) * Math.sin(th * 7);
+    // Break the perfect circle: real dust does not expand as a machined torus.
+    const rag = 1 + 0.06 * (fbm2(Math.cos(th) * 2.4 + 5, Math.sin(th) * 2.4 + 5, 617, 3) - 0.5);
+    const d = r - 0.66 * rag;
+    const band = Math.exp(-(d * d) / (2 * 0.155 * 0.155));
+    const inner = Math.exp(-(d * d) / (2 * 0.40 * 0.40)) * 0.30;
+    const edge = sstep(1.0, 0.72, r);
+    return clamp01((band * wob * 0.70 + inner) * edge);
   });
 };
 
@@ -280,26 +350,30 @@ export const paintBolt: Painter = (ctx, s) => {
 // ---------------------------------------------------------------------------
 // 9 — leaf / grass clipping
 // ---------------------------------------------------------------------------
+/**
+ * Leaf, as the intersection of two offset discs (a lens with two points), so
+ * the silhouette is analytic and the edge can be soft. Was a solid alpha-1.0
+ * bezier fill.
+ */
 export const paintLeaf: Painter = (ctx, s) => {
-  ctx.save();
-  ctx.translate(s / 2, s / 2);
-  ctx.beginPath();
-  ctx.moveTo(0, -s * 0.44);
-  ctx.bezierCurveTo(s * 0.30, -s * 0.20, s * 0.26, s * 0.24, 0, s * 0.44);
-  ctx.bezierCurveTo(-s * 0.24, s * 0.22, -s * 0.30, -s * 0.18, 0, -s * 0.44);
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(255,255,255,1)';
-  ctx.fill();
-  // Carve the central vein out of the alpha so it reads as a real leaf.
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.beginPath();
-  ctx.moveTo(0, -s * 0.40);
-  ctx.quadraticCurveTo(s * 0.02, 0, 0, s * 0.40);
-  ctx.lineWidth = s * 0.02;
-  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-  ctx.stroke();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.restore();
+  perPixel(ctx, s, (u, v) => {
+    const x = (u - 0.5) * 2;
+    const y = (v - 0.5) * 2;
+    const r = Math.sqrt(x * x + y * y);
+    if (r >= 1) return 0;
+    // Lens = intersection of two circles offset along x.
+    const d1 = Math.hypot(x - 0.62, y * 0.92) - 1.02;
+    const d2 = Math.hypot(x + 0.62, y * 0.92) - 1.02;
+    const d = Math.max(d1, d2);
+    const body = sstep(0.075, -0.075, d);
+    // Central vein, carved rather than stroked.
+    const vein = Math.exp(-(x * x) / (2 * 0.035 * 0.035)) * 0.42;
+    // Blade is thinner toward the tips and the outer margin.
+    const thick = sstep(0.0, 0.28, -d);
+    const grain = 0.82 + 0.30 * fbm2(u * 5.0, v * 5.0, 733, 3);
+    return clamp01(body * (0.34 + 0.60 * thick) * grain * (1 - vein)
+      * sstep(1.0, 0.82, r));
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -322,23 +396,37 @@ export const paintEmber: Painter = (ctx, s) => {
 // ---------------------------------------------------------------------------
 // 11 — debris chip (irregular hard-edged shard)
 // ---------------------------------------------------------------------------
+/**
+ * Was a 7-gon filled at alpha 1.0 with literally zero falloff — the "hard-edged
+ * opaque brown lumps, like flying mud clods" on the dirt emitters, and the
+ * "irregular yellow-green polygons resembling torn paper" on the item-box
+ * shatter, which is the same sprite under a different ramp. Same silhouette,
+ * but the edge now ramps over ~14 % of the sprite, the interior falls off
+ * toward the rim instead of being a slab, and a grain field breaks it up so it
+ * reads as a clod of material rather than a cut-out.
+ */
 export const paintChip: Painter = (ctx, s) => {
-  ctx.save();
-  ctx.translate(s / 2, s / 2);
-  ctx.beginPath();
   const n = 7;
+  const V: number[] = [];
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + ihash2(i, 3, 4409) * 0.5;
-    const rad = s * (0.22 + ihash2(i, 7, 8821) * 0.20);
-    const x = Math.cos(a) * rad;
-    const y = Math.sin(a) * rad;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    const rad = 0.44 + ihash2(i, 7, 8821) * 0.40;
+    V.push(Math.cos(a) * rad, Math.sin(a) * rad);
   }
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(255,255,255,1)';
-  ctx.fill();
-  ctx.restore();
+  perPixel(ctx, s, (u, v) => {
+    const x = (u - 0.5) * 2;
+    const y = (v - 0.5) * 2;
+    const r = Math.sqrt(x * x + y * y);
+    if (r >= 1) return 0;
+    const grain = fbm2(u * 6.5, v * 6.5, 4409, 4);
+    const d = polySdf(x, y, V);
+    const edge = 0.13 + grain * 0.09;
+    const body = sstep(edge, -edge * 0.45, d);
+    // Depth: solid through the middle, thinning out at the rim.
+    const thick = sstep(0.0, 0.40, -d);
+    const a = body * (0.26 + 0.66 * thick) * (0.74 + 0.40 * grain);
+    return clamp01(a * sstep(1.0, 0.80, r));
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -350,17 +438,20 @@ export const paintFlare: Painter = (ctx, s) => {
     const y = (v - 0.5) * 2;
     const r = Math.sqrt(x * x + y * y);
     if (r >= 1) return 0;
-    const fall = sstep(1.0, 0.75, r);
-    const core = Math.exp(-r * r * 130) * 1.15;
-    const h = Math.exp(-y * y * 620) * Math.exp(-Math.abs(x) * 2.6);
-    const w = Math.exp(-x * x * 620) * Math.exp(-Math.abs(y) * 2.6);
+    const fall = sstep(1.0, 0.72, r);
+    const core = Math.exp(-r * r * 110) * 1.05;
+    // The arms were sigma 0.028 — about 3 px on a 128 px cell, which is a drawn
+    // cross, not a glint. Nearly doubled, and the broad glow behind them raised,
+    // so the sparkle has a halo to sit in instead of four hard spokes.
+    const h = Math.exp(-y * y * 200) * Math.exp(-Math.abs(x) * 2.6);
+    const w = Math.exp(-x * x * 200) * Math.exp(-Math.abs(y) * 2.6);
     const d1x = (x + y) * 0.7071;
     const d1y = (x - y) * 0.7071;
-    const d1 = Math.exp(-d1y * d1y * 900) * Math.exp(-Math.abs(d1x) * 5.5);
-    const d2 = Math.exp(-d1x * d1x * 900) * Math.exp(-Math.abs(d1y) * 5.5);
-    const glow = Math.exp(-r * r * 11) * 0.28;
-    const ring = Math.exp(-((r - 0.30) * (r - 0.30)) / (2 * 0.035 * 0.035)) * 0.16;
-    return clamp01((core + (h + w) * 0.95 + (d1 + d2) * 0.34 + glow + ring) * fall);
+    const d1 = Math.exp(-d1y * d1y * 320) * Math.exp(-Math.abs(d1x) * 5.5);
+    const d2 = Math.exp(-d1x * d1x * 320) * Math.exp(-Math.abs(d1y) * 5.5);
+    const glow = Math.exp(-r * r * 8) * 0.40;
+    const ring = Math.exp(-((r - 0.30) * (r - 0.30)) / (2 * 0.075 * 0.075)) * 0.12;
+    return clamp01((core + (h + w) * 0.80 + (d1 + d2) * 0.30 + glow + ring) * fall);
   });
 };
 
@@ -372,10 +463,11 @@ export const paintConfetti: Painter = (ctx, s) => {
     const x = Math.abs(u - 0.5) / 0.34;
     const y = Math.abs(v - 0.5) / 0.20;
     const d = Math.max(x, y);
-    const body = sstep(1.02, 0.90, d);
+    // Was sstep(1.02, 0.90) — a 12 % ramp, i.e. a rectangle with a cut edge.
+    const body = sstep(1.04, 0.68, d);
     // A soft "fold" band so it doesn't read as a flat rectangle.
     const fold = 0.72 + 0.28 * Math.abs(Math.sin((v - 0.5) * 9.0));
-    return clamp01(body * fold);
+    return clamp01(body * fold * 0.9);
   });
 };
 
@@ -395,18 +487,21 @@ export const paintSplat: Painter = (ctx, s) => {
       0.16 * Math.sin(th * 3 + 0.7) +
       0.10 * Math.sin(th * 7 - 1.9) +
       0.08 * Math.sin(th * 13 + 2.4);
-    let a = sstep(lobes + 0.06, lobes - 0.10, r);
-    // Detached satellite droplets.
+    let a = sstep(lobes + 0.10, lobes - 0.16, r);
+    // Detached satellite droplets. Their falloff used to be rad*0.65 wide,
+    // which for the smallest droplet is under two texels at 128 px — five hard
+    // little discs around an otherwise soft splat. Widened and given a halo.
     for (let i = 0; i < 5; i++) {
       const ang = ihash2(i, 1, 3931) * Math.PI * 2;
       const dist = 0.62 + ihash2(i, 2, 5813) * 0.28;
-      const rad = 0.045 + ihash2(i, 3, 7717) * 0.06;
+      const rad = 0.055 + ihash2(i, 3, 7717) * 0.07;
       const dx = x - Math.cos(ang) * dist;
       const dy = y - Math.sin(ang) * dist;
-      a = Math.max(a, sstep(rad * 1.25, rad * 0.6, Math.sqrt(dx * dx + dy * dy)));
+      const dr = Math.sqrt(dx * dx + dy * dy);
+      a = Math.max(a, sstep(rad * 2.1, rad * 0.35, dr) * 0.92);
     }
     const grain = 0.88 + 0.12 * fbm2(u * 9, v * 9, 271, 3);
-    return clamp01(a * grain);
+    return clamp01(a * grain * sstep(1.0, 0.9, r));
   });
 };
 
