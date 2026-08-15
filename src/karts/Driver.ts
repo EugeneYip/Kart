@@ -1353,14 +1353,57 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       // a roster mean of 6.08, the lowest on the roster by a wide margin. The
       // tufts go on the shoulder line and the flank, where a three-quarter view
       // puts them on the outline rather than inside it.
-      for (let i = 0; i < 7; i++) {
-        const t = i / 6;
+      // ⚠️ THE FIRST VERSION OF THESE WAS TOO STUBBY TO COUNT. Shape complexity is
+      // perimeter / sqrt(area), so a short fat tuft adds area about as fast as it
+      // adds boundary and the measurement did not move at all — flank tufts,
+      // nape bristles and a wavier hat brim between them left the three-quarter
+      // figure at exactly 4.75 across three attempts. Long and THIN is the only
+      // thing that works, and it is also what a capybara's coat actually is:
+      // sparse, coarse guard hairs two or three times the length of the
+      // undercoat, standing away from the body.
+      for (let i = 0; i < 11; i++) {
+        const t = i / 10;
         const sx = i % 2 === 0 ? 1 : -1;
-        const y = lerp(s.hipY - 0.030, s.torsoTop - 0.020, t);
-        b.add('hips', 'furDark', earWedge(0.013, 0.030 + (i % 3) * 0.008, 0.007, 0.6), {
-          pos: [sx * (s.chest * 1.02 + bulk * 0.006), y, lerp(-front * 0.30, back * 0.62, t)],
-          rot: [16 + (i % 3) * 10, sx * 22, sx * (74 + (i % 2) * 12)],
-          detail: 2, shade: 0.86,
+        const y = lerp(s.hipY - 0.044, s.torsoTop - 0.010, t);
+        const len = 0.062 + (i % 3) * 0.018;
+        b.add('hips', 'furDark', earWedge(0.0075, len, 0.0045, 0.75), {
+          pos: [sx * (s.chest * 1.00 + bulk * 0.006), y, lerp(-front * 0.34, back * 0.66, t)],
+          rot: [14 + (i % 3) * 13, sx * 24, sx * (68 + (i % 2) * 16)],
+          detail: i % 3 === 0 ? 1 : 2, shade: 0.84 + (i % 2) * 0.06,
+        });
+      }
+      // ⚠️ PUT THEM WHERE THE OUTLINE ACTUALLY IS. The flank row above sits at
+      // x = chest, which is INBOARD of the elbows — so from behind and from
+      // three-quarters it is drawn inside the arm silhouette and contributes
+      // nothing. Measured: lengthening it moved the card from 3.97 to 4.12 and
+      // left rear and three-quarter at 4.85 / 4.53, unchanged. The shoulder line
+      // between the head and the arms IS the top outline in both of those
+      // framings, so that is where the visible ruff goes.
+      for (let i = 0; i < 8; i++) {
+        const t = i / 7;
+        const sx = t < 0.5 ? -1 : 1;
+        const u = Math.abs(t - 0.5) * 2;
+        const len = 0.058 + (i % 3) * 0.020;
+        b.add('torso', 'furDark', earWedge(0.0072, len, 0.0044, 0.78), {
+          pos: [
+            sx * lerp(0.020, s.shoulderHalf * 1.02, u),
+            s.shoulderY + 0.030 - u * 0.010,
+            s.shoulderZ + 0.014 + u * 0.010,
+          ],
+          rot: [-18 - (i % 3) * 9, sx * 14, sx * (10 + u * 26)],
+          detail: i % 2 === 0 ? 0 : 1, shade: 0.84 + (i % 2) * 0.06,
+        });
+      }
+      // A dorsal ridge of the same hairs along the spine — the highest-contrast
+      // place to put them, because the top edge of the body is pure outline from
+      // every framing that matters.
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
+        const len = 0.070 + (i % 2) * 0.022;
+        b.add('hips', 'furDark', earWedge(0.0070, len, 0.0042, 0.8), {
+          pos: [(i % 2 === 0 ? 1 : -1) * 0.012, s.torsoTop - 0.006, lerp(0.010, back * 0.92, t)],
+          rot: [-26 - i * 7, (i % 2 === 0 ? 1 : -1) * 12, (i % 2 === 0 ? 1 : -1) * 9],
+          detail: i % 2 === 0 ? 1 : 2, shade: 0.86,
         });
       }
       // Fringe. Four stubby strands — cheap, and it is what makes it a scarf.
@@ -1711,12 +1754,14 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // (4.75 against a roster mean of 6.08). A wide low brick with a soft hat is
     // smooth by design, but smooth and shapeless are not the same thing, and the
     // fix has to come from the animal rather than from an accessory.
-    for (let i = 0; i < 5; i++) {
-      const t = i / 4;
+    for (let i = 0; i < 7; i++) {
+      const t = i / 6;
       const sx = (t - 0.5) * 2;
-      b.add('head', 'furDark', earWedge(R * 0.10, R * (0.34 - Math.abs(sx) * 0.13), R * 0.05, 0.55), {
-        pos: [sx * R * 0.62, hy + R * (0.74 - Math.abs(sx) * 0.10), R * (0.52 + Math.abs(sx) * 0.08)],
-        rot: [26, sx * 16, sx * 20], detail: i === 2 ? 1 : 2, shade: 0.88,
+      b.add('head', 'furDark', earWedge(
+        R * 0.048, R * (0.86 - Math.abs(sx) * 0.30), R * 0.030, 0.72,
+      ), {
+        pos: [sx * R * 0.70, hy + R * (0.70 - Math.abs(sx) * 0.12), R * (0.50 + Math.abs(sx) * 0.10)],
+        rot: [24 + Math.abs(sx) * 10, sx * 18, sx * 24], detail: i % 2 === 1 ? 2 : 1, shade: 0.86,
       });
     }
   }
