@@ -148,6 +148,24 @@ export interface DriverDef {
    */
   rear?: 'hairMop' | 'spoiler' | 'finComb' | 'napeRoll' | 'streamers'
   | 'dorsalPack' | 'mantle' | 'neckCurtain';
+  /**
+   * Cranial form.
+   *
+   * THE RACER-SELECT CARD IS THE PRODUCT SHOT, and it is not the chase view.
+   * Ten cards side by side at ~100 x 100 px, cropped to head-and-shoulders: at
+   * that size the head IS the character, and an accessory sitting on a shared
+   * skull is not separation. Measured on that exact framing before this dial
+   * existed — p50 card IoU 0.762, worst pair aviator ~ fox at 0.819, and every
+   * card's shape complexity between 4.2 and 5.7, i.e. ten variations on a blob.
+   *
+   * All six humanoids that are not the robot or the alien used ONE loft: a
+   * 0.62 R chin, a 0.98 R cheek line and a 0.70 R crown. They were the same
+   * head with different hats. These are six genuinely different skulls —
+   * different jaw width, different crown width, different face length — chosen
+   * so that the pairs that measured closest (mechanic/racer, knight/aviator)
+   * are now at opposite ends of the range.
+   */
+  skull?: 'round' | 'square' | 'jowly' | 'child' | 'gaunt' | 'long';
 
   // --- animals -------------------------------------------------------------
   species?: Species;
@@ -182,7 +200,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // buys the fur material's strand normal and anisotropic sheen — which is
     // exactly the shading hair wants and a re-tinted cloth would not give.
     furDark: 0x6b3a1e, furAlt: 0xa9683a,
-    rear: 'hairMop',
+    rear: 'hairMop', skull: 'round',
     crouch: 5, shrug: 0.10, chin: -3, elbowOut: 0.004,
     face: {
       style: 'human', skin: '#e8ab7f', eye: '#3b6ea5', brow: '#5c3a24',
@@ -194,7 +212,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     id: 'racer', name: 'Blitz', scale: 1.02, bulk: 0.62, headR: 0.112, neck: 0.012,
     torso: 0.278, head: 'fullHelmet', outfit: 'race', skinColor: 0xd39a72,
     suit: 0xe9edf4, suitAlt: 0xffcf2f,
-    rear: 'spoiler', elbowOut: -0.020,
+    rear: 'spoiler', skull: 'square', elbowOut: -0.020,
     // The straight-line specialist is folded into the car: the deepest crouch on
     // the roster and shoulders pulled up around the helmet.
     crouch: 13, shrug: 0.26, chin: -6,
@@ -223,7 +241,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     torso: 0.25, head: 'trucker', outfit: 'jacket', skinColor: 0xc98b62,
     suit: 0x4b5540, suitAlt: 0xe07a2c,
     furDark: 0x33261c, furAlt: 0x6b5238,
-    rear: 'napeRoll', elbowOut: 0.026,
+    rear: 'napeRoll', skull: 'jowly', elbowOut: 0.026,
     // Heavy and settled: leans BACK, shoulders dropped, chin up. The only
     // negative crouch on the roster, which is what stops the biggest driver
     // reading as the same pose scaled up.
@@ -238,7 +256,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     id: 'speedy', name: 'Pip', scale: 0.82, bulk: 0.16, headR: 0.132, neck: 0.010,
     torso: 0.206, head: 'aero', outfit: 'slim', skinColor: 0xf2c49b,
     suit: 0xd93a7a, suitAlt: 0xfdf3e3,
-    rear: 'streamers', elbowOut: 0.022,
+    rear: 'streamers', skull: 'child', elbowOut: 0.022,
     crouch: 10, shrug: 0.18, chin: -4,
     face: {
       style: 'human', skin: '#f2c49b', eye: '#2f8f6b', brow: '#4a3520',
@@ -265,7 +283,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     id: 'knight', name: 'Ember', scale: 1.06, bulk: 0.80, headR: 0.113, neck: 0.0,
     torso: 0.256, head: 'greatHelm', outfit: 'armour', skinColor: 0xdda07a,
     suit: 0x38445e, suitAlt: 0xd9a53a,
-    rear: 'mantle', elbowOut: 0.018,
+    rear: 'mantle', skull: 'gaunt', elbowOut: 0.018,
     crouch: 6, shrug: 0.20, chin: -2,
     face: {
       style: 'visor', skin: '#dda07a', eye: '#141820', brow: '#2b2118',
@@ -278,7 +296,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     torso: 0.272, head: 'flightCap', outfit: 'jacket', skinColor: 0xdfae86,
     suit: 0x8a6b45, suitAlt: 0xf3e7d0,
     furDark: 0x5b4630, furAlt: 0x8c6f4c,
-    rear: 'neckCurtain', elbowOut: -0.008,
+    rear: 'neckCurtain', skull: 'long', elbowOut: -0.008,
     crouch: 3, shrug: -0.06, chin: 2,
     face: {
       style: 'human', skin: '#dfae86', eye: '#7a6a4a', brow: '#4a3a26',
@@ -1608,12 +1626,19 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // semi-aquatic animal, built to float with just that plane above the water —
     // so the forehead is a shelf, not a dome. eTop at 6.0+ is what makes it a
     // shelf; at 4.4 the crown rounded over and the whole head read as a bear cub.
+    // ⚠️ THE WIDTH HAS TO BE IN THE ANIMAL, NOT THE HAT. With a 1.62 R brim the
+    // head node measured W/H 1.52 and the probe happily asserted "capy head is a
+    // wide loaf" — but it was measuring the HAT. Shrink the hat to let the
+    // capybara read and the same measurement falls to 1.08, i.e. the skull
+    // underneath was never a loaf at all. It is now: 1.26 R across the cheeks
+    // against a 0.128 R base radius, wider than it is tall, with the flat top
+    // shelf carried by eTop 6.4.
     : [
-      { z: -R * 0.82, y: R * 0.06, hw: R * 0.72, hUp: R * 0.66, hDown: R * 0.80, eSide: 4.8, eTop: 6.0, eBot: 4.6 },
-      { z: -R * 0.26, y: R * 0.04, hw: R * 0.94, hUp: R * 0.86, hDown: R * 1.00, eSide: 5.2, eTop: 6.4, eBot: 4.6 },
-      { z: R * 0.26, y: 0, hw: R * 1.00, hUp: R * 0.84, hDown: R * 1.06, eSide: 5.4, eTop: 6.4, eBot: 4.8 },
-      { z: R * 0.80, y: -R * 0.02, hw: R * 0.92, hUp: R * 0.78, hDown: R * 0.94, eSide: 4.8, eTop: 5.6, eBot: 4.2 },
-      { z: R * 1.06, y: -R * 0.04, hw: R * 0.62, hUp: R * 0.54, hDown: R * 0.64, eSide: 4.0, eTop: 4.2, eBot: 3.6 },
+      { z: -R * 0.82, y: R * 0.06, hw: R * 0.94, hUp: R * 0.70, hDown: R * 0.86, eSide: 4.8, eTop: 6.0, eBot: 4.6 },
+      { z: -R * 0.26, y: R * 0.04, hw: R * 1.18, hUp: R * 0.90, hDown: R * 1.06, eSide: 5.2, eTop: 6.4, eBot: 4.6 },
+      { z: R * 0.26, y: 0, hw: R * 1.26, hUp: R * 0.88, hDown: R * 1.12, eSide: 5.4, eTop: 6.4, eBot: 4.8 },
+      { z: R * 0.80, y: -R * 0.02, hw: R * 1.14, hUp: R * 0.80, hDown: R * 0.98, eSide: 4.8, eTop: 5.6, eBot: 4.2 },
+      { z: R * 1.06, y: -R * 0.04, hw: R * 0.78, hUp: R * 0.56, hDown: R * 0.66, eSide: 4.0, eTop: 4.2, eBot: 3.6 },
     ], 22), { pos: [0, hy, 0], detail: 0 });
 
   // --- snout -------------------------------------------------------------
@@ -1633,10 +1658,10 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // chamfer instead of rounding. Shortening the muzzle to fake bluntness was
     // the earlier mistake and it cost the species read entirely.
     : loft([
-      { z: tipZ, y: hy - R * 0.16, hw: R * 0.78, hUp: R * 0.40, hDown: R * 0.52, eSide: 5.0, eTop: 5.2, eBot: 4.4 },
-      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.15, hw: R * 0.82, hUp: R * 0.42, hDown: R * 0.54, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
-      { z: -R * 0.40, y: hy - R * 0.14, hw: R * 0.86, hUp: R * 0.46, hDown: R * 0.56, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
-      { z: R * 0.16, y: hy - R * 0.12, hw: R * 0.90, hUp: R * 0.52, hDown: R * 0.58, eSide: 4.8, eTop: 5.0, eBot: 4.2 },
+      { z: tipZ, y: hy - R * 0.30, hw: R * 0.92, hUp: R * 0.74, hDown: R * 0.86, eSide: 5.0, eTop: 5.2, eBot: 4.4 },
+      { z: lerp(tipZ, -R * 0.40, 0.50), y: hy - R * 0.29, hw: R * 0.98, hUp: R * 0.78, hDown: R * 0.90, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: -R * 0.40, y: hy - R * 0.27, hw: R * 1.04, hUp: R * 0.82, hDown: R * 0.92, eSide: 5.2, eTop: 5.4, eBot: 4.6 },
+      { z: R * 0.16, y: hy - R * 0.24, hw: R * 1.12, hUp: R * 0.86, hDown: R * 0.94, eSide: 4.8, eTop: 5.0, eBot: 4.2 },
     ], { segments: 18 });
   b.add('head', 'furAlt', snout, { detail: 0 });
 
@@ -1719,7 +1744,7 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
   // Nose — tiny, dark, and the shadow under it is what makes a snout read in 3D.
   const nose = fox
     ? superShape(R * 0.135, R * 0.105, R * 0.105, 2.4, 2.2, 9, 7)
-    : superShape(R * 0.200, R * 0.082, R * 0.100, 3.0, 2.6, 10, 7);
+    : superShape(R * 0.340, R * 0.130, R * 0.150, 3.6, 3.0, 11, 7);
   b.add('head', 'plastic', nose, {
     pos: [0, hy - R * (fox ? 0.185 : 0.055), tipZ - R * (fox ? 0.02 : 0.04)], detail: 0,
   });
@@ -1752,11 +1777,11 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // top plane — level with the eyes, which is the semi-aquatic giveaway. Set
     // high and forward they read as a bear's; set back and small they read as a
     // capybara's, and they leave the forehead shelf as one unbroken mass.
-    b.pair('head', 'head', 'fur', superShape(R * 0.15, R * 0.16, R * 0.10, 2.6, 2.4, 9, 6), {
-      pos: [R * 0.84, hy + R * 0.34, R * 0.56], rot: [-6, 0, -26], detail: 0,
+    b.pair('head', 'head', 'fur', superShape(R * 0.17, R * 0.18, R * 0.11, 2.6, 2.4, 9, 6), {
+      pos: [R * 1.24, hy + R * 0.40, R * 0.54], rot: [-6, 0, -32], detail: 0,
     });
-    b.pair('head', 'head', 'furDark', disc(R * 0.085, R * 0.026, 0, 9), {
-      pos: [R * 0.88, hy + R * 0.34, R * 0.50], rot: [0, 66, 0], detail: 1, shade: 0.86,
+    b.pair('head', 'head', 'furDark', disc(R * 0.095, R * 0.028, 0, 9), {
+      pos: [R * 1.28, hy + R * 0.40, R * 0.48], rot: [0, 66, 0], detail: 1, shade: 0.82,
     });
   }
 
@@ -2067,6 +2092,84 @@ function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
   }
 }
 
+// --- human crania ----------------------------------------------------------
+
+/**
+ * Six cranial forms, as `verticalLoft` sections. `z` is height (-0.98 R is the
+ * chin line, +0.92 R the crown), `hw` the half-width, `hUp` the face extent and
+ * `hDown` the back of the skull.
+ *
+ * The values are chosen against each other, not in isolation: the roster's two
+ * closest measured card pairs were mechanic~racer (0.762) and knight~aviator
+ * (0.789), so `round` and `square` sit at opposite ends of the jaw-width range
+ * and `gaunt` and `long` differ by crown width and face length rather than by
+ * scale — scaling two identical skulls does not separate them on a card that
+ * fits every subject to the same height.
+ */
+function humanSkull(kind: NonNullable<DriverDef['skull']>, R: number): LoftSection[] {
+  switch (kind) {
+    case 'square':  // wide flat cranium, near-vertical sides, strong corners
+      return [
+        { z: -R * 0.92, y: -0.006, hw: R * 0.86, hUp: R * 0.70, hDown: R * 0.78, eSide: 4.2, eTop: 3.6, eBot: 4.0 },
+        { z: -R * 0.30, y: -0.004, hw: R * 1.00, hUp: R * 0.94, hDown: R * 0.98, eSide: 4.4, eTop: 3.8, eBot: 3.8 },
+        { z: R * 0.30, y: 0.000, hw: R * 1.02, hUp: R * 0.96, hDown: R * 1.00, eSide: 4.6, eTop: 3.8, eBot: 3.8 },
+        { z: R * 0.94, y: 0.002, hw: R * 0.88, hUp: R * 0.80, hDown: R * 0.86, eSide: 4.0, eTop: 3.2, eBot: 3.4 },
+      ];
+    case 'jowly':   // tiny crown over an enormous jaw — widest at the bottom
+      return [
+        { z: -R * 1.02, y: -0.010, hw: R * 1.00, hUp: R * 0.82, hDown: R * 0.88, eSide: 3.6, eTop: 3.2, eBot: 3.8 },
+        { z: -R * 0.40, y: -0.006, hw: R * 1.06, hUp: R * 0.96, hDown: R * 1.00, eSide: 3.6, eTop: 3.2, eBot: 3.4 },
+        { z: R * 0.24, y: 0.000, hw: R * 0.94, hUp: R * 0.88, hDown: R * 0.92, eSide: 3.2, eTop: 2.9, eBot: 3.0 },
+        { z: R * 0.84, y: 0.002, hw: R * 0.60, hUp: R * 0.56, hDown: R * 0.60, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+      ];
+    case 'child':   // huge cranium over a tiny pointed chin
+      return [
+        { z: -R * 0.86, y: -0.008, hw: R * 0.44, hUp: R * 0.50, hDown: R * 0.54, eSide: 2.8, eTop: 2.6, eBot: 3.0 },
+        { z: -R * 0.24, y: -0.004, hw: R * 0.84, hUp: R * 0.88, hDown: R * 0.90, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+        { z: R * 0.34, y: 0.000, hw: R * 1.06, hUp: R * 1.00, hDown: R * 1.06, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+        { z: R * 1.00, y: 0.002, hw: R * 0.86, hUp: R * 0.78, hDown: R * 0.86, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+      ];
+    case 'gaunt':   // narrow and tall, hollow cheeks, long chin
+      return [
+        { z: -R * 1.06, y: -0.008, hw: R * 0.54, hUp: R * 0.62, hDown: R * 0.64, eSide: 3.2, eTop: 3.0, eBot: 3.4 },
+        { z: -R * 0.38, y: -0.006, hw: R * 0.76, hUp: R * 0.84, hDown: R * 0.86, eSide: 3.4, eTop: 3.0, eBot: 3.2 },
+        { z: R * 0.28, y: 0.000, hw: R * 0.84, hUp: R * 0.88, hDown: R * 0.90, eSide: 3.6, eTop: 3.0, eBot: 3.2 },
+        { z: R * 1.00, y: 0.002, hw: R * 0.66, hUp: R * 0.64, hDown: R * 0.68, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+      ];
+    case 'long':    // long oval, narrow crown, face projecting well forward
+      return [
+        { z: -R * 1.04, y: -0.010, hw: R * 0.66, hUp: R * 0.86, hDown: R * 0.66, eSide: 3.0, eTop: 2.8, eBot: 3.2 },
+        { z: -R * 0.36, y: -0.008, hw: R * 0.86, hUp: R * 1.02, hDown: R * 0.88, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+        { z: R * 0.26, y: -0.002, hw: R * 0.90, hUp: R * 1.00, hDown: R * 0.94, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+        { z: R * 0.90, y: 0.002, hw: R * 0.62, hUp: R * 0.68, hDown: R * 0.66, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+      ];
+    default:        // 'round' — soft, wide-cheeked, small chin
+      return [
+        { z: -R * 0.90, y: -0.008, hw: R * 0.58, hUp: R * 0.62, hDown: R * 0.68, eSide: 2.8, eTop: 2.6, eBot: 3.0 },
+        { z: -R * 0.30, y: -0.006, hw: R * 0.92, hUp: R * 0.92, hDown: R * 0.96, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+        { z: R * 0.30, y: 0.000, hw: R * 1.02, hUp: R * 0.96, hDown: R * 1.02, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+        { z: R * 0.92, y: 0.002, hw: R * 0.78, hUp: R * 0.72, hDown: R * 0.78, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
+      ];
+  }
+}
+
+/**
+ * The jaw block, brow width and cheekbone offset that go with each cranium.
+ * `y`/`z` place the jaw below and in front of the head centre; `brow` is the
+ * brow-ridge half-width; `cheek` the outboard cheekbone offset.
+ */
+const JAW: Record<NonNullable<DriverDef['skull']>, {
+  w: number; h: number; d: number; y: number; z: number;
+  eSide: number; eTop: number; brow: number; cheek: number;
+}> = {
+  round:  { w: 0.56, h: 0.28, d: 0.44, y: 0.58, z: 0.30, eSide: 2.8, eTop: 2.5, brow: 0.72, cheek: 0.74 },
+  square: { w: 0.86, h: 0.32, d: 0.52, y: 0.56, z: 0.24, eSide: 4.6, eTop: 3.6, brow: 0.92, cheek: 0.84 },
+  jowly:  { w: 0.98, h: 0.38, d: 0.58, y: 0.60, z: 0.20, eSide: 3.8, eTop: 3.0, brow: 0.86, cheek: 0.88 },
+  child:  { w: 0.40, h: 0.22, d: 0.34, y: 0.54, z: 0.30, eSide: 2.5, eTop: 2.3, brow: 0.60, cheek: 0.64 },
+  gaunt:  { w: 0.46, h: 0.40, d: 0.42, y: 0.68, z: 0.28, eSide: 3.2, eTop: 2.8, brow: 0.70, cheek: 0.60 },
+  long:   { w: 0.58, h: 0.42, d: 0.54, y: 0.66, z: 0.34, eSide: 3.0, eTop: 2.7, brow: 0.76, cheek: 0.66 },
+};
+
 function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
   const R = d.headR;
   const hy = s.headY;
@@ -2093,13 +2196,32 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       { z: R * 0.94, y: 0, hw: R * 0.64, hUp: R * 0.60, hDown: R * 0.60, eSide: 4.2, eTop: 3.6, eBot: 3.8 },
     ], 20), { pos: [0, hy, 0], detail: 0 });
   } else {
-    // Human skull: slightly egg-shaped, jaw narrower than the crown.
-    b.add('head', skullSlot, verticalLoft([
-      { z: -R * 0.98, y: -0.008, hw: R * 0.62, hUp: R * 0.64, hDown: R * 0.72, eSide: 3.0, eTop: 2.8, eBot: 3.2 },
-      { z: -R * 0.36, y: -0.006, hw: R * 0.90, hUp: R * 0.90, hDown: R * 0.94, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
-      { z: R * 0.26, y: 0.000, hw: R * 0.98, hUp: R * 0.94, hDown: R * 0.98, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
-      { z: R * 0.92, y: 0.002, hw: R * 0.70, hUp: R * 0.66, hDown: R * 0.70, eSide: 2.8, eTop: 2.6, eBot: 2.8 },
-    ], 22), { pos: [0, hy, 0], detail: 0 });
+    // Human skull. `verticalLoft` reads `z` as HEIGHT (so -0.98 R is the chin
+    // and +0.92 R the crown), `hUp` as the forward/face extent and `hDown` as
+    // the back of the head. Six distinct crania — see `DriverDef.skull`.
+    b.add('head', skullSlot, verticalLoft(humanSkull(d.skull ?? 'round', R), 22),
+      { pos: [0, hy, 0], detail: 0 });
+
+    // Jaw / chin block. A separate volume, because the single loft above could
+    // only ever taper to a point and every human ended up with the same soft
+    // egg-shaped chin. This is where "square jaw" and "pointed chin" actually
+    // come from at card size.
+    const jaw = JAW[d.skull ?? 'round'];
+    b.add('head', skullSlot, superShape(
+      R * jaw.w, R * jaw.h, R * jaw.d, jaw.eSide, jaw.eTop, 12, 8,
+    ), { pos: [0, hy - R * jaw.y, -R * jaw.z], detail: 0, shade: 0.97 });
+
+    // Brow ridge — a real shelf over the eyes rather than a painted line. The
+    // shadow it casts is most of what makes a face read as a face at 100 px.
+    b.add('head', skullSlot, superShape(R * jaw.brow, R * 0.10, R * 0.16, 3.4, 2.8, 11, 6), {
+      pos: [0, hy + R * 0.34, -R * 0.74], rot: [-10, 0, 0], detail: 1, shade: 0.93,
+    });
+
+    // Cheekbones, canted outward — the second read after the jaw.
+    b.pair('head', 'head', skullSlot, superShape(R * 0.22, R * 0.16, R * 0.22, 3.0, 2.6, 9, 6), {
+      pos: [R * jaw.cheek, hy + R * 0.02, -R * 0.60], rot: [0, -16, -10], detail: 1, shade: 0.95,
+    });
+
     // Ears
     const ear = superShape(R * 0.10, R * 0.20, R * 0.13, 2.6, 2.4, 8, 6);
     b.pair('head', 'head', 'skin', ear, { pos: [R * 0.94, hy + R * 0.02, R * 0.06], rot: [0, 0, -8], detail: 1 });
@@ -2398,15 +2520,24 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       });
       // Floppy brim. The warp is what makes it floppy: it dips front and back,
       // lifts at the sides, and its outline is not a circle.
-      // The warp amplitudes are deliberately large: a shallow warp reads as a
-      // manufacturing tolerance, and only a brim whose OUTLINE is visibly not a
-      // circle reads as soft felt that has been sat on.
+      // ⚠️ THE HAT WAS EATING THE CHARACTER. At a 1.62 R brim the headgear
+      // measured 0.490 m across against a 0.287 m skull — 1.7x the animal it sits
+      // on — and on the racer-select card Capy came out as the roster's flattest
+      // silhouette (shape complexity 4.23 against a p50 of 4.83) and read, in the
+      // owner's words, as a featureless beige mass. A capybara's read is its HEAD:
+      // the flat forehead shelf, the blunt block muzzle, the tiny ears set far
+      // back. An accessory that hides all three is worth less than nothing.
+      //
+      // So the brim comes in to 1.14 R — still unmistakably a floppy bucket hat,
+      // but now narrower than the head is long, which lets the muzzle and the ears
+      // sit OUTSIDE the hat outline. That is also what puts concavity in the card
+      // silhouette: head, then a notch, then ear.
       b.add('head', 'clothAlt', sweepRing(
-        brimProfile(R * 0.96, R * 1.62, R * 0.062, R * 0.20), 26, (th) => ({
-          dr: Math.sin(th * 2 + 0.7) * R * 0.150 + Math.sin(th * 3 - 1.1) * R * 0.070,
-          dy: -R * 0.090 * (0.5 - 0.5 * Math.cos(th * 2)) + Math.sin(th * 3) * R * 0.060,
+        brimProfile(R * 0.94, R * 1.34, R * 0.060, R * 0.19), 26, (th) => ({
+          dr: Math.sin(th * 2 + 0.7) * R * 0.120 + Math.sin(th * 3 - 1.1) * R * 0.075,
+          dy: -R * 0.085 * (0.5 - 0.5 * Math.cos(th * 2)) + Math.sin(th * 3) * R * 0.055,
         }),
-      ), { pos: [0, hy + R * 0.58, R * 0.26], rot: [-15, 0, 7], detail: 0, shade: 0.94 });
+      ), { pos: [0, hy + R * 0.62, R * 0.30], rot: [-19, 0, 8], detail: 0, shade: 0.94 });
       break;
     }
   }
