@@ -913,8 +913,21 @@ export const TRACKS: Record<string, TrackDef> = {
     boostPads: [
       { t: 0.955, lat: 0, width: 9, length: 16 },
       { t: 0.235, lat: 0, width: 14, length: 18 }, // bridge launch
-      { t: 0.545, lat: 4, width: 7, length: 14 },
-      { t: 0.79, lat: 0, width: 8, length: 14 },
+      // These two used to sit at t 0.545 (arc 837) and t 0.79 (arc 1213), i.e.
+      // 23 m BEFORE the 360-degree spiral and inside its exit. volcanoRush is the
+      // only circuit where every boost pad lands within 140 m of a corner tighter
+      // than R 120, and it was measured as the trigger for the worst AI behaviour
+      // in the game: a pad took the rival 28.8 -> 47.8 m/s against a 30.2 m/s
+      // target, it met an R 44 m corner at 32-38 m/s, ran 11 m wide and speared
+      // the inside rail. 74 % of the circuit's wall contacts happened in the 27 %
+      // of the lap between arc 860 and 1200.
+      //
+      // A boost belongs on a straight or a corner exit, which is where the other
+      // two already are (arc 361 bridge launch, arc 1467 start straight). t 0.45
+      // is arc 691, giving 169 m of caldera chute to spend the boost before the
+      // spiral; t 0.87 is arc 1336, clear of the lava tube that ends at 1280.
+      { t: 0.45, lat: 4, width: 7, length: 14 },
+      { t: 0.87, lat: 0, width: 8, length: 14 },
     ],
     // Three rows per lap (was seven / 31 boxes).
     itemRows: [
