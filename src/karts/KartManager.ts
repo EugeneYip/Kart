@@ -62,6 +62,14 @@ import {
 export type { SocketName } from './KartModel';
 export type { PortraitFraming } from './Portrait';
 
+/**
+ * Suffix for a racer the roster had to repeat — see `buildRoster`. Index 0 is
+ * the original and is never used. This only fires while `CHARACTERS.length` is
+ * short of the grid size; at twelve characters the grid is fully distinct and
+ * nothing here is ever read.
+ */
+const ROSTER_REPEAT_SUFFIX = ['', 'II', 'III', 'IV'] as const;
+
 // ---------------------------------------------------------------------------
 // Loose dependency shapes — these subsystems are authored in parallel, so we
 // depend on the *shape* of what we need and feature-detect everything.
@@ -301,12 +309,34 @@ export class KartManager implements ISubsystem {
     this.ready = true;
   }
 
-  /** Twelve entries from the eight-strong roster; duplicates get new paint. */
+  /**
+   * Twelve entries, distinct wherever the roster can supply them.
+   *
+   * The old docstring here said "duplicates get new paint" and claimed an
+   * eight-strong roster. The roster is ten, the grid is twelve, and the paint
+   * part was only half true: `createVisual` does hue-shift by `variant`, so the
+   * *kart* differed — but this function pushed the identical `CharacterDef`, so
+   * the name did not. Every race put two racers called CAPY and two called NOVA
+   * on the leaderboard, the results board and the rival readout.
+   *
+   * Distinct-first is unchanged: `rest` is walked in order, so the first nine
+   * repeats are all different characters. What is new is that a repeat past that
+   * point is relabelled, and therefore can never read as the same racer twice.
+   *
+   * The clone keeps `id`, deliberately. `makeTuning(id)`, `CHARACTER_BY_ID`, the
+   * `"<id>#N"` paint keys and `portraitSubject`'s canonical-livery lookup all key
+   * off it, and a repeat is the same character in a second car, not a new one.
+   */
   private buildRoster(count: number): CharacterDef[] {
     const player = CHARACTER_BY_ID[this.playerCharacterId] ?? CHARACTERS[0];
     const rest = CHARACTERS.filter((c) => c.id !== player.id);
     const out: CharacterDef[] = [player];
-    for (let i = 0; out.length < count; i++) out.push(rest[i % rest.length]);
+    for (let i = 0; out.length < count; i++) {
+      const base = rest[i % rest.length];
+      const lap = Math.floor(i / rest.length);
+      out.push(lap === 0 ? base
+        : { ...base, name: `${base.name} ${ROSTER_REPEAT_SUFFIX[lap] ?? String(lap + 1)}` });
+    }
     return out;
   }
 
