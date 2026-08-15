@@ -446,6 +446,23 @@ export const RECOVER = {
   arcMetres: 8.0,
   /** Seconds of clean racing needed to earn full `composure`. */
   composureSeconds: 6.0,
+  /**
+   * Barrier contacts, decaying at `contactDecay` per second, at which a driver is
+   * treated as fully rattled and the rubber band stops pushing it. Three touches
+   * inside ~12 s is "this driver cannot hold this corner", which is precisely the
+   * behaviour the owner keeps reporting.
+   */
+  contactsForPanic: 2.0,
+  /**
+   * Decay per second. Deliberately slow — much slower than the first attempt,
+   * which used 0.25/s and measured as a no-op (tokyoNeon 51 -> 51 contacts):
+   * barrier contacts at this corner arrive about one per nine seconds, so at
+   * 0.25/s the count had fully decayed before the next one landed and the gate
+   * never accumulated past a single hit. At 0.06/s four touches inside ~35 s add
+   * up, which is the timescale on which "this driver cannot hold this corner"
+   * actually becomes true.
+   */
+  contactDecay: 0.06,
   /** Samples kept over `arcWindow`. Ring buffer, allocated once. */
   arcSamples: 16,
   /**
@@ -796,6 +813,8 @@ export class AIDriver {
   private stuckStreak = 0;
   /** Seconds of uninterrupted ordinary racing. Feeds `composure`. */
   private settledFor = 0;
+  /** Decaying count of recent barrier contacts. Also feeds `composure`. */
+  private contactRate = 0;
 
   // ---- items -------------------------------------------------------------
   private items: ItemAccess = NULL_ITEMS;
@@ -1031,7 +1050,28 @@ export class AIDriver {
    */
   get composure(): number {
     if (this.mode !== 'race' && this.mode !== 'grid') return 0;
-    return clamp01(this.settledFor / RECOVER.composureSeconds);
+    const settled = clamp01(this.settledFor / RECOVER.composureSeconds);
+    // …and a driver that keeps HITTING things is not coping either, even though it
+    // never stops moving and so never trips any of the stuck tests.
+    //
+    // This is the whole of the owner's third report. Measured on the current tree,
+    // 260 s, seed 12345, one kart dominates every city circuit — kart 5, the
+    // `rival`, which is the kart the band tracks hardest:
+    //
+    //   circuit          band ON            band OFF
+    //   tokyoNeon        51 contacts        13   (rival 38 -> 7)
+    //   taipeiCircuit    38                  5   (rival 21 -> 5)
+    //   neonMetropolis   55                 14   (rival 29 -> 13)
+    //
+    // Three quarters of all remaining wall contacts are the rubber band pushing
+    // risk into a driver that is already failing to hold the road — and the
+    // lap-time spread does not shrink with the band off (5.83->6.05, 6.18->6.57,
+    // 5.94->6.73 s), so the band is not what makes the field a field. The pace
+    // ladder is. The composure gate existed to stop exactly this and could not see
+    // it, because its only inputs were "stuck" and "off-road": a kart clipping the
+    // same barrier once a lap is doing neither.
+    const rattled = clamp01(this.contactRate / RECOVER.contactsForPanic);
+    return Math.min(settled, 1 - rattled);
   }
 
   /** Cleared by the caller once it has honoured `wantsRespawn`. */
@@ -1078,6 +1118,7 @@ export class AIDriver {
     this.stuckEpisodes = 0;
     this.stuckStreak = 0;
     this.settledFor = 0;
+    this.contactRate = 0;
     this.recoverLifetime = 0;
     this.blockBias = 0;
     this.blockTime = 0;
@@ -1546,7 +1587,10 @@ export class AIDriver {
       if (depth > this.wallDepth) this.wallDepth = depth;
       const w = clamp01(0.45 + depth / WALL.nowMargin);
       target += sign(side) * w * WALL.nowStrength;
-      if (this.wallTouch === 0) this.wallContacts++;
+      if (this.wallTouch === 0) {
+        this.wallContacts++;
+        this.contactRate += 1;
+      }
       this.wallTouch += dt;
     } else {
       this.wallTouch = 0;
@@ -1976,6 +2020,9 @@ export class AIDriver {
       } else this.offTrackTimer = 0;
       if (this.stuckStreak > 0) {
         this.stuckStreak = Math.max(0, this.stuckStreak - RECOVER.streakDecay * dt);
+      }
+      if (this.contactRate > 0) {
+        this.contactRate = Math.max(0, this.contactRate - RECOVER.contactDecay * dt);
       }
       // Composure: ordinary racing builds it, trouble of any kind zeroes it.
       const troubled =
