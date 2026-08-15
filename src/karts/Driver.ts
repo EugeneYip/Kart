@@ -192,7 +192,7 @@ const HUMAN_EYE = '#2b2f3a';
 export const DRIVERS: Record<DriverId, DriverDef> = {
   // 1. Plucky mechanic — backwards cap, goggles on the forehead, overalls.
   mechanic: {
-    id: 'mechanic', name: 'Nova', scale: 1.0, bulk: 0.30, headR: 0.120, neck: 0.026,
+    id: 'mechanic', name: 'Nova', scale: 1.0, bulk: 0.30, headR: 0.116, neck: 0.030,
     torso: 0.262, head: 'cap', outfit: 'overalls', skinColor: 0xe8ab7f,
     suit: 0x2c3d63, suitAlt: 0xf1e7d3,
     // Auburn hair. `furDark`/`furAlt` route through `KartManager.paintFor`
@@ -209,7 +209,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 2. Cool racer — full-face helmet, tinted visor, winglets.
   racer: {
-    id: 'racer', name: 'Blitz', scale: 1.02, bulk: 0.62, headR: 0.112, neck: 0.012,
+    id: 'racer', name: 'Blitz', scale: 1.02, bulk: 0.62, headR: 0.093, neck: 0.014,
     torso: 0.278, head: 'fullHelmet', outfit: 'race', skinColor: 0xd39a72,
     suit: 0xe9edf4, suitAlt: 0xffcf2f,
     rear: 'spoiler', skull: 'square', elbowOut: -0.020,
@@ -223,7 +223,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 3. Robot — chromed dome, single optic band, antenna, piston arms.
   robot: {
-    id: 'robot', name: 'Zephyr', scale: 0.98, bulk: 0.36, headR: 0.104, neck: 0.052,
+    id: 'robot', name: 'Zephyr', scale: 0.98, bulk: 0.36, headR: 0.126, neck: 0.062,
     torso: 0.244, head: 'robot', outfit: 'plated', skinColor: 0xb9c2cc,
     suit: 0x39424c, suitAlt: 0x9aa5b2,
     rear: 'finComb', elbowOut: 0.028,
@@ -237,7 +237,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 4. Big friendly heavy — tiny wide-brim cap on a huge frame.
   heavy: {
-    id: 'heavy', name: 'Torque', scale: 1.14, bulk: 1.0, headR: 0.108, neck: 0.0,
+    id: 'heavy', name: 'Torque', scale: 1.14, bulk: 1.0, headR: 0.091, neck: 0.0,
     torso: 0.25, head: 'trucker', outfit: 'jacket', skinColor: 0xc98b62,
     suit: 0x4b5540, suitAlt: 0xe07a2c,
     furDark: 0x33261c, furAlt: 0x6b5238,
@@ -253,7 +253,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 5. Small speedster — oversized teardrop helmet, big eyes, scarf.
   speedy: {
-    id: 'speedy', name: 'Pip', scale: 0.82, bulk: 0.16, headR: 0.132, neck: 0.010,
+    id: 'speedy', name: 'Pip', scale: 0.82, bulk: 0.16, headR: 0.161, neck: 0.004,
     torso: 0.206, head: 'aero', outfit: 'slim', skinColor: 0xf2c49b,
     suit: 0xd93a7a, suitAlt: 0xfdf3e3,
     rear: 'streamers', skull: 'child', elbowOut: 0.022,
@@ -266,7 +266,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 6. Alien — elongated cranium under a glass bubble, black almond eyes.
   alien: {
-    id: 'alien', name: 'Vex', scale: 0.94, bulk: 0.22, headR: 0.108, neck: 0.070,
+    id: 'alien', name: 'Vex', scale: 0.94, bulk: 0.22, headR: 0.145, neck: 0.095,
     torso: 0.252, head: 'bubble', outfit: 'slim', skinColor: 0x9fe3b8,
     suit: 0x1d2c50, suitAlt: 0x3cf0c8,
     rear: 'dorsalPack', elbowOut: -0.014,
@@ -280,7 +280,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 7. Knight — crested great-helm with a T-slit, pauldrons over a gambeson.
   knight: {
-    id: 'knight', name: 'Ember', scale: 1.06, bulk: 0.80, headR: 0.113, neck: 0.0,
+    id: 'knight', name: 'Ember', scale: 1.06, bulk: 0.80, headR: 0.099, neck: 0.0,
     torso: 0.256, head: 'greatHelm', outfit: 'armour', skinColor: 0xdda07a,
     suit: 0x38445e, suitAlt: 0xd9a53a,
     rear: 'mantle', skull: 'gaunt', elbowOut: 0.018,
@@ -292,7 +292,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   },
   // 8. Pilot — leather flight cap, earflaps, aviator goggles, scarf.
   aviator: {
-    id: 'aviator', name: 'Strata', scale: 1.0, bulk: 0.48, headR: 0.118, neck: 0.030,
+    id: 'aviator', name: 'Strata', scale: 1.0, bulk: 0.48, headR: 0.111, neck: 0.034,
     torso: 0.272, head: 'flightCap', outfit: 'jacket', skinColor: 0xdfae86,
     suit: 0x8a6b45, suitAlt: 0xf3e7d0,
     furDark: 0x5b4630, furAlt: 0x8c6f4c,
@@ -313,7 +313,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   //    other driver on the roster manages, because eight helmets all read as
   //    "head" from the chase camera.
   fox: {
-    id: 'fox', name: 'Foxy', scale: 0.94, bulk: 0.30, headR: 0.124, neck: 0.0,
+    id: 'fox', name: 'Foxy', scale: 0.94, bulk: 0.30, headR: 0.133, neck: 0.0,
     torso: 0.228, head: 'beret', outfit: 'sweater',
     // Bold two-mass blocking: cold blue knit over the whole upper body against
     // warm orange fur everywhere else, with the mustard beret as the only accent.
@@ -346,7 +346,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
   //     tall thin wedge with a plume behind it, this is a wide low brick with
   //     sanded corners, so the two never read as the same character from behind.
   capy: {
-    id: 'capy', name: 'Capy', scale: 1.12, bulk: 0.94, headR: 0.128, neck: 0.0,
+    id: 'capy', name: 'Capy', scale: 1.12, bulk: 0.94, headR: 0.132, neck: 0.0,
     torso: 0.222, head: 'bucketHat', outfit: 'pelt',
     // ⚠️ THE HAT WAS THE SAME HEX AS THE CARD IT IS DRAWN ON. `suitAlt` feeds the
     // `clothAlt` slot, which on this driver is the entire bucket hat — and it was
@@ -1383,8 +1383,8 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
         const t = i / 7;
         const sx = t < 0.5 ? -1 : 1;
         const u = Math.abs(t - 0.5) * 2;
-        const len = 0.058 + (i % 3) * 0.020;
-        b.add('torso', 'furDark', earWedge(0.0072, len, 0.0044, 0.78), {
+        const len = 0.082 + (i % 3) * 0.026;
+        b.add('torso', 'furDark', earWedge(0.0070, len, 0.0042, 0.82), {
           pos: [
             sx * lerp(0.020, s.shoulderHalf * 1.02, u),
             s.shoulderY + 0.030 - u * 0.010,
@@ -1393,6 +1393,26 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
           rot: [-18 - (i % 3) * 9, sx * 14, sx * (10 + u * 26)],
           detail: i % 2 === 0 ? 0 : 1, shade: 0.84 + (i % 2) * 0.06,
         });
+      }
+      // Outer-arm guard hairs. The shoulder ruff above reaches the outline from
+      // directly behind but is drawn inside the arm at the three-quarter azimuth,
+      // which is why that floor stayed stuck at 4.5 through four attempts. The
+      // outer arm is on the boundary from BOTH angles, so this is the placement
+      // that serves them together.
+      for (const sx of [-1, 1] as const) {
+        for (let i = 0; i < 4; i++) {
+          const t = i / 3;
+          const len = 0.052 + (i % 2) * 0.020;
+          b.add(sx > 0 ? 'armR' : 'armL', 'furDark', earWedge(0.0068, len, 0.0042, 0.8), {
+            pos: [
+              sx * (Math.max(s.shoulderHalf, s.elbow.x) * 0.96),
+              lerp(s.shoulderY - 0.006, s.elbow.y + 0.012, t),
+              lerp(s.shoulderZ, s.elbow.z, t) + 0.006,
+            ],
+            rot: [12 + (i % 2) * 14, sx * 18, sx * (86 + (i % 2) * 10)],
+            detail: i % 2 === 0 ? 0 : 1, shade: 0.84 + (i % 2) * 0.06,
+          });
+        }
       }
       // A dorsal ridge of the same hairs along the spine — the highest-contrast
       // place to put them, because the top edge of the body is pure outline from
@@ -1754,14 +1774,17 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // (4.75 against a roster mean of 6.08). A wide low brick with a soft hat is
     // smooth by design, but smooth and shapeless are not the same thing, and the
     // fix has to come from the animal rather than from an accessory.
+    // These have to CLEAR THE HAT to be on the outline at all — a bristle that
+    // stops under the brim is drawn inside the silhouette and measures nothing.
+    // Longer, thicker, and swept back off the crown past the brim line.
     for (let i = 0; i < 7; i++) {
       const t = i / 6;
       const sx = (t - 0.5) * 2;
       b.add('head', 'furDark', earWedge(
-        R * 0.048, R * (0.86 - Math.abs(sx) * 0.30), R * 0.030, 0.72,
+        R * 0.062, R * (1.26 - Math.abs(sx) * 0.38), R * 0.040, 0.80,
       ), {
-        pos: [sx * R * 0.70, hy + R * (0.70 - Math.abs(sx) * 0.12), R * (0.50 + Math.abs(sx) * 0.10)],
-        rot: [24 + Math.abs(sx) * 10, sx * 18, sx * 24], detail: i % 2 === 1 ? 2 : 1, shade: 0.86,
+        pos: [sx * R * 0.74, hy + R * (0.66 - Math.abs(sx) * 0.10), R * (0.62 + Math.abs(sx) * 0.10)],
+        rot: [40 + Math.abs(sx) * 12, sx * 18, sx * 26], detail: i % 2 === 1 ? 1 : 0, shade: 0.86,
       });
     }
   }
@@ -2000,16 +2023,20 @@ function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       // rising to 0.9 R above the crown and splaying to 1.3 R, so the top of the
       // rear outline is a comb. A machine should be the one driver whose
       // silhouette has straight lines and hard corners in it.
-      for (let i = 0; i < 5; i++) {
-        const t = Math.abs(i - 2) / 2;
+      // Reviewed on screen: five fins at this pitch alias into a jagged mass at
+      // card resolution instead of resolving as a comb. Three teeth, each much
+      // larger and further apart, read as a comb at every size — the shape has to
+      // survive a 100 px card, not just look right in the viewport.
+      for (let i = 0; i < 3; i++) {
+        const t = Math.abs(i - 1);
         const fin = extrude([
-          new THREE.Vector2(-R * 0.30, 0), new THREE.Vector2(R * 0.34, 0),
-          new THREE.Vector2(R * 0.24, R * (0.90 - t * 0.44)),
-          new THREE.Vector2(-R * 0.26, R * (0.78 - t * 0.38)),
-        ], R * 0.075, R * 0.022);
-        b.add('head', i % 2 === 0 ? 'chrome' : 'metal', fin, {
-          pos: [(i - 2) * R * 0.42, hy + R * (0.94 - t * 0.14), R * (0.16 + t * 0.10)],
-          rot: [-10, 0, (i - 2) * 7], detail: t === 0 ? 0 : 1, shade: i % 2 === 0 ? 1.0 : 0.7,
+          new THREE.Vector2(-R * 0.42, 0), new THREE.Vector2(R * 0.46, 0),
+          new THREE.Vector2(R * 0.32, R * (1.02 - t * 0.30)),
+          new THREE.Vector2(-R * 0.36, R * (0.88 - t * 0.26)),
+        ], R * 0.115, R * 0.030);
+        b.add('head', i === 1 ? 'chrome' : 'metal', fin, {
+          pos: [(i - 1) * R * 0.66, hy + R * (0.92 - t * 0.10), R * (0.16 + t * 0.10)],
+          rot: [-10, 0, (i - 1) * 11], detail: 0, shade: i === 1 ? 1.0 : 0.72,
         });
       }
       // Coolant manifold across the nape, wider than the dome, with a bleed slot.
@@ -2053,10 +2080,21 @@ function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       ], 16), {
         pos: [0, s.torsoTop - 0.052, s.chest * 0.62], rot: [-12, 0, 0], detail: 0, shade: 0.86,
       });
-      // A short mullet under the cap so the trapezium is not one flat value.
-      b.add('head', 'furDark', superShape(R * 0.80, R * 0.26, R * 0.34, 2.8, 2.5, 11, 7), {
-        pos: [0, hy - R * 0.18, R * 0.62], rot: [16, 0, 0], detail: 1,
-      });
+      // Mullet as five SEPARATED locks rather than one blob. Torque measured as
+      // the roster's second-flattest card — "a blob plus an accessory" — and one
+      // smooth mass under the cap is exactly that. Long, thin and separated is
+      // the rule that worked everywhere else on this roster.
+      for (let i = 0; i < 5; i++) {
+        const u = (i / 4 - 0.5) * 2;
+        const len = R * (0.92 - Math.abs(u) * 0.26);
+        b.add('head', 'furDark', taperTube([
+          new THREE.Vector3(u * R * 0.66, hy - R * 0.06, R * 0.50),
+          new THREE.Vector3(u * R * 0.82, hy - R * 0.06 - len * 0.55, R * 0.66),
+          new THREE.Vector3(u * R * 0.90, hy - R * 0.10 - len, R * 0.72),
+        ], [R * 0.20, R * 0.15, R * 0.055], 7, 9, 0.10), {
+          detail: i % 2 === 0 ? 0 : 1, shade: 0.88 + (i % 2) * 0.08,
+        });
+      }
       break;
     }
     case 'streamers': {
@@ -2518,17 +2556,21 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       // way this card gets an outline is thin things sticking out of it.
       for (let i = 0; i < 3; i++) {
         const ang = (-0.55 + i * 0.55);
-        const len = R * (1.05 - Math.abs(i - 1) * 0.30);
+        const len = R * (1.00 - Math.abs(i - 1) * 0.16);
+        // Reviewed on screen at card size: at R*0.038 these read as incidental
+        // wires rather than as antennae — the one element on the board that
+        // edged toward spindly. Thicker, with a much larger bead, and the outer
+        // pair matched so they read as a deliberate pair rather than as noise.
         b.add('head', 'chrome', limb(
-          _a.set(Math.sin(ang) * R * 0.60, hy + R * 1.26, Math.cos(ang) * R * 0.20),
-          _b.set(Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.26 + len,
+          _a.set(Math.sin(ang) * R * 0.60, hy + R * 1.20, Math.cos(ang) * R * 0.20),
+          _b.set(Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.20 + len,
             Math.cos(ang) * R * 0.20 + R * 0.10),
-          R * 0.038, R * 0.020, 6, 2, 0,
-        ), { detail: i === 1 ? 0 : 1 });
-        b.add('head', 'glow', new THREE.SphereGeometry(R * 0.085, 8, 6), {
-          pos: [Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.28 + len,
+          R * 0.085, R * 0.050, 7, 2, 0,
+        ), { detail: i === 1 ? 0 : 0 });
+        b.add('head', 'glow', new THREE.SphereGeometry(R * 0.165, 9, 7), {
+          pos: [Math.sin(ang) * R * (0.60 + len * 0.9), hy + R * 1.24 + len,
             Math.cos(ang) * R * 0.20 + R * 0.10],
-          detail: i === 1 ? 0 : 1,
+          detail: 0,
         });
       }
       // Twin breathing pipes running back to the pack.
