@@ -635,7 +635,19 @@ export const TRACKS: Record<string, TrackDef> = {
     // where they punish a bad line rather than blocking the good one, and
     // speeds are down ~35%.
     hazards: [
-      { kind: 'oil', t: 0.436, lat: -8.5 },
+      // OIL SLICKS REMOVED, at the owner's request, twice: "remove the black
+      // mist-like obstacles in the middle of the tracks, as they negatively
+      // impact the gameplay experience."
+      //
+      // `makeOil` paints a 6.2 m disc at `rgba(10,10,14,0.95)` — near-black at
+      // 95 % opacity — lying flat on the road with `depthWrite: false`. On dark
+      // asphalt that does not read as an object you can dodge; it reads as fog,
+      // which is exactly the word the owner reached for. It also carried
+      // `stun: 0.85` with `kick: 0`, so it spun you with no visual warning.
+      //
+      // The `'oil'` hazard KIND is left intact in `src/items/Hazards.ts`. If it
+      // comes back it needs art that reads as a hazard at 25 m — a bright rim, a
+      // raised lip, warning chevrons on the road — not a darker patch of dark.
       { kind: 'boulder', t: 0.20, lat: 9.5, span: 12, speed: 4 },
       { kind: 'snapper', t: 0.83, lat: -13 },
     ],
@@ -777,7 +789,6 @@ export const TRACKS: Record<string, TrackDef> = {
     // The last `traffic` sweep on any circuit is gone (P0d-D1). Two hazards left
     // and they are 60 %+ of a lap apart, so nothing can chain-hit.
     hazards: [
-      { kind: 'oil', t: 0.72, lat: 7 },
       { kind: 'slider', t: 0.155, lat: -9, span: 10, speed: 3 },
     ],
   },
@@ -916,7 +927,6 @@ export const TRACKS: Record<string, TrackDef> = {
     hazards: [
       { kind: 'fireball', t: 0.355, lat: 10, span: 16, speed: 5 },
       { kind: 'boulder', t: 0.50, lat: -15, span: 18, speed: 4 },
-      { kind: 'oil', t: 0.845, lat: 7 },
     ],
   },
 
