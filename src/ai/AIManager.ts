@@ -131,6 +131,14 @@ function fnOf(o: object | null | undefined, keys: readonly string[]): AnyFn | nu
   return null;
 }
 
+/** Resolved accessor trio for the indexed `Hazards` shape. See `collectHazards`. */
+interface HazardHolder {
+  obj: object;
+  pos: AnyFn;
+  rad: AnyFn | null;
+  kind: AnyFn | null;
+}
+
 function isVec3(v: unknown): v is THREE.Vector3 {
   if (!v || typeof v !== 'object') return false;
   const r = v as Record<string, unknown>;
@@ -206,6 +214,8 @@ export class AIManager implements ISubsystem {
   // Reusable world context + hazard pool (zero allocation per tick).
   private readonly world: DriverWorld;
   private readonly hazardPool: AIHazard[] = [];
+  /** Cached indexed-hazard accessors. See `collectHazards`. */
+  private hazardHolder: HazardHolder | null = null;
   private readonly band = createBandOutput();
   private readonly debugList: AIDebugState[] = [];
 
@@ -826,12 +836,35 @@ export class AIManager implements ISubsystem {
   /**
    * Copy hazards into our own pool so the AI never holds a reference into
    * another subsystem's array. Returns how many entries are valid.
+   *
+   * ⚠️ THIS RETURNED 0 ON EVERY TICK OF EVERY RACE EVER PLAYED.
+   *
+   * The duck-typed lookup below asks `itemSource` for `getHazards`,
+   * `getObstacles`, `listHazards` or `activeHazards`. `ItemSystem` — which is
+   * what `Game.ts` passes here — defines none of them, and neither does anything
+   * else in `src/`:
+   *
+   *     grep -rn 'getHazards\|getObstacles\|listHazards\|activeHazards' src/
+   *     -> src/ai/AIManager.ts only
+   *
+   * So `fnOf` returned null, `hazardCount` was pinned at 0, and the entire hazard
+   * branch of `AIDriver.updateAvoidance` (`AVOID.hazardPad`, `AVOID.hazardStrength`,
+   * the `AIHazard` interface, `createHazard()`, the 48-entry pool built in this
+   * constructor) has never once executed — in the game or in any measurement this
+   * project has taken. Every contact number in every round was measured with the
+   * AI blind to boulders and fireballs.
+   *
+   * `ItemSystem` does expose `readonly hazards: Hazards`, and `Hazards` exposes
+   * indexed accessors (`positionOf`, `radiusOf`, `kindOf`) rather than an array,
+   * which is why no name-based probe found it. The second path below adapts to
+   * those. It reads only public accessors and allocates nothing — `positionOf`
+   * hands back its own `Vector3` and we copy out of it.
    */
   private collectHazards(): number {
     const src = this.itemSource;
     if (!src) return 0;
     const getter = fnOf(src, ['getHazards', 'getObstacles', 'listHazards', 'activeHazards']);
-    if (!getter) return 0;
+    if (!getter) return this.collectIndexedHazards(src);
     let raw: readonly unknown[] | null = null;
     try {
       raw = toIterable(getter.call(src));
@@ -854,7 +887,107 @@ export class AIManager implements ISubsystem {
       h.homing = rec.homing === true;
       n++;
     }
-    return n;
+    return this.collectProjectiles(src, n);
+  }
+
+  /**
+   * The shipped `Hazards` shape: no list, just `positionOf(i)` / `radiusOf(i)` /
+   * `kindOf(i)` over a dense array, returning null past the end. Either the item
+   * source itself or its `hazards` member may carry them.
+   *
+   * Zero allocation: no array is built and `h.position.copy()` writes into the
+   * pool entry created in the constructor.
+   */
+  private collectIndexedHazards(src: object): number {
+    const holder = this.hazardHolder ?? this.resolveHazardHolder(src);
+    if (!holder) return this.collectProjectiles(src, 0);
+    const posFn = holder.pos;
+    let n = 0;
+    for (let i = 0; i < this.hazardPool.length; i++) {
+      let p: unknown;
+      try {
+        p = posFn.call(holder.obj, i);
+      } catch {
+        return n;
+      }
+      // A dense list: the first null is the end of it.
+      if (!isVec3(p)) break;
+      const h = this.hazardPool[n];
+      h.position.copy(p);
+      const r = holder.rad ? holder.rad.call(holder.obj, i) : null;
+      h.radius = typeof r === 'number' && r > 0 ? r : 1.2;
+      const k = holder.kind ? holder.kind.call(holder.obj, i) : null;
+      h.kind = typeof k === 'string' ? k : 'hazard';
+      h.ownerId = -1;
+      // Track hazards never chase. Only shells do, and those arrive by the
+      // list path above.
+      h.homing = false;
+      n++;
+    }
+    return this.collectProjectiles(src, n);
+  }
+
+  /**
+   * Dropped bananas, shells and bombs are hazards too, and they were invisible
+   * for the same reason: `Projectiles` exposes a VISITOR (`forEachActive`), not
+   * an array and not one of the four probed names. Its `Projectile` carries
+   * `pos` / `radius` / `kind`, which is everything `AIHazard` needs.
+   *
+   * The callback is a bound field, not a closure created per call, so this stays
+   * allocation-free in the tick. `hazardN` is the cursor it writes through.
+   */
+  private hazardN = 0;
+  private readonly visitProjectile = (p: unknown): void => {
+    if (this.hazardN >= this.hazardPool.length) return;
+    if (!p || typeof p !== 'object') return;
+    const rec = p as Record<string, unknown>;
+    if (rec.active === false) return;
+    const pos = isVec3(rec.pos) ? rec.pos : isVec3(rec.position) ? rec.position : null;
+    if (!pos) return;
+    const h = this.hazardPool[this.hazardN];
+    h.position.copy(pos);
+    h.radius = typeof rec.radius === 'number' && rec.radius > 0 ? rec.radius : 1.2;
+    const kind = typeof rec.kind === 'string' ? rec.kind : 'projectile';
+    h.kind = kind;
+    h.ownerId = typeof rec.owner === 'number' ? rec.owner : -1;
+    // Red and blue shells chase; a banana on the floor does not.
+    h.homing = kind === 'red' || kind === 'blue';
+    this.hazardN++;
+  };
+
+  /** Append live projectiles after the track hazards. Returns the new count. */
+  private collectProjectiles(src: object, from: number): number {
+    const holder = (propOf(src, 'projectiles') as object | null) ?? src;
+    const each = fnOf(holder, ['forEachActive']);
+    if (!each) return from;
+    this.hazardN = from;
+    try {
+      each.call(holder, this.visitProjectile);
+    } catch {
+      return from;
+    }
+    return this.hazardN;
+  }
+
+  /** Resolved once — the accessor trio never moves after wiring. */
+  private resolveHazardHolder(src: object): HazardHolder | null {
+    const candidates: Array<object | null> = [
+      (propOf(src, 'hazards') as object | null) ?? null,
+      src,
+    ];
+    for (const obj of candidates) {
+      if (!obj) continue;
+      const pos = fnOf(obj, ['positionOf']);
+      if (!pos) continue;
+      this.hazardHolder = {
+        obj,
+        pos,
+        rad: fnOf(obj, ['radiusOf']),
+        kind: fnOf(obj, ['kindOf']),
+      };
+      return this.hazardHolder;
+    }
+    return null;
   }
 
   // -------------------------------------------------------------------------

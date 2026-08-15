@@ -903,6 +903,17 @@ export class AIDriver {
   private settledFor = 0;
   /** Decaying count of recent barrier contacts. Also feeds `composure`. */
   private contactRate = 0;
+  /**
+   * Ticks on which the HAZARD branch of `updateAvoidance` contributed a
+   * non-zero lateral term. Exists because that branch had never executed:
+   * `AIManager.collectHazards` could not find the hazard list, so
+   * `hazardCount` was 0 on every tick of every race. A mechanism that never
+   * fires is indistinguishable from one that does not exist, so it is
+   * counted rather than assumed.
+   */
+  private hazardAvoidTicks = 0;
+  /** Largest lateral push a hazard has ever asked this driver for, metres. */
+  private hazardAvoidPeak = 0;
 
   // ---- items -------------------------------------------------------------
   private items: ItemAccess = NULL_ITEMS;
@@ -1170,6 +1181,14 @@ export class AIDriver {
     this.arcRingFilled = 0;
     this.wallTouch = 0;
   }
+  /** Ticks the hazard-avoidance branch actually contributed a push. */
+  get hazardAvoidCount(): number {
+    return this.hazardAvoidTicks;
+  }
+  /** Peak lateral metres a hazard has asked for. */
+  get hazardAvoidPeakBias(): number {
+    return this.hazardAvoidPeak;
+  }
   /** Barrier contacts the wall reflex has seen. */
   get wallContactCount(): number {
     return this.wallContacts;
@@ -1207,6 +1226,8 @@ export class AIDriver {
     this.stuckStreak = 0;
     this.settledFor = 0;
     this.contactRate = 0;
+    this.hazardAvoidTicks = 0;
+    this.hazardAvoidPeak = 0;
     this.recoverLifetime = 0;
     this.blockBias = 0;
     this.blockTime = 0;
@@ -1606,6 +1627,7 @@ export class AIDriver {
     // --- hazards ----------------------------------------------------------
     const hazards = world.hazards;
     const hn = Math.min(world.hazardCount, hazards.length);
+    const beforeHazards = target;
     for (let i = 0; i < hn; i++) {
       const h = hazards[i];
       _rel.subVectors(h.position, st.position);
@@ -1620,6 +1642,11 @@ export class AIDriver {
       let side = lat !== 0 ? -sign(lat) : -sign(this.near.lateralFromCentre || 1);
       if (side === 0) side = 1;
       target += side * w * AVOID.hazardStrength;
+    }
+    if (target !== beforeHazards) {
+      this.hazardAvoidTicks++;
+      const push = Math.abs(target - beforeHazards);
+      if (push > this.hazardAvoidPeak) this.hazardAvoidPeak = push;
     }
 
     target = clamp(target, -AVOID.maxBias, AVOID.maxBias);
