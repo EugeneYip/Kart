@@ -7916,36 +7916,94 @@ export class Props implements ISubsystem {
     const localX = _v.set(ca, 0, sa);
     const latSign = _deck.b.dot(localX) >= 0 ? 1 : -1;
 
+    /**
+     * The shoulder point, in the tower's LOCAL frame, at `along` metres of arc
+     * from the tower on lateral side `side`. This is the one call that turns the
+     * road into geometry; everything below is built on top of it.
+     */
+    const shoulderAt = (along: number, side: number, out: THREE.Vector3): THREE.Vector3 => {
+      const frame = this.deckFrameAt(arc0 + along, _deck);
+      const sh = side < 0 ? frame.shL : frame.shR;
+      const edge = frame.hw + CROSS.kerbW + sh;
+      const lat = side * (edge - inset);
+      const base = this.roadCross(lat, frame.hw, sh);
+      _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
+      return toLocal(_v, out);
+    };
+
+    // ---- THE EDGE GIRDER -----------------------------------------------------
+    // A cable-stayed bridge's stays anchor into an edge beam running between the
+    // towers, and that beam is the reason the fan reads as BUILT: it is the
+    // continuous line the cables die into, and it is visible from 200 m.
+    //
+    // The previous revision landed each stay in its own 0.68 x 0.80 m anchor
+    // pier. Geometrically that was correct — measured 0.015 m of air under the
+    // worst of them — and it still read wrong on screen, because 0.68 m at 120 m
+    // is 2.5 px against a concrete barrier of almost the same value. "The cables
+    // descend and simply stop, well above the road, with nothing beneath them" is
+    // what a correct-but-invisible anchorage looks like at racing speed. Seated
+    // is necessary; legible is the other half.
+    //
+    // A continuous beam was rejected in an earlier round for a good reason — a
+    // straight one at a fixed |x| departs from the curving deck edge by about a
+    // metre over its length and ends up over the tarmac. It is safe NOW and only
+    // now, because every station of it is resolved against the road at its own
+    // arc length, so it follows the bank, the grade and the curve exactly.
+    const GIRDER_R = 0.34;
+    const SPAN = far + 1.5;
+    const STEP = 2.0;
+    // A post every 6 m, not every 8. Two reasons and both are measured: the
+    // worst girder segment between posts had 0.315 m of air under its own
+    // footprint against a 0.35 m tolerance (`.probe-tmp/staygap.ts`), which is a
+    // 10 % margin on a guard, and a beam visibly propped every 6 m reads as
+    // carried where one propped every 8 reads as laid on nothing.
+    const postEvery = 3;
+    for (const sx of [-1, 1]) {
+      const side = sx * latSign;
+      let prev: THREE.Vector3 | null = null;
+      let k = 0;
+      for (let along = -SPAN; along <= SPAN + 1e-6; along += STEP, k++) {
+        const foot = shoulderAt(along, side, _v2).clone();
+        const axis = new THREE.Vector3(foot.x, foot.y + anchorH, foot.z);
+        if (prev) met.tube(prev.x, prev.y, prev.z, axis.x, axis.y, axis.z, GIRDER_R, 6, 0x97a0aa, 1.0);
+        prev = axis;
+        // Posts down to the shoulder. Sunk 0.1 m into it rather than resting
+        // exactly on it: the cross-section here is reconstructed from a 7 m
+        // resample, so a centimetre of disagreement has to land as embedment.
+        // Air is the defect the owner reported.
+        if (k % postEvery === 0) {
+          const y0 = foot.y - 0.10;
+          const y1 = axis.y;
+          met.box(foot.x, (y0 + y1) * 0.5, foot.z, 0.21, (y1 - y0) * 0.5, 0.26,
+            0x848d97, { taper: 1.25, shade: { top: 1.1 } });
+        }
+      }
+    }
+
+    // ---- THE STAYS -----------------------------------------------------------
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         for (let i = 0; i < stays; i++) {
           const f = (i + 1) / stays;
           const along = near + (far - near) * f;
-          // ---- deck end: the real cross-section at this stay's own arc -------
-          const frame = this.deckFrameAt(arc0 + sz * along, _deck);
           const side = sx * latSign;
-          const sh = side < 0 ? frame.shL : frame.shR;
-          const edge = frame.hw + CROSS.kerbW + sh;
-          const lat = side * (edge - inset);
-          const base = this.roadCross(lat, frame.hw, sh);
-          _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
-          const foot = toLocal(_v, _v2).clone();
-          // The pier's foot is sunk 0.1 m into the shoulder rather than resting
-          // exactly on it: the cross-section here is reconstructed from a 7 m
-          // resample, so a centimetre of disagreement must land as embedment,
-          // never as air. Air is the defect the owner reported.
-          const y0 = foot.y - 0.10;
+          const foot = shoulderAt(sz * along, side, _v2).clone();
+          // Land ON the girder's axis, so the tube ends inside the beam rather
+          // than touching its skin.
           const y1 = foot.y + anchorH;
           // ---- tower end: derived from the shaft's own taper ----------------
           const ty = knee + (top - 8 - knee) * f;
-          const tx = sx * Math.max(bridgeShaftHalf(ty) - 0.30, 0.45);
-          met.tube(tx, ty, 0, foot.x, y1 - 0.20, foot.z, radius, 4, 0xc4ced6, 1.0);
-          // ---- the anchorage itself -----------------------------------------
-          // A tapered pier standing ON the shoulder, not a casting hanging in
-          // the air at a fixed height above the anchor plane. This is the part
-          // that reads as "built" rather than "drawn".
-          met.box(foot.x, (y0 + y1) * 0.5, foot.z, 0.34, (y1 - y0) * 0.5, 0.40,
-            0x9aa4ad, { taper: 0.62, shade: { top: 1.12 } });
+          // Buried 0.42 m inside the shaft's own half-width at this height. The
+          // stay is 0.17 m in radius, so that leaves 0.25 m of shaft outside the
+          // tube at every height — enough that the joint cannot open at any
+          // camera angle even where the taper is steepest. (0.30 was the first
+          // value; it leaves 0.13 m, which is under a single obelisk facet.)
+          const tx = sx * Math.max(bridgeShaftHalf(ty) - 0.42, 0.40);
+          met.tube(tx, ty, 0, foot.x, y1, foot.z, radius, 4, 0xc4ced6, 1.0);
+          // A collar where the stay meets the beam — small, but it is what says
+          // the cable is bolted to the girder rather than passing through it.
+          met.box(foot.x, y1 + 0.30, foot.z, 0.30, 0.34, 0.30, 0xb4bcc4,
+            { taper: 0.7, shade: { top: 1.14 } });
         }
       }
     }
