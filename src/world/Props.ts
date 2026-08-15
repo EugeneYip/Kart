@@ -2860,7 +2860,33 @@ export class Props implements ISubsystem {
             : Math.floor(a.seed * cells) % cells;
           const cols = 4, rows = Math.max(1, Math.ceil(cells / cols));
           atlasAttr[n * 4] = (cell % cols) / cols;
-          atlasAttr[n * 4 + 1] = Math.floor(cell / cols) / rows;
+          // ---- THE ROW WAS UPSIDE DOWN, AND IT WAS INVISIBLE. ---------------
+          // Two mechanisms in this file address the same 4x2 atlas and they
+          // disagreed about v for all 8 cells:
+          //
+          //   `atlasRect(cell)`  v = 1 - cy/rows downward.  CORRECT, and now
+          //       confirmed on screen twice over: the caption reads at the BOTTOM
+          //       of a board, and the right start-line banner is authored
+          //       `atlasRect(7)` and reads FOXY KART, which is cell 7's wordmark.
+          //   this line          `floor(cell/cols)/rows`, v UPWARD.  Wrong.
+          //
+          // `makeSponsorAtlas` draws cell i at canvas y = floor(i/4)*ch, top-down,
+          // and `canvasTexture` leaves three's `CanvasTexture` default flipY =
+          // true (measured on the live texture: 2048x1024, flipY true). So canvas
+          // row r lives at v in [1-(r+1)/rows, 1-r/rows] and this line was
+          // selecting the OTHER row: every per-instance board displayed the
+          // artwork of the cell four along from the one it picked.
+          //
+          // Nothing looked broken, which is exactly why it survived — all eight
+          // cells are complete, upright, legible sponsor boards, so swapping two
+          // rows just changes WHICH brand you see. What it silently broke is the
+          // one property the owner actually asked for. `SPONSOR_PICK` gives the
+          // owner's two brands 2 of 22 slots each ("not too densely"); with the
+          // rows swapped those weights landed on VOLT and NITRO instead, and
+          // CAPY LAB / TINY TRIP CLUB were drawn at the generic 13.6 % — half
+          // again as often as requested. The row-agreement assertion in
+          // `.probe-tmp/banners.ts` is what keeps the two mechanisms in step.
+          atlasAttr[n * 4 + 1] = 1 - (Math.floor(cell / cols) + 1) / rows;
           atlasAttr[n * 4 + 2] = 1 / cols;
           atlasAttr[n * 4 + 3] = 1 / rows;
         } else {
@@ -3505,21 +3531,61 @@ export class Props implements ISubsystem {
        * used to hang in mid-air above the water at d~1159) and over an elevated
        * bridge or spiral deck.
        */
-      const siteNear = (frac: number): PathStation => {
+      /**
+       * ---- AND IT MUST NOT GO ON A BANKED CORNER EITHER. --------------------
+       * The arch is built in a plane perpendicular to the tangent but it is NOT
+       * banked with the road: its springing sits at centreline height while a
+       * banked surface climbs toward the outside. Measured
+       * (`.probe-tmp/overhead.ts`): volcanoRush arc 639, `tanBank` steep enough
+       * that the road at lat -9.83 m stands ~4 m above the centreline plane, so the
+       * low part of the arc cleared the tarmac by 0.26 m — a balloon on the racing
+       * line. Rejecting banked stations is the same kind of site test the height
+       * check already is, and it costs nothing: `siteNear` scans 40 stations forward
+       * and every circuit has flat straight ones.
+       */
+      const siteNear = (frac: number, avoidArc = -1e9): PathStation => {
         const n0 = st.length;
         const i0 = Math.floor(n0 * frac);
-        for (let k = 0; k < 40; k++) {
-          const s = st[(i0 + k) % n0];
-          if (Math.abs(s.py - this.field.heightAt(s.px, s.pz)) < 2.5) return s;
+        // SCAN THE WHOLE LAP, not 40 stations. Measured on volcanoRush: from the
+        // 0.42 start point there are ZERO stations in the next 40 that are both
+        // level and unbanked — the helix runs at `tanBank` -0.36 to -0.82 for
+        // hundreds of metres — so a 40-station window always fell through to the
+        // fallback and re-picked the banked station it was trying to avoid. There
+        // are 28 acceptable stations on that lap; they are just further away, and an
+        // arch's exact lap position is arbitrary dressing whereas a balloon on the
+        // racing line is not.
+        for (let pass = 0; pass < 3; pass++) {
+          for (let k = 0; k < n0; k++) {
+            const s = st[(i0 + k) % n0];
+            if (Math.abs(s.py - this.field.heightAt(s.px, s.pz)) > 2.5) continue;
+            // Pass 0: level and flat, and clear of the other arch. Pass 1 drops the
+            // separation. Pass 2 drops the bank test, so a circuit banked from end
+            // to end still gets its arches rather than losing them.
+            if (pass < 2 && Math.abs(s.tanBank) > 0.10) continue;
+            if (pass === 0 && Math.abs(s.s - avoidArc) < 200) continue;
+            return s;
+          }
         }
         return st[i0];
       };
-      const arches: Anchor[] = [siteNear(0.42), siteNear(0.72)].map((s) => ({
+      const siteA = siteNear(0.42);
+      const sites = [siteA, siteNear(0.72, siteA.s)];
+      const arches: Anchor[] = sites.map((s) => ({
         x: s.px, y: s.py, z: s.pz,
         yaw: Math.atan2(s.tx, s.tz), side: 0, arc: s.s, scale: 1, seed: rng.next(),
       }));
       const b = this.builder();
-      const span = hw + 3;
+      // ---- A BALLOON WAS SITTING ON THE RACING LINE. -------------------------
+      // `span` was `hw + 3` where `hw` is the half-width AT THE START LINE, but the
+      // arch stands at t = 0.42 and 0.72, where the road can be wider. Measured
+      // (`.probe-tmp/overhead.ts`): volcanoRush arc 639, the end balloon of
+      // `Prop:balloonArch` 0.26 m above the drawn road at lat -9.83 m, i.e. inside
+      // the drivable width — a kart drives through it. `balloonArch` is a
+      // `corridor: true` emit, so no clearance guard would ever have caught it;
+      // this is the same class of error as the `alleyBlock` at lat 10.5 and the
+      // `min: 4` obsidian, a constant standing in for a variable.
+      // One geometry serves both anchors, so it takes the WIDER of the two sites.
+      const span = Math.max(...sites.map((s) => s.halfWidth)) + 3.5;
       const cols = [0xff4a3d, 0xffd23f, 0x3fa9ff, 0x5ee06a, 0xff7be0];
       const N = 34;
       for (let i = 0; i <= N; i++) {
@@ -3796,8 +3862,40 @@ export class Props implements ISubsystem {
         case 'tokyo': this.towerScreenSlab(body); break;
         default: this.towerSetback(body); break;
       }
+      const towerGeo = body.build('tower');
+      // ---- FOLDED ANCHORS WERE SKIPPING THE ROAD-SURFACE GUARD. -------------
+      // `buildAuthored()` runs `clearAuthored` + `clearRoadSurface` over every
+      // authored group before it emits. Anything claimed by `takeAuthored()` never
+      // reaches `buildAuthored`, so the authored `skyscraper` run folded in above
+      // was never tested against the drawn road at all. Closing that hole, on the
+      // same anchors array every companion pass below reads, so the window grid and
+      // the shopfront band move with the body.
+      //
+      // BE CLEAR ABOUT WHAT THIS DOES NOT FIX. Measured: it pushes ZERO anchors on
+      // all six circuits today, and in particular it does NOT fix the case that
+      // found it. neonMetropolis crosses over itself and authors `skyscraper` at
+      // `lat: 84`; measured against the OTHER branch (`.probe-tmp/overhead.ts`) four
+      // tower instances and a flood mast stand at lat 4.5-9.6 m and poke through the
+      // elevated carriageway at arc 853-873 with 1.0-1.1 m of clearance. This guard
+      // cannot see that, for the reason its own doc comment gives: it is an XZ test,
+      // so it projects onto the NEAREST branch — the one at ground level, which the
+      // tower genuinely clears. The guard for a prop under a deck is
+      // `insideRoadVolume`, and it does not fire because that flyover is not
+      // published in `roadVolumes` at those stations. Needs TrackBuilder to publish
+      // the elevated section, or the track author to move that `lat` run; reported
+      // rather than papered over. (Not caused by the re-seating change above:
+      // re-seating only moves Y, and these towers were already at this XZ — they
+      // were floating at deck height instead of standing in the road.)
+      {
+        const off = this.clearRoadSurface(anchors, towerGeo);
+        const offS = slabs.length ? this.clearRoadSurface(slabs, towerGeo) : 0;
+        if (off + offS > 0) {
+          this.roadSurfacePushes += off + offS;
+          this.roadSurfaceTypes.push(`tower:${kit.id} x${off + offS}`);
+        }
+      }
       this.emit(kit.id === 'neon' ? 'skyscraper' : `tower:${kit.id}`,
-        body.build('tower'), this.facadeMat(), anchors,
+        towerGeo, this.facadeMat(), anchors,
         { cull: CULL_FAR, place: (a, _i, m) => pose(a, m) });
 
       if (slabs.length) {
@@ -4963,7 +5061,20 @@ export class Props implements ISubsystem {
           glow.sphere((i / 4) * (halfSpan - 1.4), H + 0.2, 0.2, 0.19, 6, 4,
             i === 0 ? 0xffe9a8 : 0xff3b2e);
         }
-        glow.plate(0, H + 2.6, 0.34, halfSpan * 1.3, 0.9, 0, 0x7fe4ff, { single: true });
+        // ---- THE OWNER'S "SECOND DARK PANEL FLOATING BEHIND IT". -------------
+        // `b.box(0, H + 2.6, ...)` above is the sign board: 19.4 x 1.2 m of
+        // near-black (0x1d222b) at 12.0 m over the start line. Its only decoration
+        // is this lit panel, and it was authored at z = +0.34 with `single: true`,
+        // whose face normal is local +Z. A `SPANS_THE_ROAD` prop is yawed off the
+        // TANGENT, so local +Z runs DOWN-track: the lit board faced away from every
+        // approaching kart, and `this.glow` is FrontSide, so it was not drawn at
+        // all. What the driver saw was an unlit black slab hanging in the air above
+        // the bar of red signal lights — measured in `.probe-tmp/redpanel.ts` as a
+        // 24.6 x 3.0 m bloomed red panel with 9.4 m of air under it.
+        //
+        // Same fault as the mirrored banners, one material along: `yaw: Math.PI`
+        // puts the normal on local -Z and the board on the side the driver is on.
+        glow.plate(0, H + 2.6, -0.34, halfSpan * 1.3, 0.9, Math.PI, 0x7fe4ff, { single: true });
         // ---- THE HANGING BANNERS -------------------------------------------
         // Sponsor artwork off the shared atlas, not two flat saturated rectangles.
         // The vertex colour is held near-white on purpose: `atlasSway`'s `map`
@@ -5962,13 +6073,29 @@ export class Props implements ISubsystem {
         // Deck crossbeam under the crotch: what the legs are actually holding.
         b.box(0, KNEE - 1.6, 0, LEG * 0.62, 0.8, 1.6, 0xcfc9ba, { shade: { top: 1.1 } });
         const met = this.builder();
-        // Two cable planes, fanning fore and aft to the deck edge.
+        // ---- THE CABLES CROSSED THE RACING LINE AT 1.94 m. -------------------
+        // The deck-end anchors were authored at `sx * 12.6` (just outside the
+        // 12.55 m barrier) and `sz * (9 + f * 40)`, i.e. up to 49 m ALONG the road.
+        // A prop's geometry is straight and the bridge is not: over a 49 m run the
+        // chord departs from the curving deck edge by metres, and measured
+        // (`.probe-tmp/overhead.ts`) the far cable's deck anchor on bostonHarbor
+        // ended up at lat -1.65 m — essentially over the CENTRELINE — 1.94 m above
+        // the road. A kart is 1.4 m tall. The previous owner of this file logged
+        // this as "7.91 m across at a rise of 2.0 m"; that came off an AABB corner
+        // and it was optimistic by 10 m of lateral offset.
+        //
+        // Two changes, both aimed at the straight-chord-vs-curve error rather than
+        // at the symptom: the fan reaches 27 m instead of 49 m (the chord's
+        // departure goes as the square of the run, so that is a ~3.3x reduction),
+        // and the deck end lands at 2.9 m on the barrier line rather than 0.75 m on
+        // the deck, so residual drift cannot put a cable at kart height. Re-measured
+        // after the change and reported.
         for (const sx of [-1, 1]) {
           for (const sz of [-1, 1]) {
             for (let i = 0; i < 8; i++) {
               const f = (i + 1) / 8;
               met.tube(sx * 1.5, KNEE + (TOP - 5 - KNEE) * f, 0,
-                sx * 12.6, 0.75, sz * (9 + f * 40), 0.09, 4, 0xc4ced6, 1.0);
+                sx * 12.6, 2.9, sz * (7 + f * 20), 0.09, 4, 0xc4ced6, 1.0);
             }
           }
         }

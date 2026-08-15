@@ -229,6 +229,21 @@ export const SPEED = {
   yawLimitMargin: 0.97,
   yawLimitIterations: 3,
   /**
+   * Boost-into-a-corner. See the `st.boostTime` block in `applySpeedControl` for
+   * why these exist and why lifting cannot waste a mini-turbo.
+   *
+   * `boostCornerDeadband` keeps the boost flat out through small overshoot;
+   * `boostCornerThrottle` is the ceiling on engine drive once a corner is binding
+   * (not zero, because the boost is still accelerating us and cutting the engine
+   * entirely reads as a stall); `boostCornerBrakeCap` at `boostBrakeRamp` m/s of
+   * excess is enough authority to actually shed a mini-turbo's 11 m/s of soft-cap
+   * bonus before the apex.
+   */
+  boostCornerDeadband: 1.0,
+  boostCornerThrottle: 0.35,
+  boostCornerBrakeCap: 0.7,
+  boostBrakeRamp: 6.0,
+  /**
    * How much of the roster's authored top-speed spread the AI drives to.
    *
    * `CHARACTER_STATS.speed` spans 0.24–0.95, i.e. 26.4–31.8 m/s — a 20 % band,
@@ -1685,10 +1700,44 @@ export class AIDriver {
         over > 0 ? SPEED.driftThrottleEase : SPEED.driftThrottleFloor,
       );
     }
-    // Boosting? Foot down.
+    // Boosting? Foot down — unless a CORNER is what is holding us back.
+    //
+    // This was unconditional, and being last it silently outranked every speed
+    // decision above it, including the steering limit. Measured on `volcanoRush`
+    // 540–640 m: the target had correctly dropped to 22.8 m/s for a 52 m radius
+    // corner while this line held `accel` at 1.0 and `brake` at 0 through a
+    // stage-2 mini-turbo at 36.8 m/s. The kart ran from 10 m left of the line to
+    // 30 m right of it, left the map (that 100 m has no barrier on its outside),
+    // respawned, and repeated every ~3 s for the whole race — the last kart in the
+    // field to finish zero laps.
+    //
+    // `lineLimited` is the distinction that makes this safe. It is false when the
+    // binding constraint is the kart's own cruise ceiling — i.e. on every straight,
+    // which is exactly where a mini-turbo is supposed to take you past it. So a
+    // boost on a straight is still flat out and still pays out in full; only a
+    // corner can take its foot off. Gating on `speed > target` instead would lift
+    // on every straight, because a boost is *meant* to exceed the cruise target,
+    // and a mini-turbo that never pays out is its own bug.
+    //
+    // Lifting also does not throw the boost away: the physics adds boost thrust as
+    // `aLong += boostAccel · strength · env` with no reference to the throttle, the
+    // raised soft cap is likewise unconditional, and nothing but a stun or a
+    // respawn clears `boostTime`. That is why the brake here is allowed to be real
+    // rather than token.
     if (st.boostTime > 0) {
-      c.accel = 1;
-      c.brake = 0;
+      const over = speed - target;
+      if (!this.lineLimited || over <= SPEED.boostCornerDeadband) {
+        c.accel = 1;
+        c.brake = 0;
+      } else {
+        c.accel = Math.min(c.accel, SPEED.boostCornerThrottle);
+        if (st.grounded) {
+          const ramp = clamp01(over / SPEED.boostBrakeRamp);
+          c.brake = Math.max(c.brake, ramp * SPEED.boostCornerBrakeCap);
+        } else {
+          c.brake = 0;
+        }
+      }
     }
   }
 

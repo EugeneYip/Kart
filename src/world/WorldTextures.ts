@@ -912,7 +912,18 @@ export class TerrainField {
 
   /** res*res final heights, metres. */
   readonly height: Float32Array;
-  /** res*res distance to the nearest centreline station, metres (CPU only). */
+  /**
+   * res*res PERPENDICULAR distance to the centreline polyline, metres (CPU only),
+   * counting only carriageways the stack guard accepted as ground here — so under
+   * a flyover this is the distance to the road below, not to the deck.
+   *
+   * It used to be the distance to the nearest centreline *station*, which
+   * over-read by up to a chord half-length (~3.5 m at the 7 m resample) and was
+   * one of the two reasons grass was licensed inside the asphalt. The stamp now
+   * projects onto the chords, exactly as `roadVerge()` above does and for the same
+   * reason. Still the distance to the CENTRELINE, not the edge: subtract a
+   * half-width, or use `roadVerge()`, which is what that function is for.
+   */
   readonly roadDistance: Float32Array;
   /** res*res packed RGBA8 data. */
   readonly data: Uint8Array;
@@ -1115,7 +1126,6 @@ export class TerrainField {
 
     // ---- stamp the road corridor -------------------------------------------
     const R = 74; // metres of influence
-    const rTex = Math.ceil(R / mpt);
     /** Metres past the outer edge of the DRAWN road that stay dead flat. */
     const FLAT_PAD = 1.2;
 
@@ -1168,6 +1178,23 @@ export class TerrainField {
      * `STACK_RAMP = 0.45` is a 24° hillside. `STACK_V = 7` on top of it covers
      * what a single carriageway varies by within its own reach (about 3.6 m at
      * volcano's steepest ~15 % grade).
+     *
+     * WHAT THIS STILL CANNOT DO, measured, so nobody has to rediscover it. A
+     * heightfield holds one surface per column, and where a graded, turning road
+     * passes over its OWN plan footprint at a height gap SMALLER than `STACK_V`,
+     * both passes are legitimately ground and the stamp has to choose. It chooses
+     * the plan-nearest, which on the outside of a descending corner is the higher,
+     * earlier pass. Volcano t=0.283 is the one place on six circuits where that
+     * shows: the texel under the chase eye is 11.50 m from arc 415 (py 45.86) and
+     * 13.13 m from arc 427 (py 42.02), so the nearer, 3.8 m higher pass wins and
+     * the ground ends up 0.95 m over the drawn shoulder — one pose of 5688 with the
+     * eye 0.32 m under the surface (`.probe-tmp/eyedig.ts` prints exactly this).
+     * Lowering `STACK_V` to catch it would re-break coastal's 8.67 m spiral, and a
+     * "prefer the lower pass within N metres of a tie" rule reintroduces the very
+     * class of discontinuity the embankment cone exists to remove. The honest
+     * remedies are outside this file: a denser station table
+     * (`STATION_SPACING` in Environment, currently ~7 m) shrinks the ambiguous
+     * window, and the grade itself is a track-authoring choice.
      */
     const STACK_V = 7;
     const STACK_RAMP = 0.45;
@@ -1228,83 +1255,135 @@ export class TerrainField {
      */
     const WALL_LO = 0.78, WALL_HI = 0.90;
 
+    /**
+     * THE STAMP WALKS SEGMENTS, NOT STATIONS.
+     *
+     * Stations are resampled at ~7 m. A nearest-STATION stamp therefore lays down
+     * a plane that is piecewise CONSTANT along the road: every texel inside a
+     * station's Voronoi cell gets that station's `py`, `tanBank` and `halfWidth`
+     * verbatim. On a flat straight that is invisible. Where the road is doing
+     * something it is not:
+     *
+     *  · neon's approach to the wall ride banks 24° -> 31° between two
+     *    consecutive stations, and 0.16 of extra cross-slope over 10 m of lateral
+     *    offset is 1.6 m of height;
+     *  · volcano's t=0.28 corner descends at 14° while turning, and on the INSIDE
+     *    of the turn the nearest station in plan is 10 m of arc behind, so its
+     *    plane arrives 2.5 m too high.
+     *
+     * Both were measured as ground standing 1.9-2.5 m proud of the drawn road,
+     * and one of them was the last place on any circuit where the chase camera
+     * still ended up inside a hill.
+     *
+     * So each iteration owns the SEGMENT from station `si` to `si+1`, projects the
+     * texel onto that chord, and interpolates `py`, `tanBank`, `halfWidth` and the
+     * shoulders at the projection parameter. `dist` becomes the true perpendicular
+     * distance to the centreline polyline rather than the distance to the nearest
+     * sample — which is the same correction `roadVerge()` above exists to make,
+     * and for the same reason: the station-point distance OVER-reads by up to a
+     * chord half-length, and over-reading `dist` is precisely what licensed grass
+     * inside the asphalt. Adjacent segments agree at their shared endpoint, so the
+     * field is continuous; the min-distance competition resolves the overlap at
+     * corners exactly as `roadVerge` does.
+     *
+     * Cost is unchanged: one box of texels per segment instead of one per station,
+     * and there are as many segments as stations.
+     */
     const nSt = this.stations.length;
     for (let si = 0; si < nSt; si++) {
-      const st = this.stations[si];
-      const shL = st.shoulderL ?? SH_FALLBACK;
-      const shR = st.shoulderR ?? SH_FALLBACK;
-      const atb = Math.abs(st.tanBank);
-      const wall = atb <= WALL_LO ? 0 : smootherstep((atb - WALL_LO) / (WALL_HI - WALL_LO));
-      // Depth of the carriageway's LOW edge below the centreline. Past the clamp
-      // the true cross-slope is unknown but at least 42°, and neon's wall ride
-      // measures 84-89°, so at full gate the low edge is essentially the whole
-      // drawn half-width straight down — 12.75 m there. Taking the shallower
-      // `halfWidth * tanBank` instead left the shelf 3.4 m up the wall, standing
-      // on the bottom of the carriageway (`.probe-tmp/terrecon.ts` on-road +3.56 m).
-      const corridorW = st.halfWidth + KERB_W + Math.max(shL, shR);
-      const shallow = atb * st.halfWidth;
-      const lowEdge = -(shallow + wall * (corridorW - shallow));
+      const a = this.stations[si];
+      const b = this.stations[(si + 1) % nSt];
       /**
-       * ALONG-ARC INTERPOLATION OF THE PLANE.
+       * The vertical profile is interpolated with a CUBIC, not the chord.
        *
-       * The stamp is nearest-station, and the stations are ~7 m apart, so the
-       * plane it lays down is piecewise CONSTANT along the road. That is fine on
-       * a flat straight and wrong exactly where the road is interesting: on
-       * neon's approach to the wall ride the bank goes 24° -> 31° between two
-       * consecutive stations, and a 0.16 difference in cross-slope over 10 m of
-       * lateral offset is 1.6 m of height. Measured before this: the two worst
-       * remaining station-sides on the circuit, ground standing 2.1-2.5 m over
-       * the drawn road at t=0.62 and t=0.85, with no flyover and no wall
-       * anywhere near — just the bank changing faster than the station table
-       * samples it.
+       * Linear interpolation along the chord is exact for `halfWidth` and good
+       * enough for `tanBank`, but the road's HEIGHT is a curve, and a chord cuts
+       * across it: in a compression the chord runs above the real surface, and the
+       * terrain follows the chord. Volcano's t=0.28 is the steepest thing on any
+       * circuit — a 44° grade — where 7 m of station spacing is 4.9 m of vertical
+       * travel, and the chord error there was measured at 1.98 m of ground standing
+       * on the drawn shoulder, which was also the last place the chase camera still
+       * ended up under the surface.
        *
-       * So `py` and `tanBank` are lerped toward whichever neighbour the texel
-       * lies toward, by its projection on the tangent. Both neighbours agree at
-       * the midpoint, so the field stays continuous. Deliberately only the
-       * height plane: `dist`, `halfW` and the mask keep the station-nearest
-       * semantics they have always had, so nothing downstream of them moves.
+       * Catmull-Rom through the two neighbouring stations restores the curvature
+       * for four extra loads. It is clamped to the four control heights: a cubic
+       * through unevenly-spaced samples can overshoot, and an overshoot here would
+       * be a spike of terrain, which is the defect this whole pass exists to remove.
        */
-      const sPrev = this.stations[(si - 1 + nSt) % nSt];
-      const sNext = this.stations[(si + 1) % nSt];
-      const lenPrev = Math.hypot(st.px - sPrev.px, st.pz - sPrev.pz) || 1;
-      const lenNext = Math.hypot(sNext.px - st.px, sNext.pz - st.pz) || 1;
-      const cx = (st.px - this.originX) / mpt;
-      const cz = (st.pz - this.originZ) / mpt;
-      const x0 = Math.max(0, Math.floor(cx - rTex));
-      const x1 = Math.min(res - 1, Math.ceil(cx + rTex));
-      const z0 = Math.max(0, Math.floor(cz - rTex));
-      const z1 = Math.min(res - 1, Math.ceil(cz + rTex));
+      const a0 = this.stations[(si - 1 + nSt) % nSt];
+      const b1 = this.stations[(si + 2) % nSt];
+      const pyLo = Math.min(a0.py, a.py, b.py, b1.py);
+      const pyHi = Math.max(a0.py, a.py, b.py, b1.py);
+      const c0 = a.py;
+      const c1 = 0.5 * (b.py - a0.py);
+      const c2 = 0.5 * (2 * a0.py - 5 * a.py + 4 * b.py - b1.py);
+      const c3 = 0.5 * (-a0.py + 3 * a.py - 3 * b.py + b1.py);
+      const ex = b.px - a.px, ez = b.pz - a.pz;
+      const segLen2 = ex * ex + ez * ez;
+      if (segLen2 < 1e-9) continue;
+      const invSeg = 1 / segLen2;
+      const aShL = a.shoulderL ?? SH_FALLBACK, aShR = a.shoulderR ?? SH_FALLBACK;
+      const bShL = b.shoulderL ?? SH_FALLBACK, bShR = b.shoulderR ?? SH_FALLBACK;
+      // Texel box: the whole segment, plus the influence radius.
+      const loX = Math.min(a.px, b.px) - R, hiX = Math.max(a.px, b.px) + R;
+      const loZ = Math.min(a.pz, b.pz) - R, hiZ = Math.max(a.pz, b.pz) + R;
+      const x0 = Math.max(0, Math.floor((loX - this.originX) / mpt));
+      const x1 = Math.min(res - 1, Math.ceil((hiX - this.originX) / mpt));
+      const z0 = Math.max(0, Math.floor((loZ - this.originZ) / mpt));
+      const z1 = Math.min(res - 1, Math.ceil((hiZ - this.originZ) / mpt));
       for (let ty = z0; ty <= z1; ty++) {
         const wz = this.originZ + (ty + 0.5) * mpt;
-        const ddz = wz - st.pz;
         for (let tx = x0; tx <= x1; tx++) {
           const wx = this.originX + (tx + 0.5) * mpt;
-          const ddx = wx - st.px;
+          // Nearest point on the chord.
+          let u = ((wx - a.px) * ex + (wz - a.pz) * ez) * invSeg;
+          u = u < 0 ? 0 : u > 1 ? 1 : u;
+          const qx = a.px + ex * u, qz = a.pz + ez * u;
+          const ddx = wx - qx, ddz = wz - qz;
           const d2 = ddx * ddx + ddz * ddz;
           if (d2 > R * R) continue;
           const i = ty * res + tx;
           const d = Math.sqrt(d2);
+          const hwI = a.halfWidth + (b.halfWidth - a.halfWidth) * u;
           // Plan-space corridor first, and deliberately BEFORE both rejections:
-          // the grass mask asks where a road is drawn, not which road made the
+          // the grass mask asks where a road is DRAWN, not which road made the
           // ground. See `maskDist`.
-          if (d < maskDist[i]) { maskDist[i] = d; maskHalfW[i] = st.halfWidth; }
-          if (d2 >= dist[i] * dist[i]) continue;
+          if (d < maskDist[i]) { maskDist[i] = d; maskHalfW[i] = hwI; }
+          if (d >= dist[i]) continue;
+          let pyI = c0 + u * (c1 + u * (c2 + u * c3));
+          pyI = pyI < pyLo ? pyLo : pyI > pyHi ? pyHi : pyI;
           // A carriageway flying over a lower one does not pave the ground.
-          if (st.py > groundPy[i] + STACK_V) continue;
+          if (pyI > groundPy[i] + STACK_V) continue;
           dist[i] = d;
-          const cross = ddx * st.bx + ddz * st.bz;
-          const sh = cross < 0 ? shL : shR;
-          const along = ddx * st.tx + ddz * st.tz;
-          const nb = along >= 0 ? sNext : sPrev;
-          const u = Math.min(1, Math.abs(along) / (along >= 0 ? lenNext : lenPrev));
-          const pyI = st.py + (nb.py - st.py) * u;
-          const tbI = st.tanBank + (nb.tanBank - st.tanBank) * u;
+          // Interpolated frame. The binormal is renormalised because lerping two
+          // unit vectors shortens the result, and `cross` is a distance.
+          let bxI = a.bx + (b.bx - a.bx) * u;
+          let bzI = a.bz + (b.bz - a.bz) * u;
+          const bl = Math.hypot(bxI, bzI);
+          if (bl > 1e-6) { bxI /= bl; bzI /= bl; } else { bxI = a.bx; bzI = a.bz; }
+          const cross = ddx * bxI + ddz * bzI;
+          const sh = cross < 0
+            ? aShL + (bShL - aShL) * u
+            : aShR + (bShR - aShR) * u;
+          const tbI = a.tanBank + (b.tanBank - a.tanBank) * u;
+          const atb = Math.abs(tbI);
+          const wall = atb <= WALL_LO ? 0 : smootherstep((atb - WALL_LO) / (WALL_HI - WALL_LO));
+          // Depth of the carriageway's LOW edge below the centreline. Past the
+          // clamp the true cross-slope is unknown but at least 42°, and neon's
+          // wall ride measures 84-89°, so at full gate the low edge is essentially
+          // the whole drawn half-width straight down — 12.75 m there. Taking the
+          // shallower `halfWidth * tanBank` instead left the shelf 3.4 m up the
+          // wall, standing on the bottom of the carriageway
+          // (`.probe-tmp/terrecon.ts` reported on-road +3.56 m).
+          const corridorW = hwI + KERB_W + Math.max(aShL, aShR, bShL, bShR);
+          const shallow = atb * hwI;
+          const lowEdge = -(shallow + wall * (corridorW - shallow));
           const lift = cross * tbI;
           // Terrain target: the DRAWN surface, not the bare banked plane.
           roadH[i] = pyI + lift + (lowEdge - lift) * wall
-            + roadSurfaceOffset(Math.abs(cross), st.halfWidth, sh);
-          halfW[i] = st.halfWidth;
-          flatW[i] = st.halfWidth + KERB_W + sh + FLAT_PAD;
+            + roadSurfaceOffset(Math.abs(cross), hwI, sh);
+          halfW[i] = hwI;
+          flatW[i] = hwI + KERB_W + sh + FLAT_PAD;
         }
       }
     }
@@ -1482,7 +1561,11 @@ export class TerrainField {
     return tz * this.res + tx;
   }
 
-  /** Metres to the nearest centreline sample. Large when off the map. */
+  /**
+   * Metres to the CENTRELINE, perpendicular to the nearest chord. Large when off
+   * the map. NEAREST-TEXEL, so it quantises to `metresPerTexel`; and it is the
+   * centreline, not the road edge — `roadVerge()` is the function for that.
+   */
   roadDistanceAt(x: number, z: number): number {
     const i = this.nearestTexel(x, z);
     return i < 0 ? INF : this.roadDistance[i];
