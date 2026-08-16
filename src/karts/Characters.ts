@@ -185,6 +185,49 @@ export const CHARACTERS: readonly CharacterDef[] = [
     flake: 0.8,
   },
   {
+    id: 'skid',
+    name: 'Skid',
+    tagline: 'Heavy, sideways, and somehow first out of the corner.',
+    bodyId: 'buggy',
+    tyreId: 'slick',
+    color: 0x1f9e8c,
+    secondaryColor: 0xf2b134,
+    glowColor: 0x5ef0c8,
+    // THE HEAVYWEIGHT DRIFTER — the first hole in the table. Every kart above
+    // 0.70 weight until now was a straight-line car that paid for it in the
+    // corners: blitz 0.28 handling, capy 0.30, torque 0.34, strata 0.40. Skid is
+    // heavy AND agile, and pays in GRIP instead. 0.22 traction is the roster
+    // floor by a wide margin (blitz, at 0.40, was the previous worst) against
+    // 0.98 miniTurbo, which is the ceiling (pip's 0.92 was). She is the only
+    // kart you deliberately break traction on, and the only heavy that wants a
+    // corner rather than a straight.
+    stats: { speed: 0.52, accel: 0.44, weight: 0.84, handling: 0.82, traction: 0.22, miniTurbo: 0.98 },
+    driverId: 'drifter',
+    flake: 0.2,
+    matte: true,
+  },
+  {
+    id: 'quill',
+    name: 'Quill',
+    tagline: 'Perfect line, every corner. Gets nothing for drifting.',
+    bodyId: 'bike',
+    tyreId: 'standard',
+    color: 0x6d4bd6,
+    secondaryColor: 0xf5ecd8,
+    glowColor: 0xffd166,
+    // THE LINE RACER — the second hole, and a mechanical counter-play rather
+    // than a stat interpolation. On this grid "corners well" has always meant
+    // "drifts well": every kart over 0.80 handling also has a big miniTurbo
+    // (vex 0.88, pip 0.92, zephyr 0.76, foxy 0.84). Quill has 0.92 handling and
+    // 0.90 traction — the only kart with BOTH above 0.86 — and 0.12 miniTurbo,
+    // half the previous floor (torque 0.24). She gains nothing from sliding, so
+    // she is the one racer driven on the geometric line, and the only answer on
+    // the board to a field of drift-boosters.
+    stats: { speed: 0.34, accel: 0.62, weight: 0.58, handling: 0.92, traction: 0.90, miniTurbo: 0.12 },
+    driverId: 'duellist',
+    flake: 0.65,
+  },
+  {
     id: 'zephyr',
     name: 'Zephyr',
     tagline: 'Good at everything, master of none.',

@@ -97,11 +97,37 @@ import type { KartAssets } from './KartModel';
 // ---------------------------------------------------------------------------
 
 /** Camera azimuth off the driver's own forward axis, degrees. */
-const AZIMUTH_DEG = 34;
+export const PORTRAIT_AZIMUTH_DEG = 34;
 /** Camera elevation above the focus point, degrees. */
-const ELEVATION_DEG = 9;
+export const PORTRAIT_ELEVATION_DEG = 9;
 /** Vertical field of view. A long lens: this is a portrait, not a fisheye. */
-const FOV_DEG = 26;
+export const PORTRAIT_FOV_DEG = 26;
+
+/**
+ * The unit vector from the focus point to the camera, in the driver's own
+ * space. **This is the only place the portrait's viewing direction exists.**
+ *
+ * ⚠️ IT WAS COPIED, AND THE COPY WAS 112.9° WRONG FOR THREE ROUNDS. An earlier
+ * card probe re-derived this expression by hand, got the sign of the forward
+ * axis wrong, and spent three review cycles photographing the back of every
+ * driver's neck while reporting on their faces. A probe that measures the wrong
+ * thing is worse than no probe, and the structural fix is that there is nothing
+ * left to copy: `frameCamera` calls this, and so does anything checking it.
+ *
+ * The driver faces -Z, so "in front of the face" is -Z. Offsetting to +X puts
+ * the camera on the driver's right — the side `LOOK` turns toward.
+ */
+export function portraitCameraDir(out: THREE.Vector3): THREE.Vector3 {
+  const az = PORTRAIT_AZIMUTH_DEG * (Math.PI / 180);
+  const el = PORTRAIT_ELEVATION_DEG * (Math.PI / 180);
+  return out.set(
+    Math.sin(az) * Math.cos(el),
+    Math.sin(el),
+    -Math.cos(az) * Math.cos(el),
+  ).normalize();
+}
+
+const FOV_DEG = PORTRAIT_FOV_DEG;
 /**
  * How far below the head box the crop reaches, as a multiple of the head box
  * height. These rigs are small — a fox's whole torso is 0.228 m against a
@@ -488,15 +514,7 @@ export class PortraitStudio {
     let dist = _sphere.radius / Math.max(0.05, Math.tan(vFov * 0.5) * FILL)
       + _sphere.center.length();
 
-    const az = AZIMUTH_DEG * (Math.PI / 180);
-    const el = ELEVATION_DEG * (Math.PI / 180);
-    // The driver faces -Z, so "in front of the face" is -Z. Offsetting to +X
-    // puts the camera on the driver's right — the side `LOOK` turns toward.
-    _dir.set(
-      Math.sin(az) * Math.cos(el),
-      Math.sin(el),
-      -Math.cos(az) * Math.cos(el),
-    ).normalize();
+    portraitCameraDir(_dir);
 
     this.camera.aspect = 1;
     this.camera.up.set(0, 1, 0);

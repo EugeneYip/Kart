@@ -54,7 +54,7 @@ import {
 
 export const DRIVER_IDS = [
   'mechanic', 'racer', 'robot', 'heavy', 'speedy', 'alien', 'knight', 'aviator',
-  'fox', 'capy',
+  'fox', 'capy', 'drifter', 'duellist',
 ] as const;
 export type DriverId = (typeof DRIVER_IDS)[number];
 
@@ -147,7 +147,7 @@ export interface DriverDef {
    *     than one sheet across the midline.
    */
   rear?: 'hairMop' | 'spoiler' | 'finComb' | 'napeRoll' | 'streamers'
-  | 'dorsalPack' | 'mantle' | 'neckCurtain';
+  | 'dorsalPack' | 'mantle' | 'neckCurtain' | 'braid' | 'quillFan';
   /**
    * Cranial form.
    *
@@ -165,7 +165,32 @@ export interface DriverDef {
    * so that the pairs that measured closest (mechanic/racer, knight/aviator)
    * are now at opposite ends of the range.
    */
-  skull?: 'round' | 'square' | 'jowly' | 'child' | 'gaunt' | 'long';
+  skull?: 'round' | 'square' | 'jowly' | 'child' | 'gaunt' | 'long' | 'wedge' | 'blade';
+
+  /**
+   * A DIFFERENT 3-D HAT ON A DECLARED `HeadKind`.
+   *
+   * ⚠️ THIS IS A WORKAROUND FOR AN OWNERSHIP BOUNDARY, AND IT SHOULD NOT
+   * SURVIVE INTEGRATION. `HeadKind` is consumed by `src/ui/Widgets.ts`
+   * (`drawHeadwear`), which switches on it exhaustively to draw the canvas-2-D
+   * fallback card — the art the menu shows when the real offscreen portrait
+   * render comes back empty, which is a thing that has actually happened on the
+   * owner's machine for all ten cards at once. `src/ui/*` is not mine to edit,
+   * so a genuinely new `HeadKind` would compile (the switch has no `never`
+   * guard, contrary to the comment above it) and then draw NO HAT AT ALL for
+   * the new racers on the fallback.
+   *
+   * Rule 1 of this file is "every driver owns a headwear shape nobody else
+   * has", and that is about the rig the player looks at for the whole race. So
+   * `head` names the closest existing family — which is what the fallback
+   * draws, wrong in detail but right in kind — and `hatVariant` selects the
+   * real geometry. The cost is honest and bounded: two of twelve fallback cards
+   * show a related hat rather than the exact one.
+   *
+   * The fix, for whoever owns `Widgets.ts`: add `'coneStraw'` and `'towerBand'`
+   * to `HeadKind`, give them arms in `drawHeadwear`, and delete this field.
+   */
+  hatVariant?: 'coneStraw' | 'towerBand';
 
   // --- animals -------------------------------------------------------------
   species?: Species;
@@ -361,10 +386,17 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // A red fox's muzzle is close to HALF its head length — 1.05 R was already
     // long, and 1.28 puts the nose where the reference photographs put it.
     muzzle: 1.28, tail: true, knitwear: true, expressive: true,
-    // Alert and forward: ears up, weight over the wheel. `chin` is negative so
-    // the long muzzle points slightly down the road rather than at the sky,
-    // which is what stops a sharp snout reading as a beak.
-    crouch: 8, shrug: 0.14, chin: -5, elbowOut: -0.010,
+    // EAGER, FORWARD, LIGHT. She is the fastest on the grid and the mascot, and
+    // a mascot's rest pose is a piece of characterisation you get for free every
+    // frame she is on screen. 8° of crouch put her upright between Strata (3)
+    // and Pip (10) — mid-table, i.e. nothing. At 12 she is second only to
+    // Blitz's 13, but where Blitz is FOLDED (shrug 0.26, shoulders hauled up
+    // around the helmet, chin buried) she is *reaching*: shoulders only lightly
+    // raised, elbows tucked in tight, chin down the road. Two different ideas of
+    // "fast" rather than two depths of the same slouch.
+    // `chin` is negative so the long muzzle points slightly down the road rather
+    // than at the sky, which is what stops a sharp snout reading as a beak.
+    crouch: 12, shrug: 0.17, chin: -7, elbowOut: -0.017,
     // AMBER. A red fox's iris is amber-gold and it is the second thing anyone
     // recognises about the animal after the ears — and #43301c was chroma 17,
     // i.e. a dark brown that at a 6 px iris resolves to a black dot with a
@@ -373,9 +405,16 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     // black, so the gold reads as a ring round a black pupil rather than as a
     // flat coin. This is the largest iris on the board (6.2 card px) and the
     // mascot's; it should be the one people remember.
+    // The BROW was 1.6:1 against the pelt it is drawn on (#8a4a16 on #a53f0c —
+    // both mid rust), so the one facial feature that carries expression was
+    // invisible at any size. A fox's brow marking is near-black, the same tone
+    // as the ear backs and the stockings, and matching it to `furDark` (0x2e1a12)
+    // ties the face into the character's dark value group instead of leaving it
+    // a smudge. Brow is what makes `determined` and `thoughtful` different faces
+    // rather than two mouths.
     face: {
       style: 'fox', skin: '#a53f0c', snout: '#f3e3cb', nose: '#241713',
-      eye: '#c8891f', brow: '#8a4a16', eyeSize: 1.16, mark: 'whiskers',
+      eye: '#c8891f', brow: '#33200f', eyeSize: 1.20, mark: 'whiskers',
       idle: 'thoughtful',
     },
   },
@@ -429,10 +468,95 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
     //
     // The iris went from #2c1e16 (chroma 10 — a black dot) to a warm brown that
     // still reads dark but has a colour in it at 4.8 px.
+    // TINY EYES. `eyeSize` 1.10 was the fix for a character that had none at
+    // all, and it overshot: 1.10 on a 0.132 R head is a 4.8 px iris on the card,
+    // bigger than the mascot's was before this round and completely wrong for
+    // the animal — a capybara's eye is a bead on an enormous face, and that
+    // disproportion is where the deadpan comes from. 0.90 measures 3.9 px, still
+    // well clear of the ~2.5 px floor at which iris, limbal ring and catchlight
+    // collapse into one grey dot (`heavy` sat at 2.49 and had to be raised).
+    // The eye BAND around it went wider and shallower, so the pair also reads as
+    // set far apart rather than merely small.
     face: {
       style: 'capy', skin: '#786047', snout: '#b59e7c', nose: '#2b2118',
-      eye: '#5a3a20', brow: '#6b4c30', eyeSize: 1.10, mark: 'whiskers',
+      eye: '#5a3a20', brow: '#6b4c30', eyeSize: 0.90, mark: 'whiskers',
       idle: 'sleepy', portrait: 'neutral',
+    },
+  },
+  // 11. SKID — the heavyweight drifter. Every heavy on the grid until now was
+  //     a straight-line car that paid for it in the corners (Blitz 0.28
+  //     handling, Torque 0.34, Strata 0.40, Capy 0.30). Skid is the first one
+  //     that is heavy AND agile, and pays for it in GRIP: 0.22 traction is the
+  //     grid's floor by a distance, against a 0.98 mini-turbo that is the
+  //     grid's ceiling. You do not drive her on the line, you drive her
+  //     sideways and collect the boost.
+  //
+  //     Silhouette idea: a WIDE HARD TRIANGLE. Nothing on the roster is a
+  //     triangle from any angle — there are domes, blades, combs, bells and
+  //     teardrops, and eleven of the twelve outlines are convex-and-round above
+  //     the shoulders. A conical straw hat over a heavy slouch is the one shape
+  //     that reads instantly at 40 px against all of them, and the braid gives
+  //     her a rear read that is neither a mop nor a plume.
+  drifter: {
+    // ⚠️ FIRST PASS WAS TORQUE IN A DIFFERENT HAT. At bulk 0.84 / scale 1.08 in
+    // the `jacket` outfit — the heavy's own bulk band and the heavy's own
+    // garment — heavy ~ drifter measured 0.804 at the front, 0.810 at the rear
+    // and 0.807 in profile, the worst pair on a twelve-driver board. A new hat
+    // does not make a new driver when the mass under it is the same mass. Bulk
+    // comes down out of the heavy band into a gap (0.62, between aviator's 0.55
+    // and knight's 0.80), and the outfit moves to `shell` — the one treatment in
+    // the table nobody was using, which puts a dorsal ridge up her back.
+    id: 'drifter', name: 'Skid', scale: 1.04, bulk: 0.62, headR: 0.101, neck: 0.026,
+    torso: 0.258, head: 'trucker', hatVariant: 'coneStraw', outfit: 'shell',
+    skinColor: 0xa9714a,
+    suit: 0x2f5136, suitAlt: 0xe8dcbb,
+    furDark: 0x241a12, furAlt: 0x5d4630,
+    rear: 'braid', skull: 'wedge',
+    // Slouched BACK and loose, elbows hung wide — the posture of somebody who
+    // is not fighting the car. Only Torque (-4) and Capy (-6) also recline, and
+    // both of them are square-shouldered; this one drops a shoulder (`shrug`
+    // negative, biggest `elbowOut` on the roster) so the three still separate.
+    crouch: -3, shrug: -0.18, chin: 3, elbowOut: 0.042,
+    face: {
+      style: 'human', skin: '#a9714a', eye: '#3f7a52', brow: '#2b1d12',
+      eyeSize: 1.10, mark: 'stubble', idle: 'happy',
+    },
+  },
+  // 12. QUILL — the line racer. The other hole in the table: everyone with
+  //     handling above 0.80 also has a big mini-turbo (Vex 0.88, Pip 0.92,
+  //     Zephyr 0.76, Foxy 0.84), so on this grid "corners well" has always
+  //     meant "drifts well". Quill has 0.92 handling and 0.90 traction — the
+  //     only kart with both — and 0.12 mini-turbo, half the previous floor. She
+  //     gets nothing at all for sliding, so she is the one racer you drive on
+  //     the geometric line, and the only counter-play against a grid of
+  //     drift-boosters.
+  //
+  //     Silhouette idea: a NARROW VERTICAL. Where Skid is all horizontal, Quill
+  //     is a tall hard-edged column — a stovepipe shako over the roster's
+  //     narrowest skull, bolt upright, elbows tucked tighter than Blitz's. The
+  //     quill fan sprays backward off the nape, which is a radial shape rather
+  //     than another comb or another pair of ribbons.
+  duellist: {
+    // ⚠️ AND THE FIRST PASS OF THIS ONE WAS STRATA. In profile, a head with a
+    // fan behind it and a head with a leather neck-curtain behind it are the
+    // same outline: aviator ~ duellist measured 0.809. The fix is the NECK —
+    // 0.112 is the longest on the roster (alien's 0.095 was), and a long bare
+    // neck under a tall column is a stack of three separate masses where
+    // Strata is one continuous wedge from crown to shoulder.
+    id: 'duellist', name: 'Quill', scale: 1.04, bulk: 0.26, headR: 0.098, neck: 0.112,
+    torso: 0.286, head: 'aero', hatVariant: 'towerBand', outfit: 'slim',
+    skinColor: 0xe6c2a4,
+    suit: 0x3b2a5e, suitAlt: 0xf0e6d2,
+    furDark: 0x1d1626, furAlt: 0x8f7fb5,
+    rear: 'quillFan', skull: 'blade',
+    // Upright and exact. Zephyr owns crouch 0 as "a machine does not slouch";
+    // this is 2, which is a person sitting properly — and the shoulders are
+    // level (shrug 0.02) where Zephyr's are square at 0.0 but his elbows are
+    // flung out at 0.028. Quill's are the tightest on the grid.
+    crouch: 2, shrug: 0.02, chin: 1, elbowOut: -0.024,
+    face: {
+      style: 'human', skin: '#e6c2a4', eye: '#5d54a8', brow: '#2f2438',
+      eyeSize: 1.02, mark: 'none', portrait: 'determined',
     },
   },
 };
@@ -440,7 +564,7 @@ export const DRIVERS: Record<DriverId, DriverDef> = {
 export const DRIVER_NAMES: Record<DriverId, string> = {
   mechanic: 'Nova', racer: 'Blitz', robot: 'Zephyr', heavy: 'Torque',
   speedy: 'Pip', alien: 'Vex', knight: 'Ember', aviator: 'Strata',
-  fox: 'Foxy', capy: 'Capy',
+  fox: 'Foxy', capy: 'Capy', drifter: 'Skid', duellist: 'Quill',
 };
 
 // ---------------------------------------------------------------------------
@@ -464,10 +588,19 @@ function capSlotFor(d: DriverDef): MaterialSlot {
   return d.outfit === 'armour' ? 'paint' : 'clothAlt';
 }
 
-/** Upper arm. Sleeve on the fox, bare mid-brown limb on the capybara. */
+/**
+ * Upper arm. Bare pelt on both animals; the fox's knit is a SLEEVELESS gilet.
+ *
+ * ⚠️ THE MASCOT'S SPECIES MARKINGS WERE UNDER A JUMPER. A red fox reads as
+ * orange body / white bib / BLACK STOCKINGS, and the black has to start
+ * somewhere visible for the stocking to exist at all. With a full sleeve the
+ * fox's colour blocking was blue-blue-blue then black at the wrist, i.e. a
+ * knitted person with dark gloves. Bare orange from shoulder to cuff puts the
+ * hard orange→black edge back where the animal has it, mid-forearm, and it is
+ * the one change that makes the arms read as fox limbs rather than sleeves.
+ */
 function armSlotFor(d: DriverDef): MaterialSlot {
-  if (d.species === 'fox') return 'cloth';      // sweater sleeve
-  if (d.species === 'capy') return 'furDark';   // mid-brown limb
+  if (d.species !== undefined) return d.species === 'fox' ? 'fur' : 'furDark';
   return d.outfit === 'plated' ? 'metal' : 'cloth';
 }
 
@@ -1264,12 +1397,19 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // buried in the seat. Measured — it took the speedster's tiny 0.16 m
     // backrest from 30.5 % of torso verts inside down to inside the band the
     // eight already occupy.
+    // ⚠️ A SLAB IS NOT A BARREL. The five stations ran 0.118 / 0.123 / 0.145 /
+    // 0.144 / 0.126 m half-width, i.e. near-constant from waist to shoulder,
+    // which is a wardrobe. A capybara is a BARREL: the widest point is low, at
+    // the bottom of the ribs, and the line falls away above it — that downward
+    // weight is the whole "heavy, unbothered, planted" read, and it is also what
+    // stops the shoulders reading as shoulders. Below, the mass swells; above,
+    // the body just stops, and the head sits straight on it with no neck.
     ? [
-      { z: s.hipY - 0.062, y: 0.004, hw: s.waist * 1.06, hUp: front * 0.92, hDown: back * 0.86, eSide: 5.0, eTop: 4.6, eBot: 5.2 },
-      { z: s.hipY + 0.050, y: 0.002, hw: s.waist * 1.10, hUp: front * 1.04, hDown: back * 0.90, eSide: 5.4, eTop: 5.0, eBot: 5.2 },
-      { z: lerp(s.hipY, s.torsoTop, 0.62), y: 0.000, hw: s.chest * 1.06, hUp: front * 1.08, hDown: back * 0.88, eSide: 5.6, eTop: 5.0, eBot: 5.2 },
-      { z: s.shoulderY - 0.008, y: -0.004, hw: s.chest * 1.05, hUp: front * 1.02, hDown: back * 0.86, eSide: 5.4, eTop: 4.8, eBot: 5.0 },
-      { z: s.torsoTop + 0.014, y: -0.008, hw: s.chest * 0.92, hUp: front * 0.86, hDown: back * 0.76, eSide: 4.8, eTop: 4.2, eBot: 4.6 },
+      { z: s.hipY - 0.062, y: 0.004, hw: s.waist * 1.14, hUp: front * 0.98, hDown: back * 0.86, eSide: 5.0, eTop: 4.6, eBot: 5.2 },
+      { z: s.hipY + 0.050, y: 0.002, hw: s.waist * 1.20, hUp: front * 1.22, hDown: back * 0.96, eSide: 5.4, eTop: 5.0, eBot: 5.2 },
+      { z: lerp(s.hipY, s.torsoTop, 0.58), y: 0.000, hw: s.chest * 1.06, hUp: front * 1.20, hDown: back * 0.94, eSide: 5.6, eTop: 5.0, eBot: 5.2 },
+      { z: s.shoulderY - 0.008, y: -0.004, hw: s.chest * 1.01, hUp: front * 1.00, hDown: back * 0.86, eSide: 5.4, eTop: 4.8, eBot: 5.0 },
+      { z: s.torsoTop + 0.014, y: -0.008, hw: s.chest * 0.84, hUp: front * 0.82, hDown: back * 0.74, eSide: 4.8, eTop: 4.2, eBot: 4.6 },
     ]
     : d.species === 'fox'
       // A knitted jumper is a soft cylinder, not a tailored suit: barely any
@@ -1414,29 +1554,86 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       break;
     }
     case 'sweater': {
-      // Chunky roll-neck knit. The knit normal map carries the stitch; these
-      // are the MACRO ribs, because a normal map alone still reads as a printed
-      // pattern on a smooth cylinder at ten metres.
+      // A SLEEVELESS V-NECK KNIT GILET OVER A WHITE CHEST BIB.
+      //
+      // ⚠️ THIS USED TO BE A CLOSED ROLL-NECK, AND IT WAS HIDING THE ANIMAL.
+      // Foxy's whole colour identity is three masses — deep rust pelt, white
+      // cheek-and-chest bib, near-black stockings — and a jumper buttoned to the
+      // chin deleted the middle one, leaving a 4 cm cream lozenge under the
+      // collar as "the only place the fox's pale chest is visible". A red fox's
+      // bib is not a lozenge: it runs from the jaw to the belly and it is the
+      // second-biggest value block on the animal after the pelt itself.
+      //
+      // So the knit opens into a deep V, the bib fills it, and the ribs stop at
+      // the vest's own edge instead of wrapping the whole barrel. The garment
+      // still reads as knitwear (same `cloth` slot, same knit normal, same macro
+      // ribs) — it is just no longer worn over the character.
+      const bibTop = s.torsoTop - 0.006;
+      const bibBot = s.hipY - 0.036;
+      const bibH = bibTop - bibBot;
+      // The bib. A thin vertical plate standing proud of the chest, widest at
+      // the sternum and tapering both ways, so its outline is a shield rather
+      // than a stripe. `hUp`/`hDown` are its THICKNESS — `verticalLoft` reads
+      // `z` as height, so this stands up the body instead of lying across it.
+      const bib = verticalLoft([
+        { z: 0.000, y: 0, hw: s.chest * 0.30, hUp: 0.014, hDown: 0.030, eSide: 2.6, eTop: 2.6, eBot: 2.8 },
+        { z: bibH * 0.30, y: 0.004, hw: s.chest * 0.56, hUp: 0.016, hDown: 0.034, eSide: 2.9, eTop: 2.8, eBot: 3.0 },
+        { z: bibH * 0.66, y: 0.006, hw: s.chest * 0.62, hUp: 0.017, hDown: 0.036, eSide: 3.0, eTop: 2.9, eBot: 3.0 },
+        { z: bibH * 0.92, y: 0.004, hw: s.chest * 0.50, hUp: 0.016, hDown: 0.034, eSide: 2.8, eTop: 2.7, eBot: 2.9 },
+        { z: bibH, y: 0.000, hw: s.chest * 0.34, hUp: 0.013, hDown: 0.030, eSide: 2.6, eTop: 2.5, eBot: 2.7 },
+      ], 20);
+      b.add('torso', 'furAlt', bib, { pos: [0, bibBot, -front * 0.90], detail: 0 });
+      // Bib fur breaking over the vest edge: three soft lobes, so the boundary
+      // between white and rust is a torn edge and not a decal outline.
+      for (let i = 0; i < 3; i++) {
+        const t = i / 2;
+        b.pair('torso', 'torso', 'furAlt', superShape(
+          0.028 - i * 0.005, 0.030 - i * 0.004, 0.020, 2.5, 2.3, 9, 6,
+        ), {
+          pos: [
+            lerp(s.chest * 0.34, s.chest * 0.16, t),
+            lerp(bibBot + bibH * 0.62, bibTop + 0.010, t),
+            -front * (0.92 - t * 0.06),
+          ],
+          rot: [-8 - i * 6, -14, -22 - i * 10], detail: i === 0 ? 0 : 2, shade: 0.96 - i * 0.03,
+        });
+      }
+      // The two halves of the vest front: mirrored panels flanking the bib, each
+      // with a rolled knit edge. This is what makes it a garment with an opening
+      // rather than a torso with a stripe painted down it.
+      const lapel = verticalLoft([
+        { z: 0.000, y: 0, hw: 0.030, hUp: 0.018, hDown: 0.022, eSide: 2.8, eTop: 2.6, eBot: 3.0 },
+        { z: bibH * 0.52, y: 0.002, hw: 0.038, hUp: 0.019, hDown: 0.023, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
+        { z: bibH * 0.98, y: 0.000, hw: 0.026, hUp: 0.016, hDown: 0.020, eSide: 2.7, eTop: 2.5, eBot: 2.8 },
+      ], 14);
+      b.pair('torso', 'torso', 'cloth', lapel, {
+        pos: [s.chest * 0.74, bibBot + 0.004, -front * 0.80], rot: [0, 0, -9], detail: 0, shade: 0.94,
+      });
+      // Rolled collar, opened at the front so it frames the throat instead of
+      // closing over it: two short arcs rather than a full ring.
       const collarR = 0.048 + bulk * 0.014;
-      const roll = sweepRing(ringProfile(collarR, 0.024, 0.026, 7), 16);
+      const roll = sweepRing(ringProfile(collarR, 0.026, 0.028, 7), 16, (th) => ({
+        // Pinch the ring to nothing across the front third so the V stays open.
+        dr: -collarR * 0.34 * Math.max(0, Math.cos(th)) ** 2, dy: 0,
+      }));
       b.add('torso', 'cloth', roll, {
         pos: [0, s.torsoTop + 0.014, -0.004], rot: [-6, 0, 0], detail: 0,
       });
-      // Cream chest ruff pushing up out of the collar — the only place the
-      // fox's pale chest is visible once the jumper is on.
-      const ruff = superShape(0.040, 0.030, 0.026, 2.6, 2.4, 11, 7);
+      // THROAT RUFF. The bib's top end, pushing up out of the open collar and
+      // wider than the collar is — a red fox's white runs right up under the jaw.
+      const ruff = superShape(0.058, 0.040, 0.034, 2.5, 2.3, 12, 8);
       b.add('torso', 'furAlt', ruff, {
-        pos: [0, s.torsoTop + 0.022, -collarR * 0.70], rot: [-14, 0, 0], detail: 1,
+        pos: [0, s.torsoTop + 0.020, -collarR * 0.86], rot: [-16, 0, 0], detail: 0,
       });
-      // Horizontal rib courses up the body, alternating depth so the light
-      // breaks across them.
+      // Horizontal rib courses. They now stop at the vest's own front edge
+      // (`hUp` pulled back inside the bib) so they do not run across the white.
       for (let i = 0; i < 4; i++) {
         const t = i / 3;
         const y = lerp(s.hipY - 0.030, s.torsoTop - 0.036, t);
         const w = lerp(s.waist * 1.10, s.chest * 1.10, t * 0.9);
         const rib = verticalLoft([
-          { z: -0.008, y: 0, hw: w, hUp: front * 0.96, hDown: back * 0.96, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
-          { z: 0.008, y: 0, hw: w * 1.008, hUp: front * 0.966, hDown: back * 0.966, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
+          { z: -0.008, y: 0, hw: w, hUp: front * 0.80, hDown: back * 0.96, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
+          { z: 0.008, y: 0, hw: w * 1.008, hUp: front * 0.806, hDown: back * 0.966, eSide: 3.3, eTop: 3.1, eBot: 3.3 },
         ], 20, false, false);
         b.add('torso', 'cloth', rib, {
           pos: [0, y, 0], detail: i % 2 === 0 ? 1 : 2, shade: i % 2 === 0 ? 0.90 : 0.98,
@@ -1447,18 +1644,36 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
         dr: Math.abs(Math.cos(th)) * s.waist * 0.06, dy: 0,
       }));
       b.add('torso', 'cloth', hem, { pos: [0, s.hipY - 0.052, 0.002], detail: 0, shade: 0.88 });
+      // Armhole binding: the hard edge where the sleeveless knit meets bare
+      // pelt. Without it the shoulder cap and the upper arm are one soft blend
+      // and the gilet reads as a paint job.
+      b.pair('torso', 'torso', 'clothAlt', sweepRing(
+        ringProfile(0.046 + bulk * 0.020, 0.012, 0.013, 6), 14,
+      ), {
+        pos: [s.shoulderHalf * 0.94, s.shoulderY - 0.026, s.shoulderZ + 0.002],
+        rot: [4, 0, -74], detail: 1, shade: 0.90,
+      });
       break;
     }
     case 'pelt': {
       // Bare fur with a paler chest/belly field, so a big single-tone mass still
       // has two values in it.
+      //
+      // ⚠️ IT WAS LYING DOWN. `verticalLoft` has already rolled the profile
+      // upright — `section.z` IS height — and this then applied a further
+      // `rot: [-90, 0, 0]`, which laid the panel back flat and pointed its long
+      // axis at the steering wheel. The "paler chest/belly field" was a 150 mm
+      // horizontal shelf sticking out of the driver's stomach, invisible only
+      // because it is 16 mm thick and buried in the cowl. No extra rotation: the
+      // sections stand up the body the way the comment always claimed.
       const belly = verticalLoft([
-        { z: 0, y: 0, hw: s.chest * 0.68, hUp: 0.016, hDown: 0.016, eSide: 3.0, eTop: 3.0 },
-        { z: 0.070, y: -0.004, hw: s.chest * 0.80, hUp: 0.018, hDown: 0.018, eSide: 3.2, eTop: 3.2 },
-        { z: 0.150, y: -0.010, hw: s.chest * 0.62, hUp: 0.016, hDown: 0.016, eSide: 3.0, eTop: 3.0 },
+        { z: 0.000, y: 0, hw: s.chest * 0.46, hUp: 0.015, hDown: 0.034, eSide: 2.8, eTop: 2.8, eBot: 3.0 },
+        { z: 0.062, y: 0.004, hw: s.chest * 0.74, hUp: 0.017, hDown: 0.038, eSide: 3.2, eTop: 3.2, eBot: 3.2 },
+        { z: 0.136, y: 0.006, hw: s.chest * 0.80, hUp: 0.018, hDown: 0.040, eSide: 3.4, eTop: 3.4, eBot: 3.4 },
+        { z: 0.196, y: 0.002, hw: s.chest * 0.54, hUp: 0.015, hDown: 0.034, eSide: 2.9, eTop: 2.9, eBot: 3.0 },
       ], 18);
       b.add('torso', 'furAlt', belly, {
-        pos: [0, s.hipY - 0.020, -front * 0.94], rot: [-90, 0, 0], detail: 0,
+        pos: [0, s.hipY - 0.052, -front * 0.94], detail: 0,
       });
       // Chunky wrapped scarf: one loop round the neck, tilted so it reads as
       // wrapped rather than as a collar, plus a hanging fringed end.
@@ -1478,6 +1693,36 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       b.add('torso', 'cloth', drop, {
         pos: [0.052, s.torsoTop - 0.030, -front * 0.86], rot: [-104, 0, 9], detail: 0, shade: 0.94,
       });
+      // THE OTHER END, DOWN THE BACK — and it is the half that does the work.
+      // Both ends used to hang forward over the chest, where the chase camera
+      // never sees them, so from behind the "chunky wrapped scarf" was a collar.
+      // This one goes over the driver's RIGHT shoulder and down the outside of
+      // the arm: outboard of the seat back entirely (|x| >= 0.19, which the
+      // clearance map requires behind the shoulders), and squarely on the rear
+      // outline where Capy has the least shape of anyone on the roster. It also
+      // makes the scarf asymmetric, which is what stops it reading as a moulded
+      // ring rather than as cloth somebody wound round their neck.
+      const backDrop = verticalLoft([
+        { z: 0.000, y: 0, hw: 0.040, hUp: 0.015, hDown: 0.015, eSide: 3.0, eTop: 3.0 },
+        { z: 0.078, y: 0.004, hw: 0.048, hUp: 0.014, hDown: 0.014, eSide: 3.2, eTop: 3.2 },
+        { z: 0.156, y: 0.002, hw: 0.044, hUp: 0.013, hDown: 0.013, eSide: 3.0, eTop: 3.0 },
+        { z: 0.214, y: -0.004, hw: 0.030, hUp: 0.011, hDown: 0.011, eSide: 2.8, eTop: 2.8 },
+      ], 14);
+      b.add('torso', 'cloth', backDrop, {
+        pos: [-(s.shoulderHalf * 1.20), s.torsoTop - 0.014, s.chest * 0.42],
+        rot: [172, 0, -13], detail: 0, shade: 0.88,
+      });
+      // Fringe on the back end too, so the two ends match.
+      for (let i = 0; i < 4; i++) {
+        b.add('torso', 'cloth', earWedge(0.0075, 0.030 + (i % 2) * 0.012, 0.0055, 0.5), {
+          pos: [
+            -(s.shoulderHalf * 1.20) + (i - 1.5) * 0.019,
+            s.torsoTop - 0.232 - (i % 2) * 0.008,
+            s.chest * 0.42 + 0.014,
+          ],
+          rot: [176, 0, -13], detail: i % 2 === 0 ? 0 : 2, shade: 0.84,
+        });
+      }
       // COARSE FLANK TUFTS. A capybara's coat is bristly and sparse and it sheds
       // in clumps, so the animal's outline is never a clean curve — which is
       // both the species read and the fix for the one measured shortcoming this
@@ -1493,15 +1738,67 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
       // thing that works, and it is also what a capybara's coat actually is:
       // sparse, coarse guard hairs two or three times the length of the
       // undercoat, standing away from the body.
+      // ⚠️ AND THE BARREL JUST GREW PAST THEM AGAIN. Widening the torso to a real
+      // barrel took its half-width at mid-rib from 0.145 to 0.153 m while this row
+      // sat at a hard-coded `s.chest * 1.00` = 0.137 — so on the first pass of that
+      // change every one of these was drawn INSIDE the body and the rear / three-
+      // quarter shape complexity fell 5.01 -> 4.55 and 4.63 -> 4.33, breaking two
+      // assertions. Third time this exact bug has been recorded on this character.
+      //
+      // So the row is no longer a constant: `flank(t)` is the torso loft's own
+      // half-width interpolated at the same height, and the hairs are planted a
+      // fixed 6 mm outside it. Reshape the barrel and they follow.
+      const flank = (t: number): number => (
+        t < 0.28 ? lerp(s.waist * 1.14, s.waist * 1.20, t / 0.28)
+          : t < 0.62 ? lerp(s.waist * 1.20, s.chest * 1.06, (t - 0.28) / 0.34)
+            : lerp(s.chest * 1.06, s.chest * 1.01, (t - 0.62) / 0.38)
+      );
       for (let i = 0; i < 11; i++) {
         const t = i / 10;
         const sx = i % 2 === 0 ? 1 : -1;
         const y = lerp(s.hipY - 0.044, s.torsoTop - 0.010, t);
-        const len = 0.062 + (i % 3) * 0.018;
+        // Length tapers with height. The gap between the flank and the elbow is
+        // the DEEPEST CONCAVITY in the rear outline, and a long hair up at
+        // shoulder level bridges it — welding the arm to the body and costing
+        // more boundary than the hair adds. Long and shaggy low, short up top.
+        const len = lerp(0.104, 0.048, t) + (i % 3) * 0.014;
         b.add('hips', 'furDark', earWedge(0.0075, len, 0.0045, 0.75), {
-          pos: [sx * (s.chest * 1.00 + bulk * 0.006), y, lerp(-front * 0.34, back * 0.66, t)],
+          pos: [sx * (flank(t) + 0.006), y, lerp(-front * 0.34, back * 0.66, t)],
           rot: [14 + (i % 3) * 13, sx * 24, sx * (68 + (i % 2) * 16)],
-          detail: i % 3 === 0 ? 1 : 2, shade: 0.84 + (i % 2) * 0.06,
+          detail: i % 3 === 0 ? 0 : 1, shade: 0.84 + (i % 2) * 0.06,
+        });
+      }
+      // HANGING BELLY FRINGE. The bottom edge of a seated body is pure outline
+      // from behind and from three-quarters, it is the longest uninterrupted
+      // straight run in Capy's silhouette, and it had nothing on it. A capybara
+      // carries its longest guard hair on the flank and belly, so a row of locks
+      // hanging off that edge is both the species read and the cheapest
+      // perimeter on the character: they add boundary along their whole length
+      // and almost no area, which is exactly what perimeter/sqrt(area) rewards.
+      for (let i = 0; i < 9; i++) {
+        const t = i / 8;
+        const sx = t < 0.5 ? -1 : 1;
+        const u = Math.abs(t - 0.5) * 2;
+        b.add('hips', 'furDark', earWedge(0.0080, 0.062 + (i % 3) * 0.026, 0.0048, 0.7), {
+          pos: [
+            sx * lerp(0.030, s.waist * 1.16, u),
+            s.hipY - 0.070 - u * 0.006,
+            lerp(-front * 0.72, back * 0.52, ((i * 5) % 9) / 8),
+          ],
+          rot: [168 + (i % 3) * 9, sx * 12, sx * (12 + u * 22)],
+          detail: i % 2 === 0 ? 0 : 1, shade: 0.82 + (i % 2) * 0.06,
+        });
+      }
+      // Rump locks, trailing backward off the haunch — the rear edge of the
+      // body at three-quarters, where the flank row is edge-on and contributes
+      // nothing.
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4;
+        const sx = i % 2 === 0 ? 1 : -1;
+        b.add('hips', 'furDark', earWedge(0.0075, 0.074 + (i % 2) * 0.028, 0.0045, 0.7), {
+          pos: [sx * lerp(0.024, s.waist * 1.02, t), s.hipY + lerp(-0.052, 0.052, t), back * 0.96],
+          rot: [96 + (i % 3) * 12, sx * 20, sx * (18 + t * 26)],
+          detail: i % 2 === 0 ? 0 : 1, shade: 0.84,
         });
       }
       // ⚠️ PUT THEM WHERE THE OUTLINE ACTUALLY IS. The flank row above sits at
@@ -1616,7 +1913,7 @@ function buildLegs(b: RigBucket, d: DriverDef, s: Skeleton): void {
   // Animals get short stubby legs — the capybara especially, whose whole read is
   // "heavy body, almost no leg". Pulling the ankle back and up shortens the limb
   // without lifting the paw off the pedal.
-  const stub = d.species === 'capy' ? 0.72 : d.species === 'fox' ? 0.90 : 1;
+  const stub = d.species === 'capy' ? 0.62 : d.species === 'fox' ? 0.90 : 1;
   const knee = new THREE.Vector3(hipX + 0.010, s.hipY - 0.030 * stub, -0.150 * stub);
   const ankle = new THREE.Vector3(hipX + 0.004, s.hipY - 0.128 * stub, -0.278 * stub);
   const hip = new THREE.Vector3(hipX, s.hipY - 0.058, -0.012);
@@ -1708,9 +2005,11 @@ function buildArms(b: RigBucket, d: DriverDef, s: Skeleton): void {
 
   // Cuff ring: hard edge between sleeve and glove.
   if (animal) {
-    // A knitted cuff where the sleeve meets the dark paw — a hard colour edge is
-    // what makes the forearm read as a glove rather than as a thin arm.
-    b.pair('foreR', 'foreL', d.species === 'fox' ? 'cloth' : 'fur', sweepRing(
+    // The top of the STOCKING. A ruff of pale/body-toned fur overhanging the
+    // dark forearm is what makes the black read as a marking on the animal
+    // rather than as a glove pulled on over it — the same trick as the cheek
+    // ruff, one scale down.
+    b.pair('foreR', 'foreL', d.species === 'fox' ? 'furAlt' : 'fur', sweepRing(
       ringProfile(foreR * 1.16, foreR * 0.32, foreR * 0.34, 6), 10,
     ), {
       pos: [lerp(s.elbow.x, s.hand.x, 0.14), lerp(s.elbow.y, s.hand.y, 0.14), lerp(s.elbow.z, s.hand.z, 0.14)],
@@ -1777,40 +2076,97 @@ function buildArms(b: RigBucket, d: DriverDef, s: Skeleton): void {
  */
 function buildTail(b: RigBucket, d: DriverDef, s: Skeleton): void {
   const y0 = s.hipY;
+  // ⚠️ IT HAS TO BE THE BIGGEST SHAPE ON HER, AND IT WAS NOT.
+  //
+  // The old brush peaked at a 78 mm radius — 156 mm across, against a head that
+  // measures 326 mm wide. A red fox's tail is as thick as its body and as long
+  // as the rest of the animal; at half the head's width this was a bushy cat
+  // tail, and it is the one part of the design that has to carry the character
+  // from the chase camera. It is now 216 mm at the fattest station and 0.62 m
+  // along the curve, so it is both the longest and (after the torso) the
+  // heaviest single volume on the rig.
+  //
+  // It also now RISES. The old path crested at y = 0.33 and then ran away
+  // rearward at roughly shoulder height, which from three-quarters put it
+  // BEHIND the torso where the seat back already occupies the outline. The new
+  // arc lifts to y = 0.354 outboard of the driver's left shoulder before it
+  // curls back, so the plume is a second mass beside the head with a real notch
+  // between the two — which is a shape no other driver on the roster has.
+  //
+  // CLEARANCE IS MEASURED, AND THE MEASUREMENT IS CHASSIS-SPECIFIC.
+  // `.probe-tmp/fox-space.ts` aggregates the free space over all six chassis and
+  // that aggregate map says y = 0.36 / z = 0.30 is solid — which is the BUGGY's
+  // roll hoop, and the reason the old routing crested below y = 0.35. The fox
+  // driver is only ever built on `standard` (`CHARACTERS.foxy.bodyId`, and a
+  // relabelled repeat keeps its bodyId), so that is not this tail's constraint.
+  //
+  // Re-run restricted to the standard chassis (`fox-space-std`), worst station:
+  //   station 2  x 24.4 cm  y 0.31  z 0.12   needs >= 15 cm   ok
+  //   station 3  x 26.8 cm  y 0.35  z 0.21   needs >= 14 cm   ok
+  //   station 4  x 21.6 cm  y 0.35  z 0.32   midline free     ok
+  // Tube radius included: the fattest station reaches y = 0.45, and rows 0.44
+  // and up are clear across the whole z range on this chassis. Below y = 0.18 is
+  // solid on every chassis, so the root starts inside the tub — unavoidable and
+  // invisible, exactly as the driver's own pelvis does.
   const path = [
-    new THREE.Vector3(0.020, y0 + 0.120, 0.020),
-    new THREE.Vector3(0.118, y0 + 0.200, 0.078),
-    new THREE.Vector3(0.204, y0 + 0.252, 0.152),
-    new THREE.Vector3(0.216, y0 + 0.288, 0.232),
-    new THREE.Vector3(0.152, y0 + 0.308, 0.302),
-    new THREE.Vector3(0.074, y0 + 0.316, 0.368),
+    new THREE.Vector3(0.022, y0 + 0.116, 0.014),
+    new THREE.Vector3(0.140, y0 + 0.208, 0.058),
+    new THREE.Vector3(0.244, y0 + 0.292, 0.122),
+    new THREE.Vector3(0.268, y0 + 0.340, 0.214),
+    new THREE.Vector3(0.216, y0 + 0.336, 0.316),
+    new THREE.Vector3(0.132, y0 + 0.292, 0.402),
+    new THREE.Vector3(0.062, y0 + 0.240, 0.464),
   ];
   // Thin at the root, fattest two thirds along, tapering to a point. `fluff`
-  // breaks the silhouette into three locks so it is not a smooth sausage.
-  const radii = [0.026, 0.050, 0.072, 0.078, 0.062, 0.022];
-  b.add('hips', 'fur', taperTube(path, radii, 12, 18, 0.055), { detail: 0 });
+  // breaks the silhouette into locks so it is not a smooth sausage; it is up
+  // from 0.055 because a bigger tube needs a bigger break to read as fur.
+  // The DIP at station 3 is deliberate: a monotonic taper is a sausage, and a
+  // sausage measures as one convex blob however big it is. Swell, pinch, swell
+  // puts a real concavity in the rear outline, which is the cheapest shape
+  // complexity on the character — it costs zero extra triangles.
+  const radii = [0.034, 0.078, 0.104, 0.086, 0.100, 0.058, 0.022];
+  b.add('hips', 'fur', taperTube(path, radii, 13, 22, 0.085), { detail: 0 });
 
   // Cream tip — the single highest-contrast note on the character, and the
-  // reason the tail still reads as a fox tail at minimap size.
+  // reason the tail still reads as a fox tail at minimap size. It covers the
+  // last ~40 % of the brush, which is what the reference animal has; a token
+  // white dot on the point is invisible by 40 px.
   const tipPath = [
-    new THREE.Vector3(0.186, y0 + 0.300, 0.264),
-    new THREE.Vector3(0.152, y0 + 0.308, 0.302),
-    new THREE.Vector3(0.072, y0 + 0.317, 0.370),
+    new THREE.Vector3(0.224, y0 + 0.338, 0.296),
+    new THREE.Vector3(0.132, y0 + 0.292, 0.402),
+    new THREE.Vector3(0.060, y0 + 0.238, 0.466),
   ];
-  b.add('hips', 'furAlt', taperTube(tipPath, [0.068, 0.062, 0.020], 12, 8, 0.06), { detail: 0 });
+  b.add('hips', 'furAlt', taperTube(tipPath, [0.094, 0.064, 0.022], 13, 12, 0.070), { detail: 0 });
 
-  // Fur tufts along the top edge so the outline is not a clean arc.
-  for (let i = 0; i < 3; i++) {
-    const t = i / 2;
-    const tuft = superShape(0.026 - i * 0.005, 0.019, 0.028, 2.4, 2.2, 7, 5);
-    b.add('hips', i === 2 ? 'furAlt' : 'fur', tuft, {
-      pos: [
-        lerp(0.196, 0.130, t),
-        y0 + lerp(0.300, 0.354, t),
-        lerp(0.158, 0.290, t),
-      ],
-      rot: [-16 + i * 12, 0, 26], detail: 2, shade: 0.93,
-    });
+  // GUARD LOCKS, AND THEY HAVE TO BE LONG.
+  //
+  // ⚠️ FIRST ATTEMPT MADE THE SILHOUETTE WORSE. Tripling the brush's volume with
+  // 50 mm tufts on it dropped the rear shape complexity from 5.35 to 4.98 — the
+  // only failing assertion on the roster — because perimeter/sqrt(area) rewards
+  // boundary and punishes area, and a 50 mm lock on a 104 mm-radius tube does not
+  // even clear the tube. Exactly the mistake the capybara's flank tufts recorded
+  // two rounds ago, repeated at three times the scale.
+  //
+  // These are 110–150 mm, thin, and placed on the TOP and OUTBOARD faces, which
+  // are the two edges that are on the outline from directly behind and from the
+  // chase three-quarter. Nothing goes underneath: that edge is inside the seat.
+  const LOCKS: Array<[number, number, number, number, number, number, number]> = [
+    // x, y-offset, z, pitch, yaw, roll, length
+    [0.256, 0.336, 0.130, -46, 16, 20, 0.132],
+    [0.286, 0.352, 0.212, -20, 6, 34, 0.150],
+    [0.252, 0.348, 0.300, 10, -6, 40, 0.138],
+    [0.176, 0.318, 0.386, 34, -14, 44, 0.116],
+    [0.300, 0.284, 0.176, -6, 4, 78, 0.124],
+    [0.302, 0.276, 0.268, 16, -8, 84, 0.112],
+    [0.238, 0.240, 0.354, 40, -12, 88, 0.100],
+  ];
+  for (let i = 0; i < LOCKS.length; i++) {
+    const [x, dy, z, rx, ry, rz, len] = LOCKS[i];
+    b.add('hips', i >= 3 && z > 0.28 ? 'furAlt' : 'fur',
+      earWedge(0.015, len, 0.009, 0.42), {
+        pos: [x, y0 + dy, z], rot: [rx, ry, rz],
+        detail: i % 3 === 2 ? 2 : 0, shade: 0.90 + (i % 2) * 0.06,
+      });
   }
 }
 
@@ -1877,21 +2233,33 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // underneath was never a loaf at all. It is now: 1.26 R across the cheeks
     // against a 0.128 R base radius, wider than it is tall, with the flat top
     // shelf carried by eTop 6.4.
+    // ⚠️ AND IT HAS TO BE LOW. The loaf was right in plan but wrong in
+    // elevation: it ran 1.88 R from jaw to crown against 1.26 R across, i.e.
+    // taller than it was wide, and a tall head with a hat on it is a person.
+    // 1.52 R tall against 1.36 R wide is a capybara — the crown comes down, the
+    // cheeks go out, and the flat top shelf that eTop 6.4 carries is now the
+    // widest part of the head instead of a lid on a dome.
     : [
-      { z: -R * 0.82, y: R * 0.06, hw: R * 0.94, hUp: R * 0.70, hDown: R * 0.86, eSide: 4.8, eTop: 6.0, eBot: 4.6 },
-      { z: -R * 0.26, y: R * 0.04, hw: R * 1.18, hUp: R * 0.90, hDown: R * 1.06, eSide: 5.2, eTop: 6.4, eBot: 4.6 },
-      { z: R * 0.26, y: 0, hw: R * 1.26, hUp: R * 0.88, hDown: R * 1.12, eSide: 5.4, eTop: 6.4, eBot: 4.8 },
-      { z: R * 0.80, y: -R * 0.02, hw: R * 1.14, hUp: R * 0.80, hDown: R * 0.98, eSide: 4.8, eTop: 5.6, eBot: 4.2 },
-      { z: R * 1.06, y: -R * 0.04, hw: R * 0.78, hUp: R * 0.56, hDown: R * 0.66, eSide: 4.0, eTop: 4.2, eBot: 3.6 },
+      { z: -R * 0.72, y: R * 0.06, hw: R * 1.00, hUp: R * 0.70, hDown: R * 0.88, eSide: 4.8, eTop: 6.0, eBot: 4.6 },
+      { z: -R * 0.24, y: R * 0.04, hw: R * 1.26, hUp: R * 0.90, hDown: R * 1.08, eSide: 5.2, eTop: 6.4, eBot: 4.6 },
+      { z: R * 0.20, y: 0, hw: R * 1.36, hUp: R * 0.88, hDown: R * 1.14, eSide: 5.6, eTop: 6.6, eBot: 4.8 },
+      { z: R * 0.62, y: -R * 0.02, hw: R * 1.24, hUp: R * 0.80, hDown: R * 1.00, eSide: 5.2, eTop: 6.2, eBot: 4.2 },
+      { z: R * 0.80, y: -R * 0.04, hw: R * 0.86, hUp: R * 0.56, hDown: R * 0.68, eSide: 4.2, eTop: 4.4, eBot: 3.6 },
     ];
   b.add('head', 'fur', verticalLoft(cranium, 22), { pos: [0, hy, 0], detail: 0 });
 
   // Where the eye band lands. Solved here, before anything else is placed, so
   // the brow tufts and the fox's tear-stripe ridge can be positioned against
   // it instead of against a constant that stops being true when it moves.
-  const eyeW = R * (fox ? 1.56 : 1.66);
-  const eyeH = R * (fox ? 0.74 : 0.62);
-  const eyeY = R * (fox ? 0.40 : 0.52);
+  // TINY, HIGH AND WIDE is the capybara's whole facial read — the eyes, ears and
+  // nostrils sit on one plane near the top of the skull because the animal is
+  // built to float with only that plane above the water. A wider band spreads the
+  // pair further apart and a shallower one sets them into the forehead shelf
+  // rather than under it; `face.eyeSize` shrinks the drawn eye inside the cell,
+  // which is the half of "tiny" that geometry cannot do.
+  const eyeW = R * (fox ? 1.56 : 1.84);
+  const eyeH = R * (fox ? 0.74 : 0.50);
+  const eyeY = R * (fox ? 0.40 : 0.56);
   const eyeZ = loftFrontOver(cranium, eyeY - eyeH * 0.5, eyeY + eyeH * 0.5) + R * 0.09;
 
   // --- snout -------------------------------------------------------------
@@ -1956,10 +2324,13 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       const t = i / 6;
       const sx = (t - 0.5) * 2;
       b.add('head', 'furDark', earWedge(
-        R * 0.062, R * (1.26 - Math.abs(sx) * 0.38), R * 0.040, 0.80,
+        R * 0.058, R * (1.62 - Math.abs(sx) * 0.44), R * 0.038, 0.80,
       ), {
-        pos: [sx * R * 0.74, hy + R * (0.66 - Math.abs(sx) * 0.10), R * (0.62 + Math.abs(sx) * 0.10)],
-        rot: [40 + Math.abs(sx) * 12, sx * 18, sx * 26], detail: i % 2 === 1 ? 1 : 0, shade: 0.86,
+        pos: [sx * R * 0.78, hy + R * (0.50 - Math.abs(sx) * 0.08), R * (0.72 + Math.abs(sx) * 0.10)],
+        // Raked further back (58° rather than 40°) so they exit from UNDER the
+        // flat brim instead of running into it. A bristle that terminates inside
+        // the hat is drawn inside the silhouette and measures exactly nothing.
+        rot: [58 + Math.abs(sx) * 12, sx * 18, sx * 26], detail: i % 2 === 1 ? 1 : 0, shade: 0.86,
       });
     }
   }
@@ -2068,11 +2439,11 @@ function buildAnimalHead(b: RigBucket, d: DriverDef, s: Skeleton): void {
     // top plane — level with the eyes, which is the semi-aquatic giveaway. Set
     // high and forward they read as a bear's; set back and small they read as a
     // capybara's, and they leave the forehead shelf as one unbroken mass.
-    b.pair('head', 'head', 'fur', superShape(R * 0.17, R * 0.18, R * 0.11, 2.6, 2.4, 9, 6), {
-      pos: [R * 1.24, hy + R * 0.40, R * 0.54], rot: [-6, 0, -32], detail: 0,
+    b.pair('head', 'head', 'fur', superShape(R * 0.18, R * 0.19, R * 0.12, 2.6, 2.4, 9, 6), {
+      pos: [R * 1.34, hy + R * 0.44, R * 0.56], rot: [-6, 0, -32], detail: 0,
     });
-    b.pair('head', 'head', 'furDark', disc(R * 0.095, R * 0.028, 0, 9), {
-      pos: [R * 1.28, hy + R * 0.40, R * 0.48], rot: [0, 66, 0], detail: 1, shade: 0.82,
+    b.pair('head', 'head', 'furDark', disc(R * 0.100, R * 0.028, 0, 9), {
+      pos: [R * 1.38, hy + R * 0.44, R * 0.50], rot: [0, 66, 0], detail: 1, shade: 0.82,
     });
   }
 
@@ -2372,6 +2743,65 @@ function buildRearRead(b: RigBucket, d: DriverDef, s: Skeleton): void {
       ], [R * 0.13, R * 0.21, R * 0.18, R * 0.06], 9, 14, 0.14), { detail: 0, shade: 0.94 });
       break;
     }
+    case 'braid': {
+      // A single thick plait over one shoulder and down the back. The LOBES are
+      // the idea: `taperTube` with an oscillating radius array gives a knotted
+      // rope outline rather than a hose, and that reads as hair at distance
+      // where a smooth tube reads as a strap.
+      //
+      // Placement is the clearance map, not taste: behind the shoulders the
+      // midline is blocked out to |x| = 0.17 by the seat back and headrest, so
+      // this hangs at |x| = 0.20 and stays outboard the whole way down.
+      const bx = -(s.shoulderHalf * 1.16 + 0.026);
+      const path = [
+        new THREE.Vector3(-R * 0.70, hy - R * 0.30, R * 0.66),
+        new THREE.Vector3(bx * 0.80, s.shoulderY + 0.052, s.chest * 0.74),
+        new THREE.Vector3(bx, s.shoulderY - 0.056, s.chest * 0.92),
+        new THREE.Vector3(bx * 1.04, s.shoulderY - 0.160, s.chest * 0.96),
+        new THREE.Vector3(bx * 0.96, s.shoulderY - 0.256, s.chest * 0.88),
+      ];
+      b.add('torso', 'furDark', taperTube(
+        path, [0.030, 0.040, 0.034, 0.040, 0.020], 10, 22, 0.16,
+      ), { detail: 0 });
+      // Binding at the tail, and a frayed brush past it.
+      b.add('torso', 'clothAlt', sweepRing(ringProfile(0.026, 0.013, 0.011, 5), 12), {
+        pos: [bx * 0.98, s.shoulderY - 0.238, s.chest * 0.90], rot: [104, 0, 8], detail: 1, shade: 0.80,
+      });
+      for (let i = 0; i < 3; i++) {
+        b.add('torso', 'furDark', earWedge(0.011, 0.046 + (i % 2) * 0.016, 0.007, 0.6), {
+          pos: [bx * 0.96 + (i - 1) * 0.017, s.shoulderY - 0.272, s.chest * 0.88],
+          rot: [162 + i * 7, 0, 8], detail: i === 1 ? 1 : 2, shade: 0.84,
+        });
+      }
+      break;
+    }
+    case 'quillFan': {
+      // A RADIAL fan of stiff quills off the nape — spreading outward and back
+      // in a shallow arc, which is a different topology from the robot's comb
+      // (one line of fins along the midline) and from Pip's two streamers.
+      //
+      // The midline is clear behind the head above y = 0.40 out to z = +0.30, so
+      // the roots sit there; the tips fan past that but they are thin rods, and
+      // the outer pair carry most of the width at |x| >= 0.19.
+      for (let i = 0; i < 7; i++) {
+        const t = i / 6;
+        const sx = (t - 0.5) * 2;
+        const len = R * (1.62 - Math.abs(sx) * 0.46);
+        b.add('head', 'clothAlt', earWedge(R * 0.070, len, R * 0.026, 0.30), {
+          pos: [sx * R * 0.56, hy + R * (0.34 + (1 - Math.abs(sx)) * 0.30), R * 0.78],
+          // 44°, not 74°: at the shallower rake this was a sheet hanging behind
+          // the neck, i.e. Strata's curtain with gaps in it. Up-and-back makes
+          // it a spray that clears the shoulder line entirely.
+          rot: [44 + Math.abs(sx) * 10, sx * 26, sx * 34],
+          detail: i % 2 === 0 ? 0 : 1, shade: 0.88 + (i % 2) * 0.06,
+        });
+      }
+      // Dark socket the fan springs from, so it is attached to something.
+      b.add('head', 'plastic', superShape(R * 0.44, R * 0.20, R * 0.22, 3.6, 3.2, 11, 7), {
+        pos: [0, hy + R * 0.34, R * 0.78], rot: [-16, 0, 0], detail: 1, shade: 0.74,
+      });
+      break;
+    }
     case 'neckCurtain': {
       // Leather neck curtain: the flight cap flares into a skirt over the nape
       // and out onto the shoulders at 1.62 R — wider than any other driver's
@@ -2444,6 +2874,20 @@ function humanSkull(kind: NonNullable<DriverDef['skull']>, R: number): LoftSecti
         { z: R * 0.28, y: 0.000, hw: R * 0.84, hUp: R * 0.88, hDown: R * 0.90, eSide: 3.6, eTop: 3.0, eBot: 3.2 },
         { z: R * 1.00, y: 0.002, hw: R * 0.66, hUp: R * 0.64, hDown: R * 0.68, eSide: 3.0, eTop: 2.8, eBot: 3.0 },
       ];
+    case 'wedge':   // broad temples over a narrow chin — an inverted triangle
+      return [
+        { z: -R * 0.96, y: -0.010, hw: R * 0.40, hUp: R * 0.58, hDown: R * 0.58, eSide: 3.4, eTop: 3.0, eBot: 3.6 },
+        { z: -R * 0.34, y: -0.006, hw: R * 0.74, hUp: R * 0.90, hDown: R * 0.90, eSide: 3.8, eTop: 3.2, eBot: 3.4 },
+        { z: R * 0.30, y: 0.000, hw: R * 1.10, hUp: R * 0.94, hDown: R * 1.00, eSide: 4.4, eTop: 3.6, eBot: 3.6 },
+        { z: R * 0.92, y: 0.002, hw: R * 1.00, hUp: R * 0.80, hDown: R * 0.90, eSide: 4.2, eTop: 3.4, eBot: 3.4 },
+      ];
+    case 'blade':   // very narrow across, deep front-to-back — a knife on edge
+      return [
+        { z: -R * 1.04, y: -0.010, hw: R * 0.40, hUp: R * 0.76, hDown: R * 0.70, eSide: 3.6, eTop: 3.2, eBot: 3.6 },
+        { z: -R * 0.36, y: -0.008, hw: R * 0.58, hUp: R * 1.02, hDown: R * 0.94, eSide: 3.8, eTop: 3.2, eBot: 3.2 },
+        { z: R * 0.30, y: -0.002, hw: R * 0.62, hUp: R * 1.00, hDown: R * 0.98, eSide: 4.0, eTop: 3.2, eBot: 3.2 },
+        { z: R * 1.00, y: 0.002, hw: R * 0.48, hUp: R * 0.72, hDown: R * 0.74, eSide: 3.4, eTop: 3.0, eBot: 3.0 },
+      ];
     case 'long':    // long oval, narrow crown, face projecting well forward
       return [
         { z: -R * 1.04, y: -0.010, hw: R * 0.66, hUp: R * 0.86, hDown: R * 0.66, eSide: 3.0, eTop: 2.8, eBot: 3.2 },
@@ -2476,6 +2920,8 @@ const JAW: Record<NonNullable<DriverDef['skull']>, {
   child:  { w: 0.40, h: 0.22, d: 0.34, y: 0.54, z: 0.30, eSide: 2.5, eTop: 2.3, brow: 0.60, cheek: 0.64 },
   gaunt:  { w: 0.46, h: 0.40, d: 0.42, y: 0.68, z: 0.28, eSide: 3.2, eTop: 2.8, brow: 0.70, cheek: 0.60 },
   long:   { w: 0.58, h: 0.42, d: 0.54, y: 0.66, z: 0.34, eSide: 3.0, eTop: 2.7, brow: 0.76, cheek: 0.66 },
+  wedge:  { w: 0.42, h: 0.30, d: 0.44, y: 0.62, z: 0.30, eSide: 2.6, eTop: 2.4, brow: 0.94, cheek: 0.92 },
+  blade:  { w: 0.38, h: 0.44, d: 0.62, y: 0.66, z: 0.38, eSide: 3.4, eTop: 3.0, brow: 0.58, cheek: 0.52 },
 };
 
 function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
@@ -2587,6 +3033,82 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
   }
 
   // --- headwear --------------------------------------------------------
+  // `hatVariant` REPLACES the `head` case rather than decorating it — see the
+  // field's doc comment for why the two are allowed to disagree.
+  switch (d.hatVariant) {
+    case 'coneStraw': {
+      // A wide, hard, low CONE. The whole point is that it is not curved: eSide
+      // and eTop stay near 2.0 (a true straight-sided cone in section) and the
+      // rim is a single hard circle, so at 40 px the head is a filled triangle
+      // and nothing else on the roster is.
+      const CONE: RigPlace = { pos: [0, hy + R * 0.30, R * 0.12], rot: [-11, 0, -6] };
+      b.add('head', 'clothAlt', verticalLoft([
+        { z: 0.00, y: 0, hw: R * 1.62, hUp: R * 1.58, hDown: R * 1.62, eSide: 2.1, eTop: 2.1, eBot: 2.1 },
+        { z: R * 0.30, y: 0, hw: R * 1.06, hUp: R * 1.03, hDown: R * 1.06, eSide: 2.1, eTop: 2.1, eBot: 2.1 },
+        { z: R * 0.62, y: 0, hw: R * 0.52, hUp: R * 0.50, hDown: R * 0.52, eSide: 2.1, eTop: 2.1, eBot: 2.1 },
+        { z: R * 0.80, y: 0, hw: R * 0.10, hUp: R * 0.10, hDown: R * 0.10, eSide: 2.1, eTop: 2.1, eBot: 2.1 },
+      ], 24), { ...CONE, detail: 0 });
+      // The rim is a real edge with thickness, not a knife: a cone that ends in
+      // zero thickness reads as paper and shades badly under a low key light.
+      b.add('head', 'furAlt', sweepRing(ringProfile(R * 1.60, R * 0.052, R * 0.030, 5), 26), {
+        ...CONE, detail: 0, shade: 0.86,
+      });
+      // Chin cord. Two thin ties from under the rim to a knot at the jaw — this
+      // is what stops a cone reading as a lampshade balanced on a head, and it
+      // adds the only concave notch the outline has from the front.
+      for (const sx of [-1, 1] as const) {
+        b.add('head', 'plastic', limb(
+          _a.set(sx * R * 1.24, hy + R * 0.16, R * 0.20),
+          _b.set(sx * R * 0.30, hy - R * 0.78, -R * 0.34),
+          R * 0.026, R * 0.020, 6, 2, 0,
+        ), { detail: 1, shade: 0.84 });
+      }
+      b.add('head', 'plastic', superShape(R * 0.13, R * 0.10, R * 0.11, 2.6, 2.4, 8, 6), {
+        pos: [0, hy - R * 0.80, -R * 0.36], detail: 1, shade: 0.80,
+      });
+      break;
+    }
+    case 'towerBand': {
+      // A tall, hard-edged SHAKO. Vertical where the cone is horizontal, and
+      // the only headwear on the roster whose height exceeds its width — 1.44 R
+      // tall against 0.86 R across. Flat top, so the outline is a rectangle.
+      const TOW: RigPlace = { pos: [0, hy + R * 0.44, R * 0.06], rot: [-5, 0, 3] };
+      b.add('head', 'paint', verticalLoft([
+        { z: -R * 0.06, y: 0, hw: R * 0.92, hUp: R * 0.90, hDown: R * 0.94, eSide: 4.6, eTop: 4.2, eBot: 4.4 },
+        { z: R * 0.46, y: 0, hw: R * 0.88, hUp: R * 0.86, hDown: R * 0.90, eSide: 5.0, eTop: 4.6, eBot: 4.6 },
+        { z: R * 1.16, y: 0, hw: R * 0.86, hUp: R * 0.84, hDown: R * 0.88, eSide: 5.2, eTop: 4.8, eBot: 4.8 },
+        { z: R * 1.38, y: 0, hw: R * 0.84, hUp: R * 0.82, hDown: R * 0.86, eSide: 6.0, eTop: 5.6, eBot: 5.2 },
+      ], 22), { ...TOW, detail: 0 });
+      // Two hard bands, high and low, so the column has scale on it and does not
+      // read as one extruded tube.
+      for (let i = 0; i < 2; i++) {
+        b.add('head', 'clothAlt', sweepRing(
+          ringProfile(R * (0.90 - i * 0.02), R * 0.058, R * 0.030, 5), 20,
+        ), { ...TOW, pos: [0, hy + R * (0.44 + 0.06 + i * 0.92), R * 0.06], detail: 0, shade: 0.84 });
+      }
+      // Short stiff peak over the brow — a shako has one, and it is what puts
+      // the eyes in shadow instead of leaving them on a bare forehead.
+      b.add('head', 'plastic', extrude([
+        new THREE.Vector2(-R * 0.72, 0), new THREE.Vector2(R * 0.72, 0),
+        new THREE.Vector2(R * 0.50, R * 0.46), new THREE.Vector2(-R * 0.50, R * 0.46),
+      ], R * 0.070, R * 0.026), {
+        pos: [0, hy + R * 0.42, -R * 0.80], rot: [76, 0, 0], detail: 0, shade: 0.72,
+      });
+      // Boss and side rosette. Asymmetric on purpose: the rosette is on one side
+      // only, which is the same trick as Foxy's tilted beret.
+      b.add('head', 'chrome', disc(R * 0.17, R * 0.05, 0, 12), {
+        pos: [0, hy + R * 1.10, -R * 0.90], rot: [0, 0, 0], detail: 1,
+      });
+      b.add('head', 'clothAlt', superShape(R * 0.16, R * 0.16, R * 0.09, 2.6, 2.4, 10, 6), {
+        pos: [R * 0.86, hy + R * 1.34, R * 0.10], rot: [0, 0, -22], detail: 1, shade: 0.92,
+      });
+      break;
+    }
+  }
+  if (d.hatVariant !== undefined) {
+    buildRearRead(b, d, s);
+    return new THREE.Vector3(0, hy + R * (d.hatVariant === 'towerBand' ? 2.05 : 1.55), 0);
+  }
   switch (d.head) {
     case 'cap': {
       // Backwards baseball cap + goggles pushed up on the forehead.
@@ -3040,39 +3562,69 @@ function buildHead(b: RigBucket, d: DriverDef, s: Skeleton): THREE.Vector3 {
       break;
     }
     case 'bucketHat': {
-      // Rust bucket hat: soft crown, darker band, floppy asymmetric brim. The
-      // brim is the "one idea" — a wide soft disc is the exact opposite read to
-      // the fox's two hard triangles, which is what keeps the pair distinct.
-      b.add('head', 'clothAlt', verticalLoft([
-        { z: -R * 0.06, y: 0, hw: R * 1.00, hUp: R * 0.98, hDown: R * 1.04, eSide: 4.0, eTop: 3.8, eBot: 4.2 },
-        { z: R * 0.28, y: 0, hw: R * 1.02, hUp: R * 1.00, hDown: R * 1.04, eSide: 4.2, eTop: 4.0, eBot: 4.0 },
-        { z: R * 0.52, y: -R * 0.01, hw: R * 0.92, hUp: R * 0.90, hDown: R * 0.94, eSide: 3.8, eTop: 3.6, eBot: 3.6 },
-        { z: R * 0.64, y: -R * 0.01, hw: R * 0.60, hUp: R * 0.58, hDown: R * 0.62, eSide: 3.2, eTop: 3.0, eBot: 3.0 },
-      ], 22), { pos: [0, hy + R * 0.62, R * 0.26], rot: [-15, 0, 7], detail: 0 });
-      // Darker grosgrain band round the base of the crown.
-      b.add('head', 'furDark', sweepRing(ringProfile(R * 1.03, R * 0.052, R * 0.075, 6), 18), {
-        pos: [0, hy + R * 0.64, R * 0.26], rot: [-15, 0, 7], detail: 0, shade: 0.82,
-      });
-      // Floppy brim. The warp is what makes it floppy: it dips front and back,
-      // lifts at the sides, and its outline is not a circle.
-      // ⚠️ THE HAT WAS EATING THE CHARACTER. At a 1.62 R brim the headgear
-      // measured 0.490 m across against a 0.287 m skull — 1.7x the animal it sits
-      // on — and on the racer-select card Capy came out as the roster's flattest
-      // silhouette (shape complexity 4.23 against a p50 of 4.83) and read, in the
-      // owner's words, as a featureless beige mass. A capybara's read is its HEAD:
-      // the flat forehead shelf, the blunt block muzzle, the tiny ears set far
-      // back. An accessory that hides all three is worth less than nothing.
+      // FLAT STRAW HAT, WORN PUSHED BACK. A boater crown two centimetres tall
+      // and a hard, near-planar brim.
       //
-      // So the brim comes in to 1.14 R — still unmistakably a floppy bucket hat,
-      // but now narrower than the head is long, which lets the muzzle and the ears
-      // sit OUTSIDE the hat outline. That is also what puts concavity in the card
-      // silhouette: head, then a notch, then ear.
+      // ⚠️ THE SOFT DOME WAS COSTING THE PAIR THEY WERE MEANT TO SEPARATE. It
+      // was written as "a wide soft disc, the exact opposite read to the fox's
+      // two hard triangles", but a domed crown under a drooping brim is another
+      // ROUND MASS ON TOP OF A ROUND HEAD, and Foxy's beret is one too — measured
+      // on the racer-select card, fox ~ capy was the worst pair on the roster at
+      // 0.768 IoU, and it is the one pair the owner has now named four times.
+      //
+      // The fix is to stop competing on the same axis. Everything above Capy's
+      // brow is now a HORIZONTAL LINE — flat skull shelf, flat band, flat brim —
+      // against a mascot whose head is nothing but verticals. It also finally
+      // agrees with the animal: a capybara's profile is a straight top edge from
+      // nose to nape, and the hat should be reinforcing that, not hiding it.
+      //
+      // Tilted back 22° so the whole brim clears the brow: the note two rounds
+      // ago was that a hat perched above the eyes is worth more than an
+      // anatomically perfect one you cannot see under, and that still holds.
+      const HAT: RigPlace = { pos: [0, hy + R * 0.60, R * 0.30], rot: [-22, 0, 6] };
+      b.add('head', 'clothAlt', verticalLoft([
+        { z: -R * 0.04, y: 0, hw: R * 0.98, hUp: R * 0.94, hDown: R * 1.02, eSide: 5.0, eTop: 4.8, eBot: 5.0 },
+        { z: R * 0.18, y: 0, hw: R * 0.99, hUp: R * 0.95, hDown: R * 1.02, eSide: 5.4, eTop: 5.2, eBot: 5.2 },
+        { z: R * 0.30, y: 0, hw: R * 0.96, hUp: R * 0.92, hDown: R * 0.99, eSide: 6.0, eTop: 5.8, eBot: 5.6 },
+        { z: R * 0.34, y: 0, hw: R * 0.86, hUp: R * 0.82, hDown: R * 0.88, eSide: 5.6, eTop: 5.4, eBot: 5.2 },
+      ], 22), { ...HAT, detail: 0 });
+      // Grosgrain band round the base of the crown — a hard dark horizontal
+      // stripe, which is the second parallel line in the stack.
+      b.add('head', 'furDark', sweepRing(ringProfile(R * 1.01, R * 0.062, R * 0.070, 6), 18), {
+        ...HAT, pos: [0, hy + R * 0.64, R * 0.30], detail: 0, shade: 0.80,
+      });
+      // The brim. Flat, not floppy — `dy` carries only a 1.5 % sag so it is not
+      // mathematically perfect, where the old one wobbled by 14 % of R.
+      //
+      // The `dr` term is a FRAY, not a droop: straw hats wear out at the edge, and
+      // a notched rim is the only concavity available on a shape that is otherwise
+      // a disc. That matters numerically — Capy's card silhouette was the flattest
+      // on the roster at 4.02 shape complexity against a p50 of 5.21, and the brim
+      // is most of the card's outline, so this is where the boundary has to come
+      // from. Three incommensurate harmonics so the notch pattern never repeats
+      // around the rim and cannot read as a scalloped decoration.
       b.add('head', 'clothAlt', sweepRing(
-        brimProfile(R * 0.94, R * 1.34, R * 0.060, R * 0.19), 26, (th) => ({
-          dr: Math.sin(th * 2 + 0.7) * R * 0.120 + Math.sin(th * 3 - 1.1) * R * 0.075,
-          dy: -R * 0.085 * (0.5 - 0.5 * Math.cos(th * 2)) + Math.sin(th * 3) * R * 0.055,
+        brimProfile(R * 0.94, R * 1.40, R * 0.042, R * 0.07), 34, (th) => ({
+          dr: Math.sin(th * 5 + 0.4) * R * 0.098 + Math.sin(th * 8 - 1.3) * R * 0.062
+            + Math.sin(th * 13 + 2.1) * R * 0.038,
+          dy: Math.sin(th * 2 + 0.9) * R * 0.018,
         }),
-      ), { pos: [0, hy + R * 0.62, R * 0.30], rot: [-19, 0, 8], detail: 0, shade: 0.94 });
+      ), { ...HAT, detail: 0, shade: 0.94 });
+      // Straw wisps standing off the crown and the rim, because a worn hat is
+      // not a moulded object. Thin and long: the only kind of protrusion that
+      // moves perimeter/sqrt(area) at card size.
+      const WISP: Array<[number, number, number, number, number, number]> = [
+        [R * 0.30, R * 0.92, R * 0.44, -64, 0, 18],
+        [-R * 0.34, R * 0.88, R * 0.54, -74, 0, -18],
+        [R * 1.16, R * 0.62, R * 0.86, -12, 24, 62],
+        [-R * 1.22, R * 0.58, R * 0.70, -4, -20, -70],
+      ];
+      for (let i = 0; i < WISP.length; i++) {
+        const [x, dy, z, rx, ry, rz] = WISP[i];
+        b.add('head', 'clothAlt', earWedge(R * 0.042, R * (0.42 + (i % 2) * 0.18), R * 0.022, 0.7), {
+          pos: [x, hy + dy, z], rot: [rx, ry, rz], detail: i % 2 === 0 ? 0 : 1, shade: 0.88,
+        });
+      }
       break;
     }
   }

@@ -186,6 +186,27 @@ export const CHARACTER_STATS: Record<string, KartStats> = {
   strata: { speed: 0.86, acceleration: 0.4, weight: 0.7, handling: 0.4, traction: 0.86, miniTurbo: 0.4 },
   /** Light all-rounder — the "good at everything, master of none" pick. */
   zephyr: { speed: 0.6, acceleration: 0.76, weight: 0.25, handling: 0.8, traction: 0.45, miniTurbo: 0.76 },
+  /**
+   * The heavyweight drifter. Heavy and agile at once, paying in grip.
+   *
+   * Distinct from every other kart over 0.7 weight, all of which are
+   * straight-line cars: `blitz` 0.28 handling, `capy` 0.30, `torque` 0.34,
+   * `strata` 0.40. `skid` runs 0.82 handling at 0.84 weight and buys it with
+   * 0.22 traction — the roster floor, against a previous worst of 0.40 — then
+   * spends the slide through a 0.98 miniTurbo, the roster ceiling.
+   */
+  skid: { speed: 0.52, acceleration: 0.44, weight: 0.84, handling: 0.82, traction: 0.22, miniTurbo: 0.98 },
+  /**
+   * The line racer. The only kart with handling and traction both above 0.86,
+   * and the only one with high handling and NO drift payoff.
+   *
+   * Every other high-handling kart is also a drift kart — `vex` 1.0/0.88,
+   * `pip` 0.86/0.92, `zephyr` 0.80/0.76, `foxy` 0.72/0.84 — so cornering and
+   * mini-turbo have never been separable on this grid. `quill` separates them:
+   * 0.12 miniTurbo is half the previous floor (`torque` 0.24), so the reward
+   * for a slide is nil and the reward for the geometric line is everything.
+   */
+  quill: { speed: 0.34, acceleration: 0.62, weight: 0.58, handling: 0.92, traction: 0.9, miniTurbo: 0.12 },
 };
 
 export const TUNINGS: Record<string, KartTuning> = Object.fromEntries(
