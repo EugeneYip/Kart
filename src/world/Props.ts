@@ -6055,7 +6055,32 @@ export class Props implements ISubsystem {
 
       case 'balloonarch': {
         const b = this.builder();
-        const R = 11, palette = [0xff4d4d, 0xffd23f, 0x4db8ff, 0x5ddc7a, 0xc06bff];
+        // ---- `R = 11` WAS A CONSTANT STANDING IN FOR A VARIABLE --------------
+        // The scattered sibling at `buildCommon`'s balloon run already fixed this
+        // exact error and its comment names the class. This authored producer did
+        // not get the fix, so it kept an 11 m radius on roads whose half-width is
+        // 12.5 m — an arch NARROWER THAN THE CARRIAGEWAY. Its two anchor boxes
+        // stood 1.5 m inside the tarmac and the low balloons hung 2.9 m up and
+        // 2.51-2.54 m inside the drivable edge, on SIX of the eight circuits
+        // (`.probe-tmp/propfoot.ts`, ultra, real triangles, not bounding boxes).
+        // `balloonarch` is in `CORRIDOR_PROPS`, so no clearance guard would ever
+        // have caught it — a corridor prop is trusted to know its own width.
+        //
+        // One geometry serves every instance of a type, so it takes the WIDEST
+        // site it will stand on, exactly as the sibling does. `deckFrameAt()`
+        // gives the authored half-width at each placement's own arc.
+        const sites = this.authored.get('balloonarch') ?? [];
+        let widest = 0;
+        for (const a of sites) widest = Math.max(widest, this.deckFrameAt(a.arc, _deck).hw);
+        // No authored placement (the type can still be emitted by a theme) — fall
+        // back to the widest station on the circuit rather than to a constant.
+        if (widest <= 0) {
+          for (const st of this.ctx.stations) widest = Math.max(widest, st.halfWidth);
+        }
+        // + kerb + the same 3.5 m of verge the sibling uses, so the feet land
+        // outboard of the shoulder rather than on the kerb line.
+        const R = Math.max(11, widest + CROSS.kerbW + 3.5);
+        const palette = [0xff4d4d, 0xffd23f, 0x4db8ff, 0x5ddc7a, 0xc06bff];
         // Balloons threaded on an arc, alternating size so the arc reads as
         // hand-tied rather than extruded.
         for (let i = 0; i <= 22; i++) {
