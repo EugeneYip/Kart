@@ -1,0 +1,172 @@
+
+DRIVING-ENVELOPE ENUMERATION   tier ultra   band = surface+0.05 m .. 3.00 m
+ground truth: the DRAWN ribbon (nearest deck below each vertex); depth bisected off the mesh
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 171.1 ms
+[Foliage] road-edge clearance: palm0 reach 3.7 m: moved 3, dropped 6 of 122; palm1 reach 3.4 m: moved 2, dropped 2 of 121; tree1 reach 5.8 m: moved 3, dropped 3 of 50; tree2 reach 3.9 m: moved 5, dropped 2 of 49; Bush reach 1.3 m: moved 5, dropped 2 of 608; Fern reach 0.4 m: moved 1, dropped 2 of 496; Flowers reach 0.2 m: moved 1, dropped 0 of 550
+[Props] re-seated 79 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.79 m (buoy); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 8 seated on the water plane
+[Props] road-volume guard: 3 authored props pushed clear, 18 instances dropped from 35 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 106 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 62 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== sunsetCoastline ===   ribbon 47336 triangles
+  (nothing in the envelope)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 143.9 ms
+[Foliage] road-edge clearance: tree0 reach 2.9 m: moved 1, dropped 0 of 103; tree1 reach 3.2 m: moved 0, dropped 1 of 103; tree2 reach 4.7 m: moved 1, dropped 0 of 102
+[Props] re-seated 85 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 0.62 m (alleyBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 14 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 6 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 64 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== neonMetropolis ===   ribbon 47872 triangles
+  Prop:balloonArch#1
+      14 verts in band of 2010 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.347 m  (highest in band 2.997 m)
+      that lowest point: local (10.96, 3.21, 0.00)  deck y 10.78  0.01 m inside the carriageway  (brute force 0.26 m)
+      deepest inside the DRAWN carriageway 0.938 m in plan at 2.952 m up   @arc 1253  [centreline says lat -10.51 of halfW 11.00 => 0.49]
+      brute-force nearest drawn asphalt vertex in plan: 0.82 m
+      local frame: x 10.19..10.94  y 3.24..3.77  z -0.30..0.30
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 153.2 ms
+[Foliage] road-edge clearance: deadtree1 reach 1.2 m: moved 1, dropped 0 of 117; Bush reach 1.0 m: moved 2, dropped 0 of 190; ScorchedScrub reach 0.7 m: moved 4, dropped 2 of 520
+[Props] re-seated 58 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 55.93 m (lavaRock); 3 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 42 instances dropped from 129 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 195 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 62 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+[Props] carriageway guard: 1 props walked off the drivable road (worst move 11.86 m) [obsidian x1]; 0 DROPPED because they were still on it
+=== volcanoRush ===   ribbon 59328 triangles
+  Prop:balloonArch#1
+      12 verts in band of 2015 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.373 m  (highest in band 2.999 m)
+      that lowest point: local (11.46, 3.22, -0.04)  deck y 0.85  0.07 m inside the carriageway  (brute force 0.29 m)
+      deepest inside the DRAWN carriageway 0.500 m in plan at 2.940 m up   @arc 1507  [centreline says lat -11.33 of halfW 11.50 => 0.17]
+      brute-force nearest drawn asphalt vertex in plan: 0.53 m
+      local frame: x 11.05..11.46  y 3.22..3.76  z -0.30..0.30
+  Prop:authored:tunnelportal#1
+      15 verts in band of 1518 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.286 m  (highest in band 2.998 m)
+      that lowest point: local (9.52, 4.03, 4.05)  deck y 4.75  0.24 m inside the carriageway  (brute force 0.22 m)
+      deepest inside the DRAWN carriageway 0.473 m in plan at 2.346 m up   @arc 1305  [centreline says lat 10.22 of halfW 10.00 => -0.22]
+      brute-force nearest drawn asphalt vertex in plan: 0.34 m
+      local frame: x 9.52..9.52  y 3.76..4.27  z 1.35..7.65
+  Prop:authored:tunnelportal:glow#1
+      12 verts in band of 432 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.415 m  (highest in band 2.768 m)
+      that lowest point: local (9.71, 4.42, 0.55)  deck y 5.01  0.21 m inside the carriageway  (brute force 0.14 m)
+      deepest inside the DRAWN carriageway 0.208 m in plan at 2.415 m up   @arc 1305  [centreline says lat 10.44 of halfW 10.00 => -0.44]
+      brute-force nearest drawn asphalt vertex in plan: 0.14 m
+      local frame: x 9.71..9.71  y 4.42..4.74  z 0.55..1.15
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 98.8 ms
+[Foliage] road-edge clearance: tree0 reach 3.8 m: moved 0, dropped 1 of 103; Bush reach 1.2 m: moved 2, dropped 0 of 684
+[Props] re-seated 119 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 7.89 m (towerBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 6 authored props pushed clear, 46 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 6 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 73 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== bostonHarbor ===   ribbon 49714 triangles
+  Prop:balloonArch#0
+      37 verts in band of 2063 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.322 m  (highest in band 2.999 m)
+      that lowest point: local (11.59, 3.25, -0.05)  deck y 1.91  0.03 m inside the carriageway  (brute force 0.57 m)
+      deepest inside the DRAWN carriageway 0.482 m in plan at 2.894 m up   @arc 712  [centreline says lat -11.50 of halfW 11.54 => 0.04]
+      brute-force nearest drawn asphalt vertex in plan: 0.71 m
+      local frame: x 11.17..11.60  y 3.25..3.79  z -0.36..0.42
+  Prop:authored:tunnelportal#1
+      18 verts in band of 1656 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.527 m  (highest in band 2.997 m)
+      that lowest point: local (-10.24, 3.76, 7.65)  deck y 2.23  0.25 m inside the carriageway  (brute force 0.21 m)
+      deepest inside the DRAWN carriageway 1.236 m in plan at 2.866 m up   @arc 652  [centreline says lat -10.09 of halfW 10.92 => 0.83]
+      brute-force nearest drawn asphalt vertex in plan: 1.25 m
+      local frame: x -9.52..-9.52  y 3.76..4.27  z 1.35..8.75
+  Prop:authored:tunnelportal:glow#1
+      12 verts in band of 444 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.815 m  (highest in band 2.995 m)
+      that lowest point: local (-10.75, 4.42, 0.55)  deck y 2.61  0.06 m inside the carriageway  (brute force 0.35 m)
+      deepest inside the DRAWN carriageway 1.242 m in plan at 2.982 m up   @arc 653  [centreline says lat -10.30 of halfW 10.94 => 0.64]
+      brute-force nearest drawn asphalt vertex in plan: 1.13 m
+      local frame: x -10.75..-9.71  y 4.42..4.42  z 0.55..1.15
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 71.9 ms
+[Foliage] road-edge clearance: Bush reach 1.2 m: moved 2, dropped 1 of 684
+[Props] re-seated 140 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.22 m (pine); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] kerb clearance: 87 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== taipeiCircuit ===   ribbon 47480 triangles
+  Prop:balloonArch#0
+      37 verts in band of 2098 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.607 m  (highest in band 2.999 m)
+      that lowest point: local (-11.90, 3.28, 0.00)  deck y 4.87  0.21 m inside the carriageway  (brute force 0.25 m)
+      deepest inside the DRAWN carriageway 0.694 m in plan at 2.955 m up   @arc 713  [centreline says lat 11.69 of halfW 12.00 => 0.31]
+      brute-force nearest drawn asphalt vertex in plan: 0.59 m
+      local frame: x -11.90..-11.45  y 3.28..3.61  z -0.41..0.41
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 101.5 ms
+[Foliage] road-edge clearance: tree2 reach 3.6 m: moved 1, dropped 1 of 102; Flowers reach 0.2 m: moved 0, dropped 1 of 495
+[Props] re-seated 113 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.44 m (torii); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 34 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 9 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 73 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== tokyoNeon ===   ribbon 48802 triangles
+  Prop:balloonArch#0
+      43 verts in band of 1996 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.339 m  (highest in band 3.000 m)
+      that lowest point: local (10.47, 3.16, 0.00)  deck y 9.65  0.00 m inside the carriageway  (brute force 0.72 m)
+      deepest inside the DRAWN carriageway 0.871 m in plan at 2.995 m up   @arc 678  [centreline says lat -9.95 of halfW 10.50 => 0.55]
+      brute-force nearest drawn asphalt vertex in plan: 1.11 m
+      local frame: x 9.62..10.45  y 3.30..3.77  z -0.30..0.30
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 57.9 ms
+[Props] re-seated 236 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 5.68 m (pine); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] footprint bedding: 19 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 87 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== hongKongHarbour ===   ribbon 47192 triangles
+  Prop:balloonArch#1
+      12 verts in band of 2006 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.423 m  (highest in band 2.997 m)
+      that lowest point: local (-10.80, 3.14, -0.07)  deck y 9.29  0.06 m inside the carriageway  (brute force 0.26 m)
+      deepest inside the DRAWN carriageway 0.486 m in plan at 2.920 m up   @arc 1151  [centreline says lat 10.78 of halfW 10.78 => 0.01]
+      brute-force nearest drawn asphalt vertex in plan: 0.38 m
+      local frame: x -10.79..-10.49  y 3.15..3.61  z -0.33..0.33
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 89.9 ms
+[Foliage] road-edge clearance: tree0 reach 2.7 m: moved 1, dropped 0 of 103; tree2 reach 6.0 m: moved 1, dropped 2 of 102
+[Props] re-seated 206 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 2.14 m (parkTree); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 1 authored props pushed clear, 13 instances dropped from 43 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 4 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 60 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== newYorkCircuit ===   ribbon 49088 triangles
+  Prop:balloonArch#1
+      23 verts in band of 2010 over asphalt;  LOWEST point of this instance anywhere over the tarmac 2.335 m  (highest in band 2.999 m)
+      that lowest point: local (10.96, 3.21, 0.00)  deck y 4.03  0.01 m inside the carriageway  (brute force 0.40 m)
+      deepest inside the DRAWN carriageway 0.971 m in plan at 2.942 m up   @arc 1134  [centreline says lat -10.50 of halfW 11.00 => 0.50]
+      brute-force nearest drawn asphalt vertex in plan: 0.88 m
+      local frame: x 10.19..10.94  y 3.24..3.82  z -0.30..0.30
+
+---- TABLE ----
+circuit           prop                       inst  band  lowest  deepest  arc
+neonMetropolis    balloonArch                   1    14    2.35     0.94  1253
+volcanoRush       balloonArch                   1    12    2.37     0.50  1507
+volcanoRush       authored:tunnelportal         1    15    2.29     0.47  1305
+volcanoRush       authored:tunnelportal:glow    1    12    2.42     0.21  1305
+bostonHarbor      balloonArch                   0    37    2.32     0.48   712
+bostonHarbor      authored:tunnelportal         1    18    2.53     1.24   652
+bostonHarbor      authored:tunnelportal:glow    1    12    2.81     1.24   653
+taipeiCircuit     balloonArch                   0    37    2.61     0.69   713
+tokyoNeon         balloonArch                   0    43    2.34     0.87   678
+hongKongHarbour   balloonArch                   1    12    2.42     0.49  1151
+newYorkCircuit    balloonArch                   1    23    2.34     0.97  1134
+
+11 intrusion(s) over 8 circuit(s)
+worst clearance by prop type:
+  authored:tunnelportal              2.286 m   (volcanoRush#1)
+  balloonArch                        2.322 m   (bostonHarbor#0)
+  authored:tunnelportal:glow         2.415 m   (volcanoRush#1)
+
+RED CHECKS
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 104.6 ms
+     (calibrating on sunsetCoastline arc 0: halfWidth 12.50, bank 0.0000, curvature 0.00022)
+        inset 0.25 m  ->  measured 0.250 m  (err 0.000)
+        inset 0.50 m  ->  measured 0.500 m  (err 0.000)
+        inset 1.00 m  ->  measured 1.000 m  (err 0.000)
+        inset 2.00 m  ->  measured 2.001 m  (err 0.001)
+        inset 4.00 m  ->  measured 4.002 m  (err 0.002)
+        inset 8.00 m  ->  measured 8.004 m  (err 0.004)
+  PASS  the depth bisection recovers a known inset         worst error 0.004 m at inset 8.00
+  PASS  ...and refuses a point 2 m off the asphalt         declined
+  PASS  a point 0.50 m over the centreline reads back      0.50 m, verdict OnRoad
+  PASS  a point 1.40 m over the centreline reads back      1.40 m, verdict OnRoad
+  PASS  a point 2.95 m over the centreline reads back      2.95 m, verdict OnRoad
+  PASS  ...and one above the ceiling is scenery            verdict Clear at 3.20 m
+  PASS  brute force separates on-road from 40 m out        centreline 0.00 m, 40 m out 40.00 m
+
+PASS: 0 failed
