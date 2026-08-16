@@ -9828,11 +9828,12 @@ export class Props implements ISubsystem {
       // plumbed the station never had one, so it read `SH_FALLBACK` (3 m)
       // against an authored 1.2 m and put the whole edge girder 1.8 m too far
       // out — measured against the DRAWN ribbon (`.probe-tmp/shoulderfix.ts`
-      // claim C, `bostonHarbor`): all 42 girder post feet with NO drawn road
-      // beneath them, worst 1.50 m outboard of the deck edge and 2.06 m of air
-      // under the foot. Afterwards: 0 of 32 anchor bands off the deck, worst
-      // 0.34 m INBOARD of the edge and 0.03 m of embedment. That is the owner's
-      // twice-reported floating cables, and nothing in this function changed.
+      // claim C, `bostonHarbor`, same probe both ways): 32 of 32 girder anchor
+      // bands with NO drawn road beneath the foot, worst 1.41 m outboard of the
+      // deck edge and 0.59 m of air under it. Afterwards: 0 of 32 off the deck,
+      // worst 0.34 m INBOARD of the edge and 0.03 m of embedment. That is the
+      // owner's twice-reported floating cables, and nothing in this function
+      // changed — the number it was reading did.
       const sh = side < 0 ? frame.shL : frame.shR;
       const edge = frame.hw + CROSS.kerbW + sh;
       const lat = side * (edge - inset);

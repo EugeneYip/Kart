@@ -1014,15 +1014,17 @@ function stationFrom(
   // both took their `SH_FALLBACK` of 3 m at every station on every circuit,
   // against authored widths of 0-24 m.
   //
-  // Measured before the change, against the DRAWN ribbon triangles
-  // (`.probe-tmp/shoulderfix.ts`, claim B): the assumed corridor missed the
-  // drawn one by a mean of 1.20-3.80 m on the eight circuits, worst 19.45 m on
-  // volcano's 24 m shoulder nodes. The visible consequence was Boston's stay
-  // fan (claim C): all 42 girder post feet stood with no drawn road beneath
-  // them at all, 1.50 m outboard of the deck edge and 2.06 m above its surface.
-  // That is the owner's "suspension cables still appear to be floating",
-  // reported twice, arriving through the one term in the solve that was never
-  // solved.
+  // Measured against the DRAWN ribbon triangles with these two lines removed
+  // and restored (`.probe-tmp/shoulderfix.ts`, claim B): the assumed corridor
+  // missed the drawn one by a mean of 1.37 m on Boston and 1.18 m on New York,
+  // 3.90 m on volcano with a worst of 21.01 m at its 24 m shoulder nodes;
+  // afterwards 0.032-0.101 m mean on all eight. The visible consequence was
+  // Boston's stay fan (claim C): all 32 girder anchor bands stood with NO drawn
+  // road beneath the foot at all, 1.41 m outboard of the deck edge and 0.59 m
+  // above its surface. Afterwards 0 of 32, 0.34 m INBOARD of the edge and 0.03 m
+  // embedded in it. That is the owner's "suspension cables still appear to be
+  // floating", reported twice, arriving through the one term in the solve that
+  // was never solved.
   //
   // Left OPTIONAL, and left `undefined` rather than defaulted when the producer
   // is silent: `demoCircuit()` below publishes no shoulders and must keep

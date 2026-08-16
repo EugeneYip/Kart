@@ -126,11 +126,12 @@ export interface PathStation {
    * has no shoulders to publish, and "unknown" has to keep meaning
    * `SH_FALLBACK` rather than 0.
    *
-   * WHAT THE ABSENCE COST, measured against the DRAWN ribbon before it was
-   * fixed (`.probe-tmp/shoulderfix.ts`): the corridor every consumer assumed was
-   * out by a mean of 1.20-3.80 m per circuit and by 19.45 m at volcano's 24 m
-   * nodes, and Boston's 48 bridge stays hung off a girder standing 1.50 m
-   * outboard of the deck and 2.06 m above it.
+   * WHAT THE ABSENCE COST, measured against the DRAWN ribbon with the publish
+   * removed and restored (`.probe-tmp/shoulderfix.ts`): the corridor every
+   * consumer assumed was out by a mean of 1.18-3.90 m per circuit and by
+   * 21.01 m at volcano's 24 m nodes, and Boston's 48 bridge stays hung off a
+   * girder whose every anchor band had no drawn road under it — 1.41 m outboard
+   * of the deck edge, 0.59 m above its surface.
    */
   shoulderL?: number;
   shoulderR?: number;

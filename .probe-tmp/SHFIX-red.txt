@@ -64,3 +64,36 @@ SHOULDER PLUMBING — yardstick: trackCollision HULL (deliberately wrong)
 ###   R4 above moves only the published bake and D reads +0.05 m, under its
 ###   0.20 m slack, so D alone would not catch a 4 m shoulder error.
 ###   Claim B is the absolute corridor guard and caught R4 at 3.974 m mean.
+
+### R5. THE DEFECT ITSELF, under the FINAL probe: stationFrom publishes
+###     nothing, so every station falls back to SH_FALLBACK. Apples-to-apples
+###     with SHFIX-final.txt — same probe, same bands, same yardstick.
+SHOULDER PLUMBING — yardstick: the DRAWN ribbon
+
+--- bostonHarbor  (lap 1631 m, 233 stations)
+  PASS  the yardstick has triangles in it              49714 triangles, 32139 vertices
+  *** FAIL  A. every station publishes a shoulder          0/233 published; authored range 1.20..7.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          204 arcs, mean |Δ| 1.369 m, worst 4.04 m @arc 720 (assumed ±16.51/16.51 vs drawn -18.55..20.55)
+  PASS  C. girder anchors found in the built geometry  32 anchor bands of 8 m from 5312 deck-level vertices (5792 total), 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    32/32 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +1.41 m past the edge (arc 892 lat 15.26 vs drawn edge 13.85); widest deck-level vertex lat -15.72 (arc 874)
+  *** FAIL  C. no anchor above the drawn surface           worst +0.59 m of air (arc 998 lat -13.01); deepest embedment -0.30 m
+  PASS  D. terrain no more proud of the road than before worst +0.40 m (arc 992 lat -12.66) vs +0.40 m on a SH_FALLBACK bake [+0.00 m]; mean |Δ| 0.173 vs 0.173 m, 6346 samples
+  PASS  D. no more drawn road over a void than before  worst 0.53 m (arc 1208 lat -11.25) vs 0.53 m on a SH_FALLBACK bake [+0.00 m]
+  ----  E. heightfield vs a SH_FALLBACK bake        0/62001 texels moved >0.1 m (0.00 %), rms 0.000 m, worst +0.00 m at (-398, -671)
+
+--- newYorkCircuit  (lap 1583 m, 226 stations)
+  PASS  the yardstick has triangles in it              49088 triangles, 31680 vertices
+  *** FAIL  A. every station publishes a shoulder          0/226 published; authored range 1.20..5.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          198 arcs, mean |Δ| 1.183 m, worst 2.08 m @arc 552 (assumed ±15.47/15.47 vs drawn -17.54..17.55)
+  PASS  C. girder anchors found in the built geometry  54 anchor bands of 8 m from 5104 deck-level vertices (6688 total), 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    54/54 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +1.14 m past the edge (arc 893 lat 14.99 vs drawn edge 13.86); widest deck-level vertex lat -15.20 (arc 809)
+  *** FAIL  C. no anchor above the drawn surface           worst +0.29 m of air (arc 942 lat -14.37); deepest embedment -0.21 m
+  PASS  D. terrain no more proud of the road than before worst +0.50 m (arc 776 lat -13.39) vs +0.50 m on a SH_FALLBACK bake [+0.00 m]; mean |Δ| 0.175 vs 0.175 m, 6940 samples
+  PASS  D. no more drawn road over a void than before  worst 0.51 m (arc 776 lat 10.53) vs 0.51 m on a SH_FALLBACK bake [+0.00 m]
+  ----  E. heightfield vs a SH_FALLBACK bake        0/62001 texels moved >0.1 m (0.00 %), rms 0.000 m, worst +0.00 m at (-429, -644)
+
+*** 12 assertion(s) FAILED

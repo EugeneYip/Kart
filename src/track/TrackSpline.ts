@@ -136,10 +136,13 @@ export interface SplineNode {
  * Every consumer outside `src/track` that needed them therefore had to guess.
  * `WorldTextures.PathStation` documents a `SH_FALLBACK` of 3 m for exactly that
  * reason, and until this interface existed *every* station on *every* circuit
- * took it — which put Boston's bridge girder, and with it 48 stay cables, 1.5 m
- * outboard of the deck it is supposed to stand on and 2.1 m above its surface
- * (`.probe-tmp/shoulderfix.ts`, claim C). Publishing the numbers costs two
- * cubic evaluations on a parameter `sampleAtDistance` has already solved for.
+ * took it — which left Boston's bridge girder, and with it 48 stay cables,
+ * standing on nothing: all 32 of its anchor bands had NO drawn road beneath the
+ * foot at all, 1.41 m outboard of the deck edge and 0.59 m above its surface
+ * (`.probe-tmp/shoulderfix.ts`, claim C, measured both ways with the same
+ * probe). Publishing the numbers costs two cubic evaluations on a parameter
+ * `sampleAtDistance` has already solved for — and `scalars4` makes the whole
+ * sample cheaper than it was without them.
  *
  * Structurally a superset of `TrackSample`, so anything typed against the
  * contract keeps working unchanged and nothing in `core` had to move.
