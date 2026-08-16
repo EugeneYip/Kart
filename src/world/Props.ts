@@ -6339,17 +6339,67 @@ export class Props implements ISubsystem {
           glow.box(-Math.cos(a) * (R - 0.55), Y0 + Math.sin(a) * (H - 0.55), 0.85,
             0.52, 0.16, 0.3, 0xffb066);
         }
+        /**
+         *  HOW FAR A RIGID PROP MAY REACH DOWN A CURVING BORE — and why the
+         *  deep half of this run had to move to the ceiling.
+         *
+         *  This prop is built in a STRAIGHT local frame and instanced with a
+         *  single yaw, so its local +Z is a straight line while the bore it
+         *  runs into is not. `bridgeFan` below already carries the lesson in
+         *  its own comment: "a straight one at a fixed |x| departs from the
+         *  curving deck edge by about a metre over its length and ends up over
+         *  the tarmac." A lamp run is the same object with the same failure.
+         *
+         *  The owner reported lamps intruding on the racing area around
+         *  sunsetCoastline's tunnel. Measured against the DRAWN road ribbon
+         *  (`.probe-tmp/tunnellamps.ts`, ultra — vertical line queries into the
+         *  `roadSurface` triangles, not a centreline projection), the run as it
+         *  stood put all three of its deep devices over the carriageway:
+         *
+         *    guide strip end  z 24.50  ->  1.21-1.51 m above the road,
+         *                                  3.06-3.24 m INSIDE the asphalt edge
+         *    wash bar         z 22.6   ->  3.35-3.42 m above, 2.30-2.83 m inside
+         *    lamp head        z 22.6   ->  5.20-6.33 m above, 2.41-3.61 m inside
+         *
+         *  The guide strip is the one a driver hits at windscreen height, and
+         *  it is what the report is about.
+         *
+         *  The lateral error a rigid run accumulates at depth z on a bore of
+         *  radius R is about z^2 / 2R. The tightest BORE any circuit authors is
+         *  volcano's lava tube at R ~ 108 m (measured, `.probe-tmp/boregeom.ts`);
+         *  the gap between the lamp line (|x| = R - 1.25 = 12.65) and the
+         *  corridor edge there (hw 9.5 + kerbW 1.55 = 11.05) is 1.60 m, so the
+         *  reach that stays clear is sqrt(2 * 108 * 1.60) = 18.6 m. REACH is 15,
+         *  which keeps ~3.5 m of margin and still gives four receding pairs.
+         *
+         *  THE DEPTH CUE IS NOT LOST — it moves to the CROWN. A crown fitting
+         *  drifts sideways with curvature exactly as a wall one does, but at
+         *  6.4 m over the road it is scenery overhead at any drift, and |x| =
+         *  2.2 has ten metres of bore to wander in before it reaches the lining
+         *  (the bore is a half-ellipse of semi-axes `hw + kerbW + sh + 0.6`
+         *  ~ 12.75 m and `CROSS.tunnelH` 8.2 m, so the soffit above |x| = 2.2
+         *  sits at 7.5 m). So the run now recedes 25 m instead of 22.6.
+         */
+        const REACH = 15.0;
         for (const sx of [-1, 1]) {
           for (let k = 0; k < 4; k++) {
-            const z = 3.4 + k * 6.4;
+            const z = 3.0 + k * ((REACH - 3.0) / 3);
             const y = Y0 + 4.9;
             glow.box(sx * (R - 1.25), y, z, 0.14, 0.5, 0.8, 0xffc98a);
             // A short wash bar under each fitting: the pool of light on the
             // lining is what sells a lit tunnel, not the bulb.
             glow.box(sx * (R - 1.05), y - 1.5, z, 0.1, 0.9, 0.34, 0xff9a4e);
           }
-          // Low guide strip along the haunch, running the length of the reveal.
-          glow.box(sx * (R - 0.75), Y0 + 0.55, 12.5, 0.09, 0.14, 12.0, 0xff7a3a);
+          // Low guide strip along the haunch. It stops with the lamp run: this
+          // is the device that was 1.2 m over the tarmac at its far end.
+          glow.box(sx * (R - 0.75), Y0 + 0.55, (REACH + 0.5) * 0.5,
+            0.09, 0.14, (REACH - 0.5) * 0.5, 0xff7a3a);
+        }
+        // Crown run: the receding row of lights, carried on the ceiling where
+        // curvature drift cannot bring it into the driving envelope.
+        for (let k = 0; k < 4; k++) {
+          const z = 7.0 + k * 6.0;
+          for (const sx of [-1, 1]) glow.box(sx * 2.2, Y0 + 6.9, z, 0.34, 0.18, 0.5, 0xffc98a);
         }
 
         return {

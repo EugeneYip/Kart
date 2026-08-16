@@ -581,8 +581,26 @@ export const TRACKS: Record<string, TrackDef> = {
       // hairpin: tyre stacks and chevrons
       { type: 'tyreStack', t: 0.372, lat: 12.5, step: 0.004, end: 0.40 },
       { type: 'signChevron', t: 0.375, lat: -12, step: 0.005, end: 0.40 },
-      { type: 'tunnelPortal', t: 0.408, lat: 0 },
-      { type: 'tunnelPortal', t: 0.505, lat: 0, yaw: Math.PI },
+      // AT THE BORE, NOT NEAR IT. `t` is arc-proportional (measured: t 0.408
+      // resolves to arc 658.1 on a 1612.9 m lap), and the DRAWN bore lining
+      // — the `trackTunnel` mesh, walked vertex by vertex in
+      // `.probe-tmp/boregeom.ts` — runs arc 735..898. So these two stood at
+      // arc 658 and arc 814: the entrance 78 m SHORT of the mouth, in open
+      // air; the exit 84 m INSIDE the bore, its 3.4 m wing-walled headwall
+      // cutting across the lining mid-tunnel.
+      //
+      // The entrance is what the owner saw. At arc 658 the road is in the
+      // hairpin — radius of curvature 36-50 m, against 155-161 m inside the
+      // bore — and this prop is rigid, so its 24.5 m internal lamp run swung
+      // straight across the carriageway: the guide strip's far end measured
+      // 1.21-1.51 m above the road and 3.06-3.24 m inside the asphalt edge,
+      // which is a lit strip at windscreen height. (The recipe's reach is
+      // capped now too; both halves of that defect are real.)
+      //
+      // arc 736 / 897, i.e. one metre inside each end of the drawn lining, so
+      // the headwall frames the bore it is a portal to.
+      { type: 'tunnelPortal', t: 0.4563, lat: 0 },
+      { type: 'tunnelPortal', t: 0.5562, lat: 0, yaw: Math.PI },
       // beach town
       // P0d "overly thick decorative structures covering the track". Measured
       // (`.probe-tmp/crowding.ts`): `authored:townhouse` + its glow pass filled
@@ -903,8 +921,16 @@ export const TRACKS: Record<string, TrackDef> = {
       { type: 'spiralPylon', t: 0.638, lat: 0, up: -18, step: 0.014, end: 0.79 },
       { type: 'obsidianSpire', t: 0.62, lat: -32, step: 0.022, end: 0.78, scale: 1.3 },
       // lava tube + esses
+      // The lava tube's drawn lining runs arc 1210..1306 on a 1536.2 m lap. The
+      // entrance at t 0.805 (arc 1237) is inside it and stays; the EXIT at
+      // t 0.865 was arc 1329 — 23 m PAST the bore, out in a 54 m-radius corner,
+      // where the rigid prop's own geometry measured 15 vertices in the driving
+      // envelope from 2.08 m above the road and its lamp run went over the
+      // asphalt from 15 m of depth (`.probe-tmp/boregeom.ts`,
+      // `.probe-tmp/tunnellamps.ts`, ultra, against the drawn ribbon).
+      // arc 1305 = one metre inside the end of the lining.
       { type: 'tunnelPortal', t: 0.805, lat: 0 },
-      { type: 'tunnelPortal', t: 0.865, lat: 0, yaw: Math.PI },
+      { type: 'tunnelPortal', t: 0.8495, lat: 0, yaw: Math.PI },
       // 24 columns at +-17 on a 10.0-11.5 m half-width road left 3.5 m of verge
       // and 1.90 % of frame through the esses. 14 at +-21.
       { type: 'basaltColumn', t: 0.88, lat: 21, step: 0.017, end: 0.99, mirror: true },
