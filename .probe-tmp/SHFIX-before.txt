@@ -1,0 +1,118 @@
+SHOULDER PLUMBING — yardstick: the DRAWN ribbon
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 905.4 ms
+[Foliage] road-edge clearance: palm0 reach 3.9 m: moved 1, dropped 0 of 31; tree2 reach 5.0 m: moved 0, dropped 1 of 12; Bush reach 1.2 m: moved 0, dropped 1 of 152
+[Props] re-seated 79 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.79 m (buoy); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 19 seated on the water plane
+[Props] road-volume guard: 3 authored props pushed clear, 20 instances dropped from 35 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 66 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 69 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+[Props] carriageway guard: 1 props walked off the drivable road (worst move 1.60 m) [rock x1]; 0 DROPPED because they were still on it
+--- sunsetCoastline  (lap 1613 m, 230 stations)
+  PASS  the yardstick has triangles in it              47336 triangles
+  *** FAIL  A. every station publishes a shoulder          0/230 published; authored range 0.00..9.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          198 arcs, mean |Δ| 3.183 m, worst 6.00 m @arc 0 (assumed ±17.05/17.05 vs drawn -23.05..21.05)
+  *** FAIL  D. terrain does not stand proud of the road    8118 samples (0 elevated), mean |Δ| 0.186 m, worst +0.30 m (arc 944 lat 11.90)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 434.5 ms
+[Props] re-seated 85 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 0.53 m (alleyBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 9 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 1 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 58 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- neonMetropolis  (lap 1549 m, 221 stations)
+  PASS  the yardstick has triangles in it              47872 triangles
+  *** FAIL  A. every station publishes a shoulder          0/221 published; authored range 0.00..5.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          191 arcs, mean |Δ| 1.654 m, worst 11.60 m @arc 856 (assumed ±14.55/14.55 vs drawn -5.95..2.95)
+  *** FAIL  D. terrain does not stand proud of the road    7088 samples (698 elevated), mean |Δ| 0.158 m, worst +0.73 m (arc 960 lat 12.35)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 527.0 ms
+[Foliage] road-edge clearance: Bush reach 1.0 m: moved 1, dropped 0 of 48
+[Props] re-seated 58 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 53.13 m (lavaRock); 3 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 40 instances dropped from 129 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 120 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 60 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+[Props] carriageway guard: 1 props walked off the drivable road (worst move 10.96 m) [obsidian x1]; 0 DROPPED because they were still on it
+--- volcanoRush  (lap 1536 m, 219 stations)
+  PASS  the yardstick has triangles in it              59328 triangles
+  *** FAIL  A. every station publishes a shoulder          0/219 published; authored range 0.00..24.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          190 arcs, mean |Δ| 3.800 m, worst 19.45 m @arc 680 (assumed ±14.55/14.55 vs drawn -34.00..15.35)
+  *** FAIL  D. terrain does not stand proud of the road    6804 samples (986 elevated), mean |Δ| 0.189 m, worst +4.68 m (arc 1296 lat 14.55)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 355.9 ms
+[Foliage] road-edge clearance: Bush reach 1.2 m: moved 2, dropped 0 of 171
+[Props] re-seated 101 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 7.90 m (towerBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 6 authored props pushed clear, 26 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 8 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 53 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- bostonHarbor  (lap 1631 m, 233 stations)
+  PASS  the yardstick has triangles in it              49714 triangles
+  *** FAIL  A. every station publishes a shoulder          0/233 published; authored range 1.20..7.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          204 arcs, mean |Δ| 1.393 m, worst 3.96 m @arc 720 (assumed ±16.54/16.54 vs drawn -18.55..20.50)
+  PASS  C. girder anchors found in the built geometry  42 post feet from 5792 vertices, 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    42/42 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +1.50 m past the edge (arc 956 lat 15.20 vs drawn edge 13.70)
+  *** FAIL  C. no anchor above the drawn surface           worst +2.06 m of air (arc 1000 lat -13.22); deepest embedment -0.30 m
+  *** FAIL  D. terrain does not stand proud of the road    8364 samples (0 elevated), mean |Δ| 0.169 m, worst +0.36 m (arc 1048 lat 12.80)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 177.8 ms
+[Props] re-seated 139 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.74 m (pine); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] kerb clearance: 69 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- taipeiCircuit  (lap 1598 m, 228 stations)
+  PASS  the yardstick has triangles in it              47480 triangles
+  *** FAIL  A. every station publishes a shoulder          0/228 published; authored range 2.00..5.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          200 arcs, mean |Δ| 1.329 m, worst 2.10 m @arc 680 (assumed ±16.55/16.55 vs drawn -18.40..18.65)
+  *** FAIL  D. terrain does not stand proud of the road    8200 samples (0 elevated), mean |Δ| 0.167 m, worst +0.31 m (arc 1200 lat 13.50)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 193.8 ms
+[Foliage] road-edge clearance: tree2 reach 4.3 m: moved 1, dropped 0 of 25
+[Props] re-seated 122 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 1.25 m (billboard); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 25 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 7 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 50 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- tokyoNeon  (lap 1536 m, 219 stations)
+  PASS  the yardstick has triangles in it              48802 triangles
+  *** FAIL  A. every station publishes a shoulder          0/219 published; authored range 1.20..5.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          192 arcs, mean |Δ| 1.242 m, worst 4.55 m @arc 0 (assumed ±17.05/17.05 vs drawn -12.50..12.50)
+  *** FAIL  D. terrain does not stand proud of the road    7872 samples (0 elevated), mean |Δ| 0.168 m, worst +0.26 m (arc 680 lat -13.35)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 265.6 ms
+[Props] re-seated 235 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 5.80 m (pine); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] footprint bedding: 10 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 71 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- hongKongHarbour  (lap 1586 m, 227 stations)
+  PASS  the yardstick has triangles in it              47192 triangles
+  *** FAIL  A. every station publishes a shoulder          0/227 published; authored range 2.00..6.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          199 arcs, mean |Δ| 1.223 m, worst 3.00 m @arc 1336 (assumed ±16.55/16.55 vs drawn -18.50..19.55)
+  *** FAIL  D. terrain does not stand proud of the road    8159 samples (0 elevated), mean |Δ| 0.170 m, worst +0.39 m (arc 632 lat -13.40)
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 187.3 ms
+[Props] re-seated 206 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 2.60 m (parkTree); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 1 authored props pushed clear, 6 instances dropped from 43 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 4 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 52 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+--- newYorkCircuit  (lap 1583 m, 226 stations)
+  PASS  the yardstick has triangles in it              49088 triangles
+  *** FAIL  A. every station publishes a shoulder          0/226 published; authored range 1.20..5.00 m
+  *** FAIL  A. ...and it is the authored one               nothing published
+  *** FAIL  B. assumed corridor == drawn corridor          198 arcs, mean |Δ| 1.200 m, worst 2.00 m @arc 0 (assumed ±17.05/17.05 vs drawn -19.05..19.05)
+  PASS  C. girder anchors found in the built geometry  72 post feet from 6688 vertices, 2 fan instances
+  PASS  C. every anchor foot stands over drawn road    0/72 feet with no ribbon beneath them
+  PASS  C. no anchor outboard of the drawn edge        worst +-0.52 m past the edge (arc 893 lat 13.23 vs drawn edge 13.75)
+  PASS  C. no anchor above the drawn surface           worst +0.03 m of air (arc 988 lat 12.78); deepest embedment -0.30 m
+  *** FAIL  D. terrain does not stand proud of the road    8118 samples (0 elevated), mean |Δ| 0.172 m, worst +0.59 m (arc 776 lat -13.95)
+
+*** 35 assertion(s) FAILED

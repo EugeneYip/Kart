@@ -1,0 +1,66 @@
+===========================================================================
+ RED-TEAM — every claim in shoulderfix.ts, broken on purpose
+ Each block breaks exactly one thing and shows the assertion it turns red.
+===========================================================================
+
+### R0. THE HONEST BEFORE: the shipping code, all 8 circuits
+        -> see .probe-tmp/SHFIX-before.txt (A red 8/8, B red 8/8, C red on Boston)
+
+### R1. WRONG YARDSTICK: --hull grades against trackCollision, which does
+###     not carry the whole shoulder. Same correct geometry, wrong ruler.
+SHOULDER PLUMBING — yardstick: trackCollision HULL (deliberately wrong)
+
+--- bostonHarbor  (lap 1631 m, 233 stations)
+  PASS  the yardstick has triangles in it              21792 triangles, 14170 vertices
+  PASS  A. every station publishes a shoulder          233/233 published; authored range 1.20..7.00 m
+  PASS  A. ...and it is the authored one               worst |Δ| 0.000 m at station 150
+  *** FAIL  B. assumed corridor == drawn corridor          204 arcs, mean |Δ| 0.601 m, worst 17.59 m @arc 712 (assumed ±17.59/18.63 vs drawn 0.00..19.18)
+  PASS  C. girder anchors found in the built geometry  32 anchor bands of 8 m from 5312 deck-level vertices (5792 total), 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    1/32 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +6.35 m past the edge (arc 998 lat -11.55 vs drawn edge 5.20); widest deck-level vertex lat -14.19 (arc 874)
+  *** FAIL  C. no anchor above the drawn surface           worst +0.80 m of air (arc 998 lat -11.55); deepest embedment -0.33 m
+  PASS  D. terrain no more proud of the road than before worst +0.21 m (arc 1048 lat 12.84) vs +0.23 m on a SH_FALLBACK bake [-0.02 m]; mean |Δ| 0.174 vs 0.180 m, 6386 samples
+  PASS  D. no more drawn road over a void than before  worst 1.71 m (arc 312 lat -12.67) vs 1.70 m on a SH_FALLBACK bake [+0.01 m]
+  ----  E. heightfield vs a SH_FALLBACK bake        1206/62001 texels moved >0.1 m (1.95 %), rms 0.042 m, worst -0.82 m at (445, 87)
+
+*** 4 assertion(s) FAILED
+
+### R2. THE OLD CONSTANT, GRADED: --assume=3 forces claim B to read the
+###     corridor with SH_FALLBACK, which is what shipped.
+--- bostonHarbor  (lap 1631 m, 233 stations)
+  *** FAIL  B. assumed corridor == drawn corridor          204 arcs, mean |Δ| 1.369 m, worst 4.04 m @arc 720 (assumed ±16.51/16.51 vs drawn -18.55..20.55)
+--- volcanoRush  (lap 1536 m, 219 stations)
+  *** FAIL  B. assumed corridor == drawn corridor          190 arcs, mean |Δ| 3.896 m, worst 21.01 m @arc 696 (assumed ±14.55/14.55 vs drawn -35.56..15.55); 7 kerb-suppressed arcs, 3 TF.Gap arcs excluded — a station carries no flags, so a consumer reads 1.55 m too wide on a ramp and a whole shoulder too wide over a gap
+*** 2 assertion(s) FAILED
+
+### R3. RE-INSTATE THE RETIRED CONSTANT: brooklynCables reads SH_FALLBACK
+###     instead of frame.shL/shR. This is the only proof that retiring
+###     BROOKLYN.shoulder = 1.2 is load-bearing rather than cosmetic —
+###     New York passed claim C BEFORE the fix, on the hand-tuned constant.
+--- newYorkCircuit  (lap 1583 m, 226 stations)
+  PASS  C. girder anchors found in the built geometry  54 anchor bands of 8 m from 5104 deck-level vertices (6688 total), 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    54/54 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +1.14 m past the edge (arc 893 lat 14.99 vs drawn edge 13.86); widest deck-level vertex lat -15.20 (arc 809)
+  *** FAIL  C. no anchor above the drawn surface           worst +0.29 m of air (arc 942 lat -14.37); deepest embedment -0.21 m
+*** 3 assertion(s) FAILED
+
+### R4. BREAK THE SOURCE: stationFrom publishes shoulder + 4 m. Everything
+###     downstream of the plumbing should notice.
+--- bostonHarbor  (lap 1631 m, 233 stations)
+  PASS  A. every station publishes a shoulder          233/233 published; authored range 1.20..7.00 m
+  *** FAIL  A. ...and it is the authored one               worst |Δ| 4.000 m at station 150
+  *** FAIL  B. assumed corridor == drawn corridor          204 arcs, mean |Δ| 3.974 m, worst 4.12 m @arc 1048 (assumed ±17.19/17.19 vs drawn -13.06..13.78)
+  PASS  C. girder anchors found in the built geometry  32 anchor bands of 8 m from 5312 deck-level vertices (5792 total), 2 fan instances
+  *** FAIL  C. every anchor foot stands over drawn road    32/32 feet with no ribbon beneath them
+  *** FAIL  C. no anchor outboard of the drawn edge        worst +3.62 m past the edge (arc 886 lat 17.49 vs drawn edge 13.87); widest deck-level vertex lat -18.12 (arc 874)
+  *** FAIL  C. no anchor above the drawn surface           worst +1.01 m of air (arc 998 lat -15.44); deepest embedment -0.73 m
+  PASS  D. terrain no more proud of the road than before worst +0.45 m (arc 1000 lat -12.65) vs +0.40 m on a SH_FALLBACK bake [+0.05 m]; mean |Δ| 0.146 vs 0.173 m, 6346 samples
+  PASS  D. no more drawn road over a void than before  worst 0.46 m (arc 1208 lat -11.25) vs 0.53 m on a SH_FALLBACK bake [-0.07 m]
+*** 5 assertion(s) FAILED
+
+### NOTE ON CLAIM D. D is a RELATIVE guard: it bakes the same stations twice
+###   in one process and compares. Lifting the terrain globally (SINK 0.16
+###   -> -0.34) moves BOTH bakes and D stays green by design — verified.
+###   R4 above moves only the published bake and D reads +0.05 m, under its
+###   0.20 m slack, so D alone would not catch a 4 m shoulder error.
+###   Claim B is the absolute corridor guard and caught R4 at 3.974 m mean.
