@@ -1,0 +1,72 @@
+==============================================================================
+MINIMAP ARC WALK   break=none   200 arc steps x 4 lanes
+==============================================================================
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 573.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 248.8 ms
+  sunsetCoastline  (lap 1613 m, 0.523 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.17 m   jump max    8.07 m / step 8.06 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg   travel err 6.72 deg
+    npc-centre     off-course max     0.17 m   jump max    8.07 m / step 8.06 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg   travel err 6.72 deg
+    npc-lat-0.8    off-course max    10.02 m   jump max    9.53 m / step 8.06 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max    10.01 m   jump max    8.84 m / step 8.06 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.25 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 206.2 ms
+  neonMetropolis  (lap 1549 m, 0.631 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.11 m   jump max    7.75 m / step 7.75 m   backwards   0   off-canvas   0   heading err    9.9e-6 deg   travel err 5.34 deg
+    npc-centre     off-course max     0.11 m   jump max    7.75 m / step 7.75 m   backwards   0   off-canvas   0   heading err    9.9e-6 deg   travel err 5.34 deg
+    npc-lat-0.8    off-course max     9.98 m   jump max    9.13 m / step 7.75 m   backwards   0   off-canvas   0   heading err    9.9e-6 deg
+    npc-lat+0.8    off-course max     9.97 m   jump max    8.68 m / step 7.75 m   backwards   0   off-canvas   0   heading err    9.9e-6 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.11 m, max frame step 0.30 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 308.4 ms
+  volcanoRush  (lap 1536 m, 0.842 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.13 m   jump max    7.69 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 5.03 deg
+    npc-centre     off-course max     0.13 m   jump max    7.69 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 5.03 deg
+    npc-lat-0.8    off-course max     9.61 m   jump max    9.21 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max     9.62 m   jump max    9.01 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.13 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 213.1 ms
+  bostonHarbor  (lap 1631 m, 0.649 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.15 m   jump max    8.16 m / step 8.15 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg   travel err 6.24 deg
+    npc-centre     off-course max     0.15 m   jump max    8.16 m / step 8.15 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg   travel err 6.24 deg
+    npc-lat-0.8    off-course max    10.03 m   jump max    9.80 m / step 8.15 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max    10.00 m   jump max    9.53 m / step 8.15 m   backwards   0   off-canvas   0   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.15 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 196.9 ms
+  taipeiCircuit  (lap 1598 m, 0.658 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.18 m   jump max    8.00 m / step 7.99 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 5.74 deg
+    npc-centre     off-course max     0.18 m   jump max    8.00 m / step 7.99 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 5.74 deg
+    npc-lat-0.8    off-course max    10.01 m   jump max    9.42 m / step 7.99 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.02 m   jump max    9.30 m / step 7.99 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 189.4 ms
+  tokyoNeon  (lap 1536 m, 0.657 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.15 m   jump max    7.68 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 6.18 deg
+    npc-centre     off-course max     0.15 m   jump max    7.68 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 6.18 deg
+    npc-lat-0.8    off-course max    10.02 m   jump max    8.89 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.00 m   jump max    9.14 m / step 7.68 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.13 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 127.5 ms
+  hongKongHarbour  (lap 1586 m, 0.597 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.15 m   jump max    7.93 m / step 7.93 m   backwards   0   off-canvas   0   heading err    1.0e-5 deg   travel err 5.23 deg
+    npc-centre     off-course max     0.15 m   jump max    7.93 m / step 7.93 m   backwards   0   off-canvas   0   heading err    1.0e-5 deg   travel err 5.23 deg
+    npc-lat-0.8    off-course max    10.01 m   jump max    9.37 m / step 7.93 m   backwards   0   off-canvas   0   heading err    1.0e-5 deg
+    npc-lat+0.8    off-course max    10.04 m   jump max    9.26 m / step 7.93 m   backwards   0   off-canvas   0   heading err    1.0e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.11 m, max frame step 0.28 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 299.6 ms
+  newYorkCircuit  (lap 1583 m, 0.596 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.14 m   jump max    7.92 m / step 7.91 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 6.05 deg
+    npc-centre     off-course max     0.14 m   jump max    7.92 m / step 7.91 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg   travel err 6.05 deg
+    npc-lat-0.8    off-course max    10.03 m   jump max    9.55 m / step 7.91 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.01 m   jump max    9.39 m / step 7.91 m   backwards   0   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.28 px
+------------------------------------------------------------------------------
+PASS  224 assertions over 8 circuits
+==============================================================================

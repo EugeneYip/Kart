@@ -1,0 +1,264 @@
+==============================================================================
+MINIMAP ARC WALK   break=wrong-deck-t   200 arc steps x 4 lanes
+==============================================================================
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 340.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 176.6 ms
+  sunsetCoastline  (lap 1613 m, 0.523 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.10 m   jump max  604.64 m / step 8.06 m   backwards  57   off-canvas   0   heading err    1.2e-5 deg   travel err 179.14 deg
+    npc-centre     off-course max     0.10 m   jump max  604.64 m / step 8.06 m   backwards  57   off-canvas   0   heading err    1.2e-5 deg   travel err 179.14 deg
+    npc-lat-0.8    off-course max    10.02 m   jump max  612.54 m / step 8.06 m   backwards  56   off-canvas   0   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max    10.01 m   jump max  596.74 m / step 8.06 m   backwards  58   off-canvas   0   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.25 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 241.9 ms
+  neonMetropolis  (lap 1549 m, 0.631 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.11 m   jump max  650.80 m / step 7.75 m   backwards  28   off-canvas   0   heading err    9.9e-6 deg   travel err 179.82 deg
+    npc-centre     off-course max     0.11 m   jump max  650.80 m / step 7.75 m   backwards  28   off-canvas   0   heading err    9.9e-6 deg   travel err 179.82 deg
+    npc-lat-0.8    off-course max     9.98 m   jump max  658.97 m / step 7.75 m   backwards  28   off-canvas   0   heading err    9.9e-6 deg
+    npc-lat+0.8    off-course max     9.97 m   jump max  642.63 m / step 7.75 m   backwards  28   off-canvas   0   heading err    9.9e-6 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.11 m, max frame step 0.30 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 134.3 ms
+  volcanoRush  (lap 1536 m, 0.842 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.13 m   jump max  379.48 m / step 7.68 m   backwards 119   off-canvas   0   heading err    1.1e-5 deg   travel err 179.39 deg
+    npc-centre     off-course max     0.13 m   jump max  379.48 m / step 7.68 m   backwards 119   off-canvas   0   heading err    1.1e-5 deg   travel err 179.39 deg
+    npc-lat-0.8    off-course max     9.61 m   jump max  379.54 m / step 7.68 m   backwards 113   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max     9.62 m   jump max  379.58 m / step 7.68 m   backwards 117   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.13 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 234.8 ms
+  bostonHarbor  (lap 1631 m, 0.649 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.15 m   jump max  513.39 m / step 8.15 m   backwards  45   off-canvas   0   heading err    1.2e-5 deg   travel err 178.16 deg
+    npc-centre     off-course max     0.15 m   jump max  513.39 m / step 8.15 m   backwards  45   off-canvas   0   heading err    1.2e-5 deg   travel err 178.16 deg
+    npc-lat-0.8    off-course max    10.03 m   jump max  520.82 m / step 8.15 m   backwards  45   off-canvas   0   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max    10.00 m   jump max  505.96 m / step 8.15 m   backwards  45   off-canvas   0   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.15 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 95.8 ms
+  taipeiCircuit  (lap 1598 m, 0.658 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.18 m   jump max  507.39 m / step 7.99 m   backwards  33   off-canvas   0   heading err    1.1e-5 deg   travel err 178.48 deg
+    npc-centre     off-course max     0.18 m   jump max  507.39 m / step 7.99 m   backwards  33   off-canvas   0   heading err    1.1e-5 deg   travel err 178.48 deg
+    npc-lat-0.8    off-course max    10.01 m   jump max  499.57 m / step 7.99 m   backwards  34   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.02 m   jump max  515.22 m / step 7.99 m   backwards  32   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 152.3 ms
+  tokyoNeon  (lap 1536 m, 0.657 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.15 m   jump max  510.74 m / step 7.68 m   backwards  36   off-canvas   0   heading err    1.1e-5 deg   travel err 176.95 deg
+    npc-centre     off-course max     0.15 m   jump max  510.74 m / step 7.68 m   backwards  36   off-canvas   0   heading err    1.1e-5 deg   travel err 176.95 deg
+    npc-lat-0.8    off-course max    10.02 m   jump max  518.59 m / step 7.68 m   backwards  35   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.00 m   jump max  502.90 m / step 7.68 m   backwards  37   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.13 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 189.1 ms
+  hongKongHarbour  (lap 1586 m, 0.597 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.11 m   jump max  560.34 m / step 7.93 m   backwards  31   off-canvas   0   heading err    1.0e-5 deg   travel err 179.99 deg
+    npc-centre     off-course max     0.11 m   jump max  560.34 m / step 7.93 m   backwards  31   off-canvas   0   heading err    1.0e-5 deg   travel err 179.99 deg
+    npc-lat-0.8    off-course max    10.01 m   jump max  553.55 m / step 7.93 m   backwards  31   off-canvas   0   heading err    1.0e-5 deg
+    npc-lat+0.8    off-course max    10.04 m   jump max  567.14 m / step 7.93 m   backwards  31   off-canvas   0   heading err    1.0e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.11 m, max frame step 0.28 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 237.6 ms
+  newYorkCircuit  (lap 1583 m, 0.596 px/m, ribbon 220 pts)
+    player-centre  off-course max     0.14 m   jump max  557.05 m / step 7.91 m   backwards  29   off-canvas   0   heading err    1.1e-5 deg   travel err 179.93 deg
+    npc-centre     off-course max     0.14 m   jump max  557.05 m / step 7.91 m   backwards  29   off-canvas   0   heading err    1.1e-5 deg   travel err 179.93 deg
+    npc-lat-0.8    off-course max    10.03 m   jump max  564.20 m / step 7.91 m   backwards  30   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max    10.01 m   jump max  549.91 m / step 7.91 m   backwards  29   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 0.14 m, max frame step 0.28 px
+------------------------------------------------------------------------------
+FAIL  96 of 224 assertions
+  [monotonic] sunsetCoastline / player-centre
+      57/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / player-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] sunsetCoastline / player-centre
+      largest step 604.64 m against an arc step of 8.06 m (allowed 9.27 m)
+  [travel-dir] sunsetCoastline / player-centre
+      glyph pointed 179.14 deg away from the direction the marker was travelling
+  [monotonic] sunsetCoastline / npc-centre
+      57/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] sunsetCoastline / npc-centre
+      largest step 604.64 m against an arc step of 8.06 m (allowed 9.27 m)
+  [travel-dir] sunsetCoastline / npc-centre
+      glyph pointed 179.14 deg away from the direction the marker was travelling
+  [monotonic] sunsetCoastline / npc-lat-0.8
+      56/199 steps went backwards along the course (worst -10.47 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-lat-0.8
+      walked -1.09 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] sunsetCoastline / npc-lat-0.8
+      largest step 612.54 m against an arc step of 8.06 m (allowed 15.32 m)
+  [monotonic] sunsetCoastline / npc-lat+0.8
+      58/199 steps went backwards along the course (worst -10.36 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-lat+0.8
+      walked -1.12 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] sunsetCoastline / npc-lat+0.8
+      largest step 596.74 m against an arc step of 8.06 m (allowed 15.32 m)
+  [monotonic] neonMetropolis / player-centre
+      28/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] neonMetropolis / player-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] neonMetropolis / player-centre
+      largest step 650.80 m against an arc step of 7.75 m (allowed 8.91 m)
+  [travel-dir] neonMetropolis / player-centre
+      glyph pointed 179.82 deg away from the direction the marker was travelling
+  [monotonic] neonMetropolis / npc-centre
+      28/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] neonMetropolis / npc-centre
+      largest step 650.80 m against an arc step of 7.75 m (allowed 8.91 m)
+  [travel-dir] neonMetropolis / npc-centre
+      glyph pointed 179.82 deg away from the direction the marker was travelling
+  [monotonic] neonMetropolis / npc-lat-0.8
+      28/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-lat-0.8
+      walked -1.06 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] neonMetropolis / npc-lat-0.8
+      largest step 658.97 m against an arc step of 7.75 m (allowed 14.72 m)
+  [monotonic] neonMetropolis / npc-lat+0.8
+      28/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-lat+0.8
+      walked -1.18 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] neonMetropolis / npc-lat+0.8
+      largest step 642.63 m against an arc step of 7.75 m (allowed 14.72 m)
+  [monotonic] volcanoRush / player-centre
+      119/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] volcanoRush / player-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] volcanoRush / player-centre
+      largest step 379.48 m against an arc step of 7.68 m (allowed 8.83 m)
+  [travel-dir] volcanoRush / player-centre
+      glyph pointed 179.39 deg away from the direction the marker was travelling
+  [monotonic] volcanoRush / npc-centre
+      119/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] volcanoRush / npc-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] volcanoRush / npc-centre
+      largest step 379.48 m against an arc step of 7.68 m (allowed 8.83 m)
+  [travel-dir] volcanoRush / npc-centre
+      glyph pointed 179.39 deg away from the direction the marker was travelling
+  [monotonic] volcanoRush / npc-lat-0.8
+      113/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] volcanoRush / npc-lat-0.8
+      walked -1.07 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] volcanoRush / npc-lat-0.8
+      largest step 379.54 m against an arc step of 7.68 m (allowed 14.59 m)
+  [monotonic] volcanoRush / npc-lat+0.8
+      117/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] volcanoRush / npc-lat+0.8
+      walked -1.18 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] volcanoRush / npc-lat+0.8
+      largest step 379.58 m against an arc step of 7.68 m (allowed 14.59 m)
+  [monotonic] bostonHarbor / player-centre
+      45/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] bostonHarbor / player-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] bostonHarbor / player-centre
+      largest step 513.39 m against an arc step of 8.15 m (allowed 9.38 m)
+  [travel-dir] bostonHarbor / player-centre
+      glyph pointed 178.16 deg away from the direction the marker was travelling
+  [monotonic] bostonHarbor / npc-centre
+      45/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] bostonHarbor / npc-centre
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] bostonHarbor / npc-centre
+      largest step 513.39 m against an arc step of 8.15 m (allowed 9.38 m)
+  [travel-dir] bostonHarbor / npc-centre
+      glyph pointed 178.16 deg away from the direction the marker was travelling
+  [monotonic] bostonHarbor / npc-lat-0.8
+      45/199 steps went backwards along the course (worst -10.28 ribbon-vertices)
+  [wrap] bostonHarbor / npc-lat-0.8
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] bostonHarbor / npc-lat-0.8
+      largest step 520.82 m against an arc step of 8.15 m (allowed 15.49 m)
+  [monotonic] bostonHarbor / npc-lat+0.8
+      45/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] bostonHarbor / npc-lat+0.8
+      walked -1.10 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [no-jump] bostonHarbor / npc-lat+0.8
+      largest step 505.96 m against an arc step of 8.15 m (allowed 15.49 m)
+  [monotonic] taipeiCircuit / player-centre
+      33/199 steps went backwards along the course (worst -10.39 ribbon-vertices)
+  [no-jump] taipeiCircuit / player-centre
+      largest step 507.39 m against an arc step of 7.99 m (allowed 9.19 m)
+  [travel-dir] taipeiCircuit / player-centre
+      glyph pointed 178.48 deg away from the direction the marker was travelling
+  [monotonic] taipeiCircuit / npc-centre
+      33/199 steps went backwards along the course (worst -10.39 ribbon-vertices)
+  [no-jump] taipeiCircuit / npc-centre
+      largest step 507.39 m against an arc step of 7.99 m (allowed 9.19 m)
+  [travel-dir] taipeiCircuit / npc-centre
+      glyph pointed 178.48 deg away from the direction the marker was travelling
+  [monotonic] taipeiCircuit / npc-lat-0.8
+      34/199 steps went backwards along the course (worst -10.26 ribbon-vertices)
+  [no-jump] taipeiCircuit / npc-lat-0.8
+      largest step 499.57 m against an arc step of 7.99 m (allowed 15.18 m)
+  [monotonic] taipeiCircuit / npc-lat+0.8
+      32/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] taipeiCircuit / npc-lat+0.8
+      largest step 515.22 m against an arc step of 7.99 m (allowed 15.18 m)
+  [monotonic] tokyoNeon / player-centre
+      36/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] tokyoNeon / player-centre
+      largest step 510.74 m against an arc step of 7.68 m (allowed 8.83 m)
+  [travel-dir] tokyoNeon / player-centre
+      glyph pointed 176.95 deg away from the direction the marker was travelling
+  [monotonic] tokyoNeon / npc-centre
+      36/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] tokyoNeon / npc-centre
+      largest step 510.74 m against an arc step of 7.68 m (allowed 8.83 m)
+  [travel-dir] tokyoNeon / npc-centre
+      glyph pointed 176.95 deg away from the direction the marker was travelling
+  [monotonic] tokyoNeon / npc-lat-0.8
+      35/199 steps went backwards along the course (worst -10.11 ribbon-vertices)
+  [no-jump] tokyoNeon / npc-lat-0.8
+      largest step 518.59 m against an arc step of 7.68 m (allowed 14.59 m)
+  [monotonic] tokyoNeon / npc-lat+0.8
+      37/199 steps went backwards along the course (worst -10.37 ribbon-vertices)
+  [no-jump] tokyoNeon / npc-lat+0.8
+      largest step 502.90 m against an arc step of 7.68 m (allowed 14.59 m)
+  [monotonic] hongKongHarbour / player-centre
+      31/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] hongKongHarbour / player-centre
+      largest step 560.34 m against an arc step of 7.93 m (allowed 9.12 m)
+  [travel-dir] hongKongHarbour / player-centre
+      glyph pointed 179.99 deg away from the direction the marker was travelling
+  [monotonic] hongKongHarbour / npc-centre
+      31/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] hongKongHarbour / npc-centre
+      largest step 560.34 m against an arc step of 7.93 m (allowed 9.12 m)
+  [travel-dir] hongKongHarbour / npc-centre
+      glyph pointed 179.99 deg away from the direction the marker was travelling
+  [monotonic] hongKongHarbour / npc-lat-0.8
+      31/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] hongKongHarbour / npc-lat-0.8
+      largest step 553.55 m against an arc step of 7.93 m (allowed 15.07 m)
+  [monotonic] hongKongHarbour / npc-lat+0.8
+      31/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] hongKongHarbour / npc-lat+0.8
+      largest step 567.14 m against an arc step of 7.93 m (allowed 15.07 m)
+  [monotonic] newYorkCircuit / player-centre
+      29/199 steps went backwards along the course (worst -10.21 ribbon-vertices)
+  [no-jump] newYorkCircuit / player-centre
+      largest step 557.05 m against an arc step of 7.91 m (allowed 9.10 m)
+  [travel-dir] newYorkCircuit / player-centre
+      glyph pointed 179.93 deg away from the direction the marker was travelling
+  [monotonic] newYorkCircuit / npc-centre
+      29/199 steps went backwards along the course (worst -10.21 ribbon-vertices)
+  [no-jump] newYorkCircuit / npc-centre
+      largest step 557.05 m against an arc step of 7.91 m (allowed 9.10 m)
+  [travel-dir] newYorkCircuit / npc-centre
+      glyph pointed 179.93 deg away from the direction the marker was travelling
+  [monotonic] newYorkCircuit / npc-lat-0.8
+      30/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] newYorkCircuit / npc-lat-0.8
+      largest step 564.20 m against an arc step of 7.91 m (allowed 15.04 m)
+  [monotonic] newYorkCircuit / npc-lat+0.8
+      29/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [no-jump] newYorkCircuit / npc-lat+0.8
+      largest step 549.91 m against an arc step of 7.91 m (allowed 15.04 m)
+==============================================================================

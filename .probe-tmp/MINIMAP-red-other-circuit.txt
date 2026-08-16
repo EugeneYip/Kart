@@ -1,0 +1,368 @@
+==============================================================================
+MINIMAP ARC WALK   break=other-circuit   200 arc steps x 4 lanes
+==============================================================================
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 739.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 319.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 324.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 248.3 ms
+  sunsetCoastline  (lap 1613 m, 0.802 px/m, ribbon 220 pts)
+    player-centre  off-course max   164.96 m   jump max    8.47 m / step 8.06 m   backwards 111   off-canvas  63   heading err    1.2e-5 deg   travel err 6.72 deg
+    npc-centre     off-course max   164.96 m   jump max    8.47 m / step 8.06 m   backwards 111   off-canvas  63   heading err    1.2e-5 deg   travel err 6.72 deg
+    npc-lat-0.8    off-course max   173.60 m   jump max   10.01 m / step 8.06 m   backwards 110   off-canvas  65   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max   156.62 m   jump max    9.29 m / step 8.06 m   backwards 115   off-canvas  60   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 164.95 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 167.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 204.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 481.2 ms
+  neonMetropolis  (lap 1549 m, 0.835 px/m, ribbon 220 pts)
+    player-centre  off-course max   183.28 m   jump max    7.81 m / step 7.75 m   backwards  32   off-canvas  39   heading err    9.9e-6 deg   travel err 5.34 deg
+    npc-centre     off-course max   183.28 m   jump max    7.81 m / step 7.75 m   backwards  32   off-canvas  39   heading err    9.9e-6 deg   travel err 5.34 deg
+    npc-lat-0.8    off-course max   191.52 m   jump max    9.21 m / step 7.75 m   backwards  32   off-canvas  41   heading err    9.9e-6 deg
+    npc-lat+0.8    off-course max   175.03 m   jump max    8.76 m / step 7.75 m   backwards  29   off-canvas  37   heading err    9.9e-6 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 183.27 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 118.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 171.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 223.0 ms
+  volcanoRush  (lap 1536 m, 0.657 px/m, ribbon 220 pts)
+    player-centre  off-course max   164.55 m   jump max    7.69 m / step 7.68 m   backwards  37   off-canvas   0   heading err    1.1e-5 deg   travel err 5.03 deg
+    npc-centre     off-course max   164.55 m   jump max    7.69 m / step 7.68 m   backwards  37   off-canvas   0   heading err    1.1e-5 deg   travel err 5.03 deg
+    npc-lat-0.8    off-course max   158.73 m   jump max    9.21 m / step 7.68 m   backwards  40   off-canvas   0   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max   169.21 m   jump max    9.02 m / step 7.68 m   backwards  40   off-canvas   0   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 165.41 m, max frame step 0.31 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 281.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 509.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 1071.6 ms
+  bostonHarbor  (lap 1631 m, 0.793 px/m, ribbon 220 pts)
+    player-centre  off-course max   230.97 m   jump max    8.66 m / step 8.15 m   backwards  51   off-canvas  59   heading err    1.2e-5 deg   travel err 6.24 deg
+    npc-centre     off-course max   230.97 m   jump max    8.66 m / step 8.15 m   backwards  51   off-canvas  59   heading err    1.2e-5 deg   travel err 6.24 deg
+    npc-lat-0.8    off-course max   238.92 m   jump max   10.41 m / step 8.15 m   backwards  54   off-canvas  71   heading err    1.2e-5 deg
+    npc-lat+0.8    off-course max   223.03 m   jump max   10.12 m / step 8.15 m   backwards  53   off-canvas  50   heading err    1.2e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 231.04 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 344.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 640.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 274.8 ms
+  taipeiCircuit  (lap 1598 m, 0.809 px/m, ribbon 220 pts)
+    player-centre  off-course max   448.84 m   jump max    8.33 m / step 7.99 m   backwards 154   off-canvas 146   heading err    1.1e-5 deg   travel err 5.74 deg
+    npc-centre     off-course max   448.84 m   jump max    8.33 m / step 7.99 m   backwards 154   off-canvas 146   heading err    1.1e-5 deg   travel err 5.74 deg
+    npc-lat-0.8    off-course max   439.85 m   jump max    9.80 m / step 7.99 m   backwards 154   off-canvas 146   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max   457.82 m   jump max    9.68 m / step 7.99 m   backwards 154   off-canvas 146   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 448.84 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 136.3 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 191.3 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 81.4 ms
+  tokyoNeon  (lap 1536 m, 0.842 px/m, ribbon 220 pts)
+    player-centre  off-course max   189.41 m   jump max    7.68 m / step 7.68 m   backwards  60   off-canvas  58   heading err    1.1e-5 deg   travel err 6.18 deg
+    npc-centre     off-course max   189.41 m   jump max    7.68 m / step 7.68 m   backwards  60   off-canvas  58   heading err    1.1e-5 deg   travel err 6.18 deg
+    npc-lat-0.8    off-course max   196.90 m   jump max    8.89 m / step 7.68 m   backwards  58   off-canvas  59   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max   181.91 m   jump max    9.14 m / step 7.68 m   backwards  58   off-canvas  53   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 189.43 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 157.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 278.8 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 165.8 ms
+  hongKongHarbour  (lap 1586 m, 0.815 px/m, ribbon 220 pts)
+    player-centre  off-course max   411.53 m   jump max    8.19 m / step 7.93 m   backwards 154   off-canvas 142   heading err    1.0e-5 deg   travel err 5.23 deg
+    npc-centre     off-course max   411.53 m   jump max    8.19 m / step 7.93 m   backwards 154   off-canvas 142   heading err    1.0e-5 deg   travel err 5.23 deg
+    npc-lat-0.8    off-course max   403.84 m   jump max    9.68 m / step 7.93 m   backwards 156   off-canvas 141   heading err    1.0e-5 deg
+    npc-lat+0.8    off-course max   419.22 m   jump max    9.57 m / step 7.93 m   backwards 155   off-canvas 142   heading err    1.0e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 411.51 m, max frame step 0.40 px
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 185.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 203.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 289.9 ms
+  newYorkCircuit  (lap 1583 m, 0.817 px/m, ribbon 220 pts)
+    player-centre  off-course max   240.38 m   jump max    8.16 m / step 7.91 m   backwards  54   off-canvas  59   heading err    1.1e-5 deg   travel err 6.05 deg
+    npc-centre     off-course max   240.38 m   jump max    8.16 m / step 7.91 m   backwards  54   off-canvas  59   heading err    1.1e-5 deg   travel err 6.05 deg
+    npc-lat-0.8    off-course max   249.03 m   jump max    9.84 m / step 7.91 m   backwards  56   off-canvas  61   heading err    1.1e-5 deg
+    npc-lat+0.8    off-course max   231.77 m   jump max    9.68 m / step 7.91 m   backwards  58   off-canvas  58   heading err    1.1e-5 deg
+    player-vs-npc skew 0.0000 px   |  60 Hz sweep: corner-cut 241.03 m, max frame step 0.40 px
+------------------------------------------------------------------------------
+FAIL  132 of 224 assertions
+  [monotonic] sunsetCoastline / player-centre
+      111/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / player-centre
+      walked -1.15 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] sunsetCoastline / player-centre
+      marker sat 164.96 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] sunsetCoastline / player-centre
+      63/200 markers fell outside the 432x432 map
+  [monotonic] sunsetCoastline / npc-centre
+      111/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-centre
+      walked -1.15 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] sunsetCoastline / npc-centre
+      marker sat 164.96 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] sunsetCoastline / npc-centre
+      63/200 markers fell outside the 432x432 map
+  [monotonic] sunsetCoastline / npc-lat-0.8
+      110/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-lat-0.8
+      walked -1.04 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] sunsetCoastline / npc-lat-0.8
+      marker sat 173.60 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] sunsetCoastline / npc-lat-0.8
+      65/200 markers fell outside the 432x432 map
+  [monotonic] sunsetCoastline / npc-lat+0.8
+      115/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] sunsetCoastline / npc-lat+0.8
+      walked -1.20 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] sunsetCoastline / npc-lat+0.8
+      marker sat 156.62 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] sunsetCoastline / npc-lat+0.8
+      60/200 markers fell outside the 432x432 map
+  [no-corner-cut] sunsetCoastline / smoothing
+      smoothed marker at 28 m/s cut 164.95 m off the drawn course
+  [monotonic] neonMetropolis / player-centre
+      32/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] neonMetropolis / player-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] neonMetropolis / player-centre
+      marker sat 183.28 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] neonMetropolis / player-centre
+      39/200 markers fell outside the 432x432 map
+  [monotonic] neonMetropolis / npc-centre
+      32/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] neonMetropolis / npc-centre
+      marker sat 183.28 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] neonMetropolis / npc-centre
+      39/200 markers fell outside the 432x432 map
+  [monotonic] neonMetropolis / npc-lat-0.8
+      32/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-lat-0.8
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] neonMetropolis / npc-lat-0.8
+      marker sat 191.52 m from the drawn course; lane is 9.49 m, allowed 11.49 m
+  [on-canvas] neonMetropolis / npc-lat-0.8
+      41/200 markers fell outside the 432x432 map
+  [monotonic] neonMetropolis / npc-lat+0.8
+      29/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] neonMetropolis / npc-lat+0.8
+      walked 141.97 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] neonMetropolis / npc-lat+0.8
+      marker sat 175.03 m from the drawn course; lane is 9.49 m, allowed 11.49 m
+  [on-canvas] neonMetropolis / npc-lat+0.8
+      37/200 markers fell outside the 432x432 map
+  [no-corner-cut] neonMetropolis / smoothing
+      smoothed marker at 28 m/s cut 183.27 m off the drawn course
+  [monotonic] volcanoRush / player-centre
+      37/199 steps went backwards along the course (worst -10.04 ribbon-vertices)
+  [wrap] volcanoRush / player-centre
+      walked 164.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] volcanoRush / player-centre
+      marker sat 164.55 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [monotonic] volcanoRush / npc-centre
+      37/199 steps went backwards along the course (worst -10.04 ribbon-vertices)
+  [wrap] volcanoRush / npc-centre
+      walked 164.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] volcanoRush / npc-centre
+      marker sat 164.55 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [monotonic] volcanoRush / npc-lat-0.8
+      40/199 steps went backwards along the course (worst -10.00 ribbon-vertices)
+  [wrap] volcanoRush / npc-lat-0.8
+      walked 164.12 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] volcanoRush / npc-lat-0.8
+      marker sat 158.73 m from the drawn course; lane is 9.50 m, allowed 11.50 m
+  [monotonic] volcanoRush / npc-lat+0.8
+      40/199 steps went backwards along the course (worst -10.15 ribbon-vertices)
+  [wrap] volcanoRush / npc-lat+0.8
+      walked 163.88 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] volcanoRush / npc-lat+0.8
+      marker sat 169.21 m from the drawn course; lane is 9.50 m, allowed 11.50 m
+  [no-corner-cut] volcanoRush / smoothing
+      smoothed marker at 28 m/s cut 165.41 m off the drawn course
+  [monotonic] bostonHarbor / player-centre
+      51/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] bostonHarbor / player-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] bostonHarbor / player-centre
+      marker sat 230.97 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] bostonHarbor / player-centre
+      59/200 markers fell outside the 432x432 map
+  [monotonic] bostonHarbor / npc-centre
+      51/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] bostonHarbor / npc-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] bostonHarbor / npc-centre
+      marker sat 230.97 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] bostonHarbor / npc-centre
+      59/200 markers fell outside the 432x432 map
+  [monotonic] bostonHarbor / npc-lat-0.8
+      54/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] bostonHarbor / npc-lat-0.8
+      walked 141.92 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] bostonHarbor / npc-lat-0.8
+      marker sat 238.92 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] bostonHarbor / npc-lat-0.8
+      71/200 markers fell outside the 432x432 map
+  [monotonic] bostonHarbor / npc-lat+0.8
+      53/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] bostonHarbor / npc-lat+0.8
+      walked 142.14 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] bostonHarbor / npc-lat+0.8
+      marker sat 223.03 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] bostonHarbor / npc-lat+0.8
+      50/200 markers fell outside the 432x432 map
+  [no-corner-cut] bostonHarbor / smoothing
+      smoothed marker at 28 m/s cut 231.04 m off the drawn course
+  [monotonic] taipeiCircuit / player-centre
+      154/199 steps went backwards along the course (worst -2.40 ribbon-vertices)
+  [wrap] taipeiCircuit / player-centre
+      walked -1.13 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] taipeiCircuit / player-centre
+      marker sat 448.84 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] taipeiCircuit / player-centre
+      146/200 markers fell outside the 432x432 map
+  [monotonic] taipeiCircuit / npc-centre
+      154/199 steps went backwards along the course (worst -2.40 ribbon-vertices)
+  [wrap] taipeiCircuit / npc-centre
+      walked -1.13 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] taipeiCircuit / npc-centre
+      marker sat 448.84 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] taipeiCircuit / npc-centre
+      146/200 markers fell outside the 432x432 map
+  [monotonic] taipeiCircuit / npc-lat-0.8
+      154/199 steps went backwards along the course (worst -2.37 ribbon-vertices)
+  [wrap] taipeiCircuit / npc-lat-0.8
+      walked -1.08 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] taipeiCircuit / npc-lat-0.8
+      marker sat 439.85 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] taipeiCircuit / npc-lat-0.8
+      146/200 markers fell outside the 432x432 map
+  [monotonic] taipeiCircuit / npc-lat+0.8
+      154/199 steps went backwards along the course (worst -2.49 ribbon-vertices)
+  [wrap] taipeiCircuit / npc-lat+0.8
+      walked -1.19 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] taipeiCircuit / npc-lat+0.8
+      marker sat 457.82 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] taipeiCircuit / npc-lat+0.8
+      146/200 markers fell outside the 432x432 map
+  [no-corner-cut] taipeiCircuit / smoothing
+      smoothed marker at 28 m/s cut 448.84 m off the drawn course
+  [monotonic] tokyoNeon / player-centre
+      60/199 steps went backwards along the course (worst -0.08 ribbon-vertices)
+  [wrap] tokyoNeon / player-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] tokyoNeon / player-centre
+      marker sat 189.41 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] tokyoNeon / player-centre
+      58/200 markers fell outside the 432x432 map
+  [monotonic] tokyoNeon / npc-centre
+      60/199 steps went backwards along the course (worst -0.08 ribbon-vertices)
+  [wrap] tokyoNeon / npc-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] tokyoNeon / npc-centre
+      marker sat 189.41 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] tokyoNeon / npc-centre
+      58/200 markers fell outside the 432x432 map
+  [monotonic] tokyoNeon / npc-lat-0.8
+      58/199 steps went backwards along the course (worst -0.02 ribbon-vertices)
+  [wrap] tokyoNeon / npc-lat-0.8
+      walked 141.92 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] tokyoNeon / npc-lat-0.8
+      marker sat 196.90 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] tokyoNeon / npc-lat-0.8
+      59/200 markers fell outside the 432x432 map
+  [monotonic] tokyoNeon / npc-lat+0.8
+      58/199 steps went backwards along the course (worst -0.09 ribbon-vertices)
+  [wrap] tokyoNeon / npc-lat+0.8
+      walked 142.14 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] tokyoNeon / npc-lat+0.8
+      marker sat 181.91 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] tokyoNeon / npc-lat+0.8
+      53/200 markers fell outside the 432x432 map
+  [no-corner-cut] tokyoNeon / smoothing
+      smoothed marker at 28 m/s cut 189.43 m off the drawn course
+  [monotonic] hongKongHarbour / player-centre
+      154/199 steps went backwards along the course (worst -2.25 ribbon-vertices)
+  [wrap] hongKongHarbour / player-centre
+      walked -1.13 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] hongKongHarbour / player-centre
+      marker sat 411.53 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] hongKongHarbour / player-centre
+      142/200 markers fell outside the 432x432 map
+  [monotonic] hongKongHarbour / npc-centre
+      154/199 steps went backwards along the course (worst -2.25 ribbon-vertices)
+  [wrap] hongKongHarbour / npc-centre
+      walked -1.13 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] hongKongHarbour / npc-centre
+      marker sat 411.53 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] hongKongHarbour / npc-centre
+      142/200 markers fell outside the 432x432 map
+  [monotonic] hongKongHarbour / npc-lat-0.8
+      156/199 steps went backwards along the course (worst -2.10 ribbon-vertices)
+  [wrap] hongKongHarbour / npc-lat-0.8
+      walked -1.07 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] hongKongHarbour / npc-lat-0.8
+      marker sat 403.84 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] hongKongHarbour / npc-lat-0.8
+      141/200 markers fell outside the 432x432 map
+  [monotonic] hongKongHarbour / npc-lat+0.8
+      155/199 steps went backwards along the course (worst -2.28 ribbon-vertices)
+  [wrap] hongKongHarbour / npc-lat+0.8
+      walked -1.18 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] hongKongHarbour / npc-lat+0.8
+      marker sat 419.22 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] hongKongHarbour / npc-lat+0.8
+      142/200 markers fell outside the 432x432 map
+  [no-corner-cut] hongKongHarbour / smoothing
+      smoothed marker at 28 m/s cut 411.51 m off the drawn course
+  [monotonic] newYorkCircuit / player-centre
+      54/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] newYorkCircuit / player-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] newYorkCircuit / player-centre
+      marker sat 240.38 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] newYorkCircuit / player-centre
+      59/200 markers fell outside the 432x432 map
+  [monotonic] newYorkCircuit / npc-centre
+      54/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] newYorkCircuit / npc-centre
+      walked 142.00 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] newYorkCircuit / npc-centre
+      marker sat 240.38 m from the drawn course; lane is 0.00 m, allowed 2.00 m
+  [on-canvas] newYorkCircuit / npc-centre
+      59/200 markers fell outside the 432x432 map
+  [monotonic] newYorkCircuit / npc-lat-0.8
+      56/199 steps went backwards along the course (worst 0.00 ribbon-vertices)
+  [wrap] newYorkCircuit / npc-lat-0.8
+      walked 141.92 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] newYorkCircuit / npc-lat-0.8
+      marker sat 249.03 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] newYorkCircuit / npc-lat-0.8
+      61/200 markers fell outside the 432x432 map
+  [monotonic] newYorkCircuit / npc-lat+0.8
+      58/199 steps went backwards along the course (worst -0.02 ribbon-vertices)
+  [wrap] newYorkCircuit / npc-lat+0.8
+      walked 142.14 ribbon-vertices, expected ~218.90 (one lap, no seam jump)
+  [on-course] newYorkCircuit / npc-lat+0.8
+      marker sat 231.77 m from the drawn course; lane is 10.00 m, allowed 12.00 m
+  [on-canvas] newYorkCircuit / npc-lat+0.8
+      58/200 markers fell outside the 432x432 map
+  [no-corner-cut] newYorkCircuit / smoothing
+      smoothed marker at 28 m/s cut 241.03 m off the drawn course
+==============================================================================
