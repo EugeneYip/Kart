@@ -1468,6 +1468,13 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
 const FLAG_USA = 0;
 const FLAG_ROC = 1;
 const FLAG_JAPAN = 2;
+/**
+ * Cell 3 used to hold a black/white chequer, drawn only so that no cell of the
+ * atlas was ever blank. Nothing read it: `flagMast` is the atlas's only consumer
+ * and it was called with 0, 1 and 2, so cells 3-7 were dead pixels. Cell 3 is now
+ * the Hong Kong SAR flag; the four pennants at 4-7 still cover the rest.
+ */
+const FLAG_HK = 3;
 
 function makeFlagAtlas(): THREE.CanvasTexture {
   return canvasTexture(1536, (ctx, w, h) => {
@@ -1568,15 +1575,36 @@ function makeFlagAtlas(): THREE.CanvasTexture {
       cloth(x, y);
     }
 
-    // ---- cells 3-7: chequer + pennants, so no cell is ever blank ----------
+    // ---- cell 3: the Hong Kong SAR --------------------------------------
+    // Red field with a white five-petal Bauhinia blakeana. The petals all bend
+    // the SAME way, which is what makes the flower read as a pinwheel rather
+    // than as a daisy — get that wrong and it is a generic five-pointed blob.
+    // Each petal carries a red five-pointed star and a red stamen stroke.
     {
-      const [x, y] = at(3);
-      const q = cw / 8;
-      for (let r = 0; r < 6; r++) {
-        for (let c = 0; c < 8; c++) {
-          ctx.fillStyle = (r + c) % 2 ? '#f4f2ec' : '#14171b';
-          ctx.fillRect(x + c * q, y + (r * ch) / 6, q, ch / 6);
-        }
+      const [x, y] = at(FLAG_HK);
+      ctx.fillStyle = '#de2910';
+      ctx.fillRect(x, y, cw, ch);
+      const fx = x + cw * 0.5, fy = y + ch * 0.5, R = ch * 0.355;
+      for (let i = 0; i < 5; i++) {
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.rotate((i / 5) * Math.PI * 2 - Math.PI * 0.5);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.bezierCurveTo(R * 0.40, -R * 0.20, R * 0.94, -R * 0.32, R * 1.00, R * 0.01);
+        ctx.bezierCurveTo(R * 1.04, R * 0.36, R * 0.44, R * 0.32, 0, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#de2910';
+        star(R * 0.66, R * 0.01, R * 0.145);
+        ctx.strokeStyle = '#de2910';
+        ctx.lineWidth = Math.max(1, R * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(R * 0.20, R * 0.05);
+        ctx.lineTo(R * 0.56, R * 0.09);
+        ctx.stroke();
+        ctx.restore();
       }
       cloth(x, y);
     }
@@ -2323,6 +2351,11 @@ const CORRIDOR_PROPS = new Set([
   // lat 0 on the start line. Listing them here keeps the re-seating pass from
   // moving a declaration around as though it had a silhouette.
   'district:brick', 'district:midrise', 'district:tokyo',
+  // New York's suspension-bridge tower straddles its own deck exactly the way
+  // `bridgearch` does — authored at lat 0, piers outboard of the carriageway,
+  // and the deck's own height is the anchor its cable web is solved against.
+  'brooklyntower',
+  'district:hongkong', 'district:newyork',
 ]);
 
 /**
@@ -2377,6 +2410,53 @@ const BRIDGE = {
   inset: 0.35,
 } as const;
 
+/**
+ * ===========================================================================
+ *  THE SUSPENSION BRIDGE TOWER, IN ONE PLACE
+ * ===========================================================================
+ *  Exactly the reason `BRIDGE` above exists: `authoredSpec('brooklyntower')`
+ *  builds the masonry and `brooklynCables()` builds the cable web per anchor,
+ *  and the second has to know where the first put its saddles to the
+ *  centimetre. Neither builder is allowed a literal for any of these.
+ *
+ *  Every height is measured from the DECK, which is the anchor — this is a
+ *  `CORRIDOR_PROPS` type, so it keeps the carriageway's own Y.
+ */
+const BROOKLYN = {
+  /** Inner face of each outer pier; nothing may come inside this below `spring`. */
+  gap: 14.9,
+  /** Half-thickness of one outer pier, so it occupies |x| in [gap, gap + 2*pierW]. */
+  pierW: 2.6,
+  /** Half-width of the corbelled centre pier, which starts at `pendant`. */
+  centreW: 2.4,
+  /** Springing line of the arches, and the underside of the centre corbel. */
+  spring: 12.0,
+  pendant: 9.4,
+  /** Crown of the arch heads. */
+  crown: 27.0,
+  /** Top of the spandrel wall over the arches. */
+  shoulderY: 35.0,
+  /** Top of the tower, where the cable saddles sit. */
+  top: 63.0,
+  /** How far the pier skirt descends BELOW the deck anchor. */
+  skirt: -5.4,
+  /** Local |x| of each main-cable saddle. */
+  cableX: 12.0,
+  /** Arc length each way that the main cable and the stay web reach. */
+  reach: 48,
+  /** Suspenders and stays per side, per direction. */
+  suspenders: 7,
+  stays: 6,
+  /** Radii: main cable, suspender, diagonal stay. */
+  mainR: 0.30,
+  hangR: 0.075,
+  stayR: 0.12,
+  /** Height of the deck edge girder above the shoulder it stands on. */
+  anchorH: 1.85,
+  /** Metres inboard of the shoulder's outer edge the girder stands. */
+  inset: 0.35,
+} as const;
+
 /** Half-width of the obelisk shaft at height `y`, in the tower's local frame. */
 function bridgeShaftHalf(y: number): number {
   const { knee, top, mid, shaftLo, taperLo, shaftHi, taperHi } = BRIDGE;
@@ -2416,7 +2496,7 @@ function bridgeShaftHalf(y: number): number {
  *  Adding a fourth city is therefore one line in its own def, and the marker is
  *  visible in the track file where the art direction belongs.
  */
-type CityKitId = 'neon' | 'brick' | 'midrise' | 'tokyo';
+type CityKitId = 'neon' | 'brick' | 'midrise' | 'tokyo' | 'hongkong' | 'newyork';
 
 interface CityKit {
   readonly id: CityKitId;
@@ -2480,6 +2560,30 @@ const CITY_KITS: Record<CityKitId, CityKit> = {
     neonRing: 18, neonStack: 26, parkedCars: 26,
     carPaints: [0xe8e6df, 0x1b1e22, 0xb8bcc2, 0x2f4f8c, 0x8d1f26, 0x50565f],
     trams: 0, rock: [0x6a6f77, 0x51565d], plinthGlow: true,
+  },
+  // HONG KONG: the podium-and-tower type, which is what actually distinguishes
+  // this skyline from Tokyo's. A wide retail/carpark podium with a horizontal
+  // banding, then a much slimmer residential shaft rising out of it — dozens of
+  // them shoulder to shoulder. Signage is the STACKED shophouse board (the
+  // cantilevered boards are an authored recipe on top of that), and a minority of
+  // dark glass slabs stand in for the commercial core towers.
+  hongkong: {
+    id: 'hongkong', facade: 'tile', towers: 50, slabShare: 0.22,
+    neonRing: 0, neonStack: 32, parkedCars: 22,
+    // Hong Kong's kerbside is red taxis, white vans and dark saloons.
+    carPaints: [0xc4302a, 0xe8e6df, 0x2b2f35, 0xc4302a, 0x7d8288, 0x1f3550],
+    trams: 0, rock: [0x6f7a6a, 0x525a4e], plinthGlow: true,
+  },
+  // NEW YORK: the 1916 zoning envelope — a masonry ziggurat that steps back off
+  // the lot line four times before it goes vertical, with a water tank on the
+  // first setback. No neon of any kind, no trams. `slabShare` puts the post-war
+  // glass boxes among the pre-war stone, which is exactly what a midtown avenue
+  // looks like from the street.
+  newyork: {
+    id: 'newyork', facade: 'masonry', towers: 48, slabShare: 0.30,
+    neonRing: 0, neonStack: 0, parkedCars: 34,
+    carPaints: [0xf0b81c, 0x2b3038, 0xf0b81c, 0x8d9298, 0x24405e, 0xe8e6df],
+    trams: 0, rock: [0x8c8579, 0x6d6860], plinthGlow: false,
   },
 };
 
@@ -4467,7 +4571,7 @@ export class Props implements ISubsystem {
    * produces no geometry by design. It is a declaration, not a prop.
    */
   private resolveKit(): CityKit {
-    for (const id of ['brick', 'midrise', 'tokyo'] as const) {
+    for (const id of ['brick', 'midrise', 'tokyo', 'hongkong', 'newyork'] as const) {
       if (this.takeAuthored(`district:${id}`).length > 0) return CITY_KITS[id];
     }
     return CITY_KITS.neon;
@@ -4514,6 +4618,8 @@ export class Props implements ISubsystem {
         case 'brick': this.towerMasonry(body); break;
         case 'midrise': this.towerMidRise(body); break;
         case 'tokyo': this.towerScreenSlab(body); break;
+        case 'hongkong': this.towerPodium(body); break;
+        case 'newyork': this.towerZiggurat(body); break;
         default: this.towerSetback(body); break;
       }
       const towerGeo = body.build('tower');
@@ -4996,6 +5102,122 @@ export class Props implements ISubsystem {
       b.box(i * 2.35, 0, 9.58, 0.18, H * 0.5, 0.12, 0x8b95a2, { taper: 0.99 });
       b.box(i * 2.35, 0, -9.58, 0.18, H * 0.5, 0.12, 0x8b95a2, { taper: 0.99 });
     }
+  }
+
+  /**
+   * HONG KONG. The podium-and-tower type: a wide banded podium — retail below,
+   * car park above, the whole thing a solid block out to the lot line — with a
+   * much SLIMMER residential shaft rising out of the middle of it, gridded with
+   * bay windows and capped by a roof plant enclosure.
+   *
+   * The read is the STEP: the shaft is 0.52 of the podium's plan, so a wall of
+   * these has a continuous street wall at 12 m and a forest of thin towers above
+   * it, which is what separates this skyline from Tokyo's uniform slabs and from
+   * Taipei's balconied mid-rise. Same `TOWER_H` about a centred origin and the
+   * same +-10.95 m envelope as the other four — see the block comment above.
+   */
+  private towerPodium(b: Builder): void {
+    const H = TOWER_H;
+    const tileA = 0xb9bcb4, tileB = 0xa3a89f, glassy = 0x7f96a2, trim = 0x8b8f88;
+    const podium = H * 0.30;
+    // ---- the podium: banded, out to the lot line -----------------------------
+    b.box(0, -H * 0.5 + podium * 0.5, 0, 10.4, podium * 0.5, 9.6, tileB,
+      { shade: { side: 1.0, top: 1.06 } });
+    // Car-park louvre bands. Four horizontal slots is the whole tell.
+    for (let i = 0; i < 4; i++) {
+      const y = -H * 0.5 + 3.6 + i * (podium - 4.6) / 4;
+      b.box(0, y, 9.68, 10.1, 0.42, 0.16, 0x5f6660);
+      b.box(0, y, -9.68, 10.1, 0.42, 0.16, 0x5f6660);
+      b.box(10.48, y, 0, 0.16, 0.42, 9.3, 0x5f6660);
+    }
+    // Podium cap and its planted deck edge.
+    b.box(0, -H * 0.5 + podium + 0.4, 0, 10.7, 0.4, 9.9, trim, { shade: { top: 1.2 } });
+    b.box(0, -H * 0.5 + podium + 1.1, 0, 10.5, 0.35, 9.7, 0x4d5a48, { shade: { top: 1.14 } });
+    // ---- the shaft -----------------------------------------------------------
+    const sy = -H * 0.5 + podium + 1.45;
+    const sh = (H - podium - 1.45 - 3.6) * 0.5;
+    b.box(0, sy + sh, 0, 5.4, sh, 4.9, tileA, { taper: 0.985, shade: { side: 1.0, top: 1.1 } });
+    // Bay windows: a full-height glazed box on each face, which is how a Hong
+    // Kong residential shaft actually gets its section, and it breaks the
+    // silhouette into four vertical reveals instead of one flat prism.
+    for (const [ox, oz, hx, hz] of [
+      [5.55, 0, 0.55, 2.0], [-5.55, 0, 0.55, 2.0],
+      [0, 5.05, 2.3, 0.55], [0, -5.05, 2.3, 0.55],
+    ] as ReadonlyArray<readonly [number, number, number, number]>) {
+      b.box(ox, sy + sh, oz, hx, sh - 1.2, hz, glassy, { taper: 0.985, shade: { top: 1.16 } });
+    }
+    // Floor bands, so 30 m of shaft has storeys in it at 200 m.
+    const floors = 9;
+    for (let i = 1; i < floors; i++) {
+      const y = sy + (sh * 2) * (i / floors);
+      b.box(0, y, 0, 5.9, 0.09, 5.4, trim, { shade: { top: 1.18 } });
+    }
+    // Roof: plant enclosure, water tanks, a lift overrun and the aerial mast.
+    const rt = sy + sh * 2;
+    b.box(0, rt + 0.55, 0, 5.5, 0.55, 5.0, trim, { shade: { top: 1.2 } });
+    b.box(-2.0, rt + 1.9, 0.9, 2.0, 1.35, 1.9, tileB, { shade: { top: 1.12 } });
+    for (const ox of [1.9, 3.6]) {
+      b.prism(ox, rt + 1.1, -1.5, 0.85, 1.7, 9, 0x9ba7ac, { shade: { top: 1.16 } });
+    }
+    b.prism(2.2, rt + 1.1, 2.0, 0.14, 6.4, 5, 0x777c80, { taper: 0.45 });
+  }
+
+  /**
+   * NEW YORK. The 1916 zoning envelope, in stone: a broad base out to the lot
+   * line, then FOUR setbacks, each stepping back a fixed fraction, before the
+   * tower goes vertical and finishes in a small stepped crown. Every setback
+   * carries a cornice band and the first one carries a roof water tank, because
+   * that is the one piece of clutter you can see from the street.
+   *
+   * This is deliberately the widest-based of the six vocabularies: a masonry
+   * ziggurat has most of its mass in the bottom third, which is exactly the
+   * opposite of `towerPodium`'s slim shaft — the two cities cannot be confused.
+   */
+  private towerZiggurat(b: Builder): void {
+    const H = TOWER_H;
+    const stone = 0xb6aa96, stoneB = 0xa4977f, cornice = 0x8b7f6a, sill = 0xc6bca8;
+    // base, then four setbacks. `f` is the plan fraction at each stage.
+    const stages: ReadonlyArray<readonly [number, number, number]> = [
+      // [top of stage as a fraction of H from the bottom, half-x, half-z]
+      [0.30, 10.6, 9.8],
+      [0.46, 9.0, 8.3],
+      [0.62, 7.3, 6.7],
+      [0.76, 5.6, 5.1],
+      [0.94, 4.0, 3.7],
+    ];
+    let y0 = -H * 0.5;
+    for (let i = 0; i < stages.length; i++) {
+      const [f, hx, hz] = stages[i];
+      const y1 = -H * 0.5 + H * f;
+      const hy = (y1 - y0) * 0.5;
+      b.box(0, y0 + hy, 0, hx, hy, hz, i % 2 ? stoneB : stone,
+        { taper: 0.995, shade: { side: 1.0, top: 1.08 } });
+      // The cornice that turns a step into a setback.
+      b.box(0, y1 + 0.34, 0, hx + 0.34, 0.34, hz + 0.34, cornice, { shade: { top: 1.22 } });
+      b.box(0, y1 + 0.78, 0, hx + 0.1, 0.1, hz + 0.1, sill, { shade: { top: 1.24 } });
+      // Vertical pilaster strips: the Art Deco read, and what stops a stone box
+      // looking like a crate at 300 m.
+      const strips = Math.max(2, Math.round(hx / 2.4));
+      for (let k = -strips; k <= strips; k += 2) {
+        const x = (k / (strips * 2)) * (hx - 0.5) * 2;
+        b.box(x, y0 + hy, hz + 0.08, 0.26, hy - 0.4, 0.1, sill, { taper: 0.995 });
+        b.box(x, y0 + hy, -hz - 0.08, 0.26, hy - 0.4, 0.1, sill, { taper: 0.995 });
+      }
+      y0 = y1 + 0.88;
+    }
+    // The water tank on the first setback — visible from the street, unlike
+    // everything above it.
+    b.box(6.4, -H * 0.5 + H * 0.30 + 1.4, 5.0, 1.3, 0.5, 1.3, 0x4c443a);
+    for (const [ox, oz] of [[5.3, 3.9], [7.5, 3.9], [5.3, 6.1], [7.5, 6.1]] as const) {
+      b.box(ox, -H * 0.5 + H * 0.30 + 2.2, oz, 0.12, 1.3, 0.12, 0x5a5148);
+    }
+    b.prism(6.4, -H * 0.5 + H * 0.30 + 3.4, 5.0, 1.35, 2.4, 12, 0x7a6247,
+      { shade: { top: 1.1 } });
+    b.prism(6.4, -H * 0.5 + H * 0.30 + 5.8, 5.0, 1.4, 1.0, 12, 0x4f4438, { taper: 0.04 });
+    // Crown: two more steps and a flagstaff.
+    b.box(0, y0 + 0.9, 0, 2.6, 0.9, 2.4, stone, { shade: { top: 1.18 } });
+    b.box(0, y0 + 2.2, 0, 1.6, 0.5, 1.5, cornice, { shade: { top: 1.22 } });
+    b.prism(0, y0 + 2.7, 0, 0.13, 5.0, 6, 0x9aa1a9, { taper: 0.4 });
   }
 
   // =========================================================================
@@ -6327,6 +6549,11 @@ export class Props implements ISubsystem {
           brick: [0xa06450, 0x8f5644, 0xa9a49a, 0xd8cfbe],
           midrise: [0xbfb8ab, 0xa8a79e, 0x6e6a62, 0x8d8b82],
           tokyo: [0x6d7683, 0x5f6875, 0x474e5a, 0x7d868f],
+          // Appended for the two new City Series circuits. Additive only — the
+          // four above are untouched, and the record is keyed by `CityKitId`, so
+          // the compiler is what requires an entry per kit.
+          hongkong: [0xb9bcb4, 0x9fa8a2, 0x5f6660, 0x8b8f88],
+          newyork: [0xb6aa96, 0xa4977f, 0x6f665a, 0x8b7f6a],
         };
         const [shaftA, shaftB, baseC, corniceC] = pal[kit.id];
         b.box(0, H * 0.5, 0, w, H * 0.5, d, rng.next() < 0.5 ? shaftA : shaftB,
@@ -7960,6 +8187,1101 @@ export class Props implements ISubsystem {
         };
       }
 
+      // =====================================================================
+      //  HONG KONG HARBOUR
+      // =====================================================================
+
+      case 'bankofchina': {
+        // ---- the triangulated bank tower -----------------------------------
+        // Four quadrant prisms rising out of one square plan, each terminating
+        // at a different height under a triangular slope, so the silhouette
+        // sheds a quarter of itself three times on the way up. That stepped
+        // asymmetry IS the building; a square tower with a pointy hat is not.
+        //
+        // ACROSS-ROAD half-extent 20.5 m (the granite podium), 20.5 m along.
+        // 188 m to the mast tips, against `harbourSupertall`'s 248 — the two
+        // have to read as different heights or the skyline has no hierarchy.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('curtain');
+        const stone = 0x9ba4aa, wall = 0x6f8b9c, mull = 0xaab4bb;
+        const Q = 7.6;                 // half-extent of ONE quadrant
+        const SH = Q * 2;              // half-extent of the full shaft
+        const PY = 13, S1 = 56, S2 = 94, S3 = 128, S4 = 152, CAP = 170;
+        // Podium: banking hall, out to the lot line, with a granite plinth.
+        b.box(0, 0.7, 0, 20.5, 0.7, 20.5, 0x8d8a82, { shade: { top: 1.1 } });
+        b.box(0, PY * 0.5 + 0.6, 0, 19.4, PY * 0.5, 19.4, stone,
+          { taper: 0.99, shade: { side: 1.0, top: 1.08 } });
+        b.box(0, PY + 1.0, 0, 20.2, 0.5, 20.2, 0x7f868b, { shade: { top: 1.2 } });
+        /** One stage of the shaft: a box between two heights. */
+        const stage = (cx: number, cz: number, hx: number, hz: number,
+          y0: number, y1: number, hex: number): void => {
+          b.box(cx, (y0 + y1) * 0.5, cz, hx, (y1 - y0) * 0.5, hz, hex,
+            { taper: 0.995, shade: { side: 1.0, top: 1.12 } });
+        };
+        stage(0, 0, SH, SH, PY, S1, wall);                    // 4 quadrants
+        stage(0, -Q, SH, Q, S1, S2, wall);                    // 3: (-,-) (+,-) ...
+        stage(-Q, Q, Q, Q, S1, S2, wall);                     //    ...and (-,+)
+        stage(-Q, 0, Q, SH, S2, S3, wall);                    // 2: the -x pair
+        stage(-Q, -Q, Q, Q, S3, S4, wall);                    // 1: the tallest
+        // The triangular slopes that terminate each quadrant. A 3-sided prism
+        // tapered to a point is exactly this form, and its circumradius (10.8)
+        // is the quadrant's own corner distance, so the slope springs off the
+        // quadrant's edges rather than hovering inside them.
+        const slope = (cx: number, cz: number, y0: number, y1: number,
+          yaw: number): void => {
+          b.prism(cx, y0, cz, 10.8, y1 - y0, 3, 0x8fa4b0,
+            { taper: 0.03, yaw, shade: { side: 1.04, top: 1.2 } });
+        };
+        slope(Q, Q, S1, S2, Math.PI * 0.25);
+        slope(Q, -Q, S2, S3, Math.PI * 0.75);
+        slope(-Q, Q, S3, S4, -Math.PI * 0.25);
+        slope(-Q, -Q, S4, CAP, -Math.PI * 0.75);
+        // ---- the space-frame X bracing --------------------------------------
+        // The diagonals are the reason this tower has no interior columns, and
+        // at 200 m they are the only thing that distinguishes it from a glass
+        // box. Two storeys of X per exposed face on the bottom two stages.
+        const brace = (x0: number, y0: number, z0: number,
+          x1: number, y1: number, z1: number): void => {
+          b.tube(x0, y0, z0, x1, y1, z1, 0.44, 4, mull, 1.06);
+        };
+        for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = az, nz = ax;                       // in-face direction
+          const ox = ax * (SH + 0.18), oz = az * (SH + 0.18);
+          for (const [y0, y1] of [[PY, (PY + S1) * 0.5], [(PY + S1) * 0.5, S1]] as const) {
+            brace(ox - nx * SH, y0, oz - nz * SH, ox + nx * SH, y1, oz + nz * SH);
+            brace(ox + nx * SH, y0, oz + nz * SH, ox - nx * SH, y1, oz - nz * SH);
+            b.box(ox, y1, oz, ax ? 0.2 : SH, 0.24, az ? 0.2 : SH, mull);
+          }
+        }
+        for (const [y0, y1] of [[S1, (S1 + S2) * 0.5], [(S1 + S2) * 0.5, S2]] as const) {
+          brace(-SH - 0.18, y0, -Q, -SH - 0.18, y1, Q * 3);
+          brace(-SH - 0.18, y1, -Q, -SH - 0.18, y0, Q * 3);
+        }
+        // Twin masts, the tower's signature pair of antennae.
+        for (const sx of [-1.9, 1.9]) {
+          b.prism(-Q + sx, CAP, -Q, 0.28, 18, 6, 0xb6bec4, { taper: 0.18 });
+        }
+        const glow = this.builder();
+        for (const sx of [-1.9, 1.9]) glow.sphere(-Q + sx, CAP + 18.4, -Q, 0.5, 6, 4, 0xff3b2e);
+        for (const y of [S1, S2, S3, S4]) glow.sphere(-Q, y + 1.2, -Q, 0.42, 6, 4, 0xff5a3a);
+        // Lit floors. Kept to the four faces of the bottom two stages: the panes
+        // above are under 2 px at the distance this thing is authored at.
+        const win = this.builder();
+        let cell = 0;
+        for (let f = 0; f < 16; f++) {
+          const y = PY + 3.4 + f * ((S2 - PY - 6) / 16);
+          const half = y > S1 ? Q : SH;
+          const cz = y > S1 ? -Q : 0;
+          for (let s = 0; s < 4; s++) {
+            const yaw = s * Math.PI * 0.5;
+            const ca = Math.cos(yaw), sa = Math.sin(yaw);
+            for (let i = -2; i <= 2; i++) {
+              win.cell = cell++;
+              const off = i * (half * 0.34);
+              win.plate(ca * off + sa * (half + 0.1) + (y > S1 ? -Q : 0),
+                y, sa * off - ca * (half + 0.1) + cz,
+                half * 0.28, 1.5, yaw + Math.PI, 0xbfe0ff, { single: true });
+            }
+          }
+        }
+        win.cell = 0;
+        return {
+          geo: b.build('bankOfChina'), glow: glow.build('bankOfChinaGlow'),
+          windows: win.build('bankOfChinaWindows'),
+          mat: this.facadeMat('curtain'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'harboursupertall': {
+        // ---- the supertall across the water ---------------------------------
+        // Read the Taipei note in `CityDefs.ts` before moving this: a 248 m
+        // tower needs roughly 290 m of distance before its top re-enters a
+        // 79.75 deg vertical frustum whose eye looks at the horizon, so it is
+        // authored ACROSS THE HARBOUR and not in the infield. Screen fill is the
+        // defect, not the achievement.
+        //
+        // ACROSS-ROAD half-extent 17.5 m (the podium skirt), 17.5 m along.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('curtain');
+        const glassA = 0x6d8ea4, glassB = 0x5b7c92, trim = 0xb2bcc2;
+        const H = 248;
+        // Podium and its sloping glazed skirt.
+        b.box(0, 1.1, 0, 17.5, 1.1, 17.5, 0x7d848a, { shade: { top: 1.12 } });
+        b.box(0, 7.5, 0, 16.2, 5.3, 16.2, glassB, { taper: 0.78, shade: { top: 1.14 } });
+        // Six stages, each stepping in and each with a re-entrant notch at the
+        // corners — the taper is what makes a supertall read as tall rather
+        // than as a tall box.
+        const stages: ReadonlyArray<readonly [number, number]> = [
+          [13, 12.6], [58, 11.3], [104, 10.0], [148, 8.6], [188, 7.1], [220, 5.6],
+        ];
+        for (let i = 0; i < stages.length; i++) {
+          const [y0, hx] = stages[i];
+          const y1 = i + 1 < stages.length ? stages[i + 1][0] : H;
+          const nx = i + 1 < stages.length ? stages[i + 1][1] : 4.2;
+          b.box(0, (y0 + y1) * 0.5, 0, hx, (y1 - y0) * 0.5, hx,
+            i % 2 ? glassB : glassA, { taper: nx / hx, shade: { side: 1.0, top: 1.14 } });
+          // Corner notches: four slim recesses that run the stage's full height.
+          for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+            b.box(sx * hx * 0.82, (y0 + y1) * 0.5, sz * hx * 0.82, hx * 0.13,
+              (y1 - y0) * 0.5, hx * 0.13, trim, { taper: nx / hx, shade: { top: 1.2 } });
+          }
+          // Sky-lobby band at each setback.
+          b.box(0, y1 + 0.42, 0, nx + 0.5, 0.42, nx + 0.5, trim, { shade: { top: 1.22 } });
+        }
+        // The crown: a tapered lantern and a spire.
+        b.box(0, H + 3.2, 0, 4.0, 3.2, 4.0, glassA, { taper: 0.5, shade: { top: 1.24 } });
+        b.prism(0, H + 6.4, 0, 1.5, 9.0, 8, trim, { taper: 0.26 });
+        b.prism(0, H + 15.0, 0, 0.34, 15.0, 6, 0xc6ced4, { taper: 0.14 });
+        // Mullions on the two long faces of the bottom three stages.
+        for (let i = -4; i <= 4; i++) {
+          for (const sz of [1, -1]) {
+            b.box(i * 2.6, 76, sz * 11.6, 0.16, 63, 0.12, 0x7f95a4, { taper: 0.9 });
+          }
+        }
+        const glow = this.builder();
+        for (const y of [60, 106, 150, 190, 222, H + 6]) {
+          glow.sphere(0, y, 0, 0.55, 6, 4, 0xff5a3a);
+        }
+        glow.sphere(0, H + 30.2, 0, 0.7, 7, 5, 0xff3b2e);
+        const win = this.builder();
+        let cell = 0;
+        for (let i = 0; i < stages.length; i++) {
+          const [y0, hx] = stages[i];
+          const y1 = i + 1 < stages.length ? stages[i + 1][0] : H;
+          const floors = Math.max(3, Math.round((y1 - y0) / 11));
+          for (let f = 0; f < floors; f++) {
+            const y = y0 + 3 + f * ((y1 - y0 - 5) / floors);
+            for (let s = 0; s < 4; s++) {
+              const yaw = s * Math.PI * 0.5;
+              const ca = Math.cos(yaw), sa = Math.sin(yaw);
+              for (let k = -1; k <= 1; k++) {
+                win.cell = cell++;
+                const off = k * hx * 0.5;
+                win.plate(ca * off + sa * (hx + 0.12), y, sa * off - ca * (hx + 0.12),
+                  hx * 0.42, 2.0, yaw + Math.PI, 0xc8e4ff, { single: true });
+              }
+            }
+          }
+        }
+        win.cell = 0;
+        return {
+          geo: b.build('harbourSupertall'), glow: glow.build('harbourSupertallGlow'),
+          windows: win.build('harbourSupertallWindows'),
+          mat: this.facadeMat('curtain'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'bambooscaffold': {
+        // ---- the building under renovation ----------------------------------
+        // A 24 m block wrapped head to foot in a LASHED BAMBOO cage with green
+        // safety mesh behind it and a red/white/blue nylon canopy over the
+        // pavement. Nothing else in the game looks like this and it is the one
+        // piece of Hong Kong street furniture that is unmistakably Hong Kong.
+        //
+        // ACROSS-ROAD half-extent 6.9 m (the canopy), 11.4 m along.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('masonry');
+        const H = 24, HX = 11.0, HZ = 6.2;
+        b.box(0, H * 0.5, 0, HX, H * 0.5, HZ, 0x9c9285, { shade: { side: 1.0, top: 1.06 } });
+        b.box(0, H + 0.35, 0, HX + 0.3, 0.35, HZ + 0.3, 0x6f675c, { shade: { top: 1.2 } });
+        // The cage. Verticals every 1.55 m on the two long faces and the ends,
+        // ledgers every 2.05 m, and a diagonal every third bay — that ratio is
+        // what makes a lattice read as scaffolding rather than as a grid.
+        const bamb = 0xc2a86a, bambB = 0xa98f56, lash = 0x2b2b2b;
+        const poleR = 0.055;
+        const faces: ReadonlyArray<readonly [number, number, number, number]> = [
+          [0, HZ + 0.5, 1, 0], [0, -HZ - 0.5, 1, 0],
+          [HX + 0.5, 0, 0, 1], [-HX - 0.5, 0, 0, 1],
+        ];
+        for (const [ox, oz, ux, uz] of faces) {
+          const span = ux ? HX : HZ;
+          const n = Math.max(3, Math.round(span / 1.55));
+          for (let i = -n; i <= n; i++) {
+            const t = (i / n) * span;
+            b.prism(ox + ux * t, 0, oz + uz * t, poleR, H + 1.6, 5,
+              i % 2 ? bamb : bambB, { capBottom: true });
+          }
+          const rungs = Math.round(H / 2.05);
+          for (let r = 1; r <= rungs; r++) {
+            const y = r * (H / rungs);
+            b.tube(ox - ux * span, y, oz - uz * span, ox + ux * span, y, oz + uz * span,
+              poleR, 4, bamb, 1.02);
+            if (r % 3 === 0) {
+              b.tube(ox - ux * span, y - H / rungs, oz - uz * span,
+                ox + ux * span, y, oz + uz * span, poleR * 0.9, 4, bambB, 0.96);
+            }
+            if (r % 4 === 0) b.box(ox, y, oz, 0.09, 0.09, 0.09, lash);
+          }
+        }
+        // Green safety mesh, inboard of the cage.
+        for (const [ox, oz, yaw] of [
+          [0, HZ + 0.32, 0], [0, -HZ - 0.32, Math.PI],
+          [HX + 0.32, 0, Math.PI * 0.5], [-HX - 0.32, 0, -Math.PI * 0.5],
+        ] as ReadonlyArray<readonly [number, number, number]>) {
+          const w = Math.abs(oz) > HZ ? HX * 2 : HZ * 2;
+          b.plate(ox, H * 0.5 + 0.8, oz, w, H - 1.0, yaw, 0x5c7d4a, { single: true });
+        }
+        // The nylon canopy over the pavement, on its own bamboo legs so it has
+        // something under it. Red / white / blue, in that order, always.
+        const stripes = [0xc4302a, 0xe8e6df, 0x24478c];
+        for (let i = 0; i < 6; i++) {
+          b.quad(
+            -HX + i * (HX * 2 / 6), 4.3, HZ + 0.9,
+            -HX + (i + 1) * (HX * 2 / 6), 4.3, HZ + 0.9,
+            -HX + (i + 1) * (HX * 2 / 6), 3.55, HZ + 6.2,
+            -HX + i * (HX * 2 / 6), 3.55, HZ + 6.2,
+            stripes[i % 3], 1.14,
+          );
+        }
+        for (const sx of [-1, 1]) {
+          b.prism(sx * (HX - 0.6), 0, HZ + 6.0, 0.075, 3.6, 5, bamb, { capBottom: true });
+        }
+        const glow = this.builder();
+        const litChance = 0.14 + 0.5 * this.night;
+        for (let f = 0; f < 7; f++) {
+          for (let i = -2; i <= 2; i++) {
+            const col = rng.next() < litChance ? 0xffdca8 : 0x171a1f;
+            glow.plate(i * 4.2, 3.2 + f * 3.0, HZ + 0.08, 2.0, 1.6, 0, col, { single: true });
+          }
+        }
+        // A single work lamp on the cage, which is what says "under renovation"
+        // at night rather than "abandoned".
+        glow.sphere(HX * 0.4, 15.6, HZ + 0.7, 0.24, 7, 4, 0xfff0c0);
+        return {
+          geo: b.build('bambooScaffold'), glow: glow.build('bambooScaffoldGlow'),
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'neoncantilever': {
+        // ---- the cantilevered shop sign -------------------------------------
+        // The one thing everybody pictures: a lit box projecting out OVER the
+        // street on a bracket, in a row of them, from both sides at once.
+        //
+        // Local +Z faces the road (convention 1), so the projection runs along
+        // +Z and the ACROSS-ROAD half-extent is what decides the `lat`: 5.0 m,
+        // measured from the face of the pier at z = 0 to the outer edge of the
+        // hanging board. Authored at lat 20 on an 8.5 m half-width road that is
+        // 12.05 m of corridor, the outer edge still stands 3.0 m clear of the
+        // shoulder — the sign leans over the PAVEMENT, not over the tarmac.
+        //
+        // It carries its own masonry pier down to the ground. A sign bracketed
+        // off the `building` wall style would have nothing under it, and
+        // `.probe-tmp/floating.ts` has no exclusion list.
+        const b = this.builder();
+        b.uvScale = 0.9;
+        const pier = 0x5f5851, frame = 0x24262b, steel = 0x8c9298;
+        const HGT = 6.8 + rng.range(0, 2.6);
+        b.box(0, HGT * 0.5, -0.55, 1.15, HGT * 0.5, 0.55, pier,
+          { taper: 0.97, shade: { side: 1.0, top: 1.1 } });
+        b.box(0, 0.3, -0.55, 1.35, 0.3, 0.72, 0x4a453f, { shade: { top: 1.12 } });
+        // Bracket: a top chord and a diagonal strut, which is how the load
+        // actually gets back into the wall.
+        b.box(0, HGT - 0.35, 1.9, 0.2, 0.2, 2.5, steel);
+        b.tube(0, HGT - 2.6, -0.1, 0, HGT - 0.5, 3.9, 0.11, 5, steel, 1.05);
+        // The box sign itself: a carcass hung under the bracket, plus a vertical
+        // blade board on its outer end.
+        b.box(0, HGT - 1.55, 2.5, 1.5, 1.0, 1.05, frame, { shade: { top: 1.08 } });
+        b.box(0, HGT - 2.9, 3.9, 0.62, 1.5, 0.5, frame, { shade: { top: 1.08 } });
+        b.box(0, HGT - 0.12, 2.5, 1.62, 0.12, 1.15, steel, { shade: { top: 1.18 } });
+        const glow = this.builder();
+        const cols = [0xff2e5a, 0x2ef0ff, 0xffd23a, 0x39ff88, 0xff7ad0, 0xfff0c0];
+        const c0 = cols[rng.int(0, cols.length - 1)];
+        const c1 = cols[rng.int(0, cols.length - 1)];
+        glow.cell = 0;
+        // Both long faces of the box, so the sign reads coming and going, plus
+        // the underside — which is the face a kart actually drives beneath.
+        for (const [sz, yaw] of [[1.08, 0], [-1.08, Math.PI]] as const) {
+          glow.plate(0, HGT - 1.55, 2.5 + sz, 1.34, 0.82, yaw, c0, { single: true });
+        }
+        glow.cell = 1;
+        for (const [sx, yaw] of [[0.53, Math.PI * 0.5], [-0.53, -Math.PI * 0.5]] as const) {
+          glow.plate(sx, HGT - 2.9, 3.9, 0.9, 1.3, yaw, c1, { single: true });
+        }
+        glow.cell = 2;
+        glow.box(0, HGT - 2.6, 2.5, 1.3, 0.05, 0.9, c0);
+        // A hot tube along the leading edge: the sign still reads end-on down
+        // the length of the street, which is how you mostly see it.
+        glow.box(0, HGT - 1.55, 3.58, 1.4, 0.9, 0.05, c1);
+        glow.cell = 0;
+        return {
+          geo: b.build('neonCantilever'), glow: glow.build('neonCantileverGlow'),
+          cull: 380,
+        };
+      }
+
+      case 'junk': {
+        // ---- the red-sailed junk --------------------------------------------
+        // Battened lug sails, a high transom stern and a low bow. The BATTENS
+        // are the read — a junk sail is a fan of horizontal spars, not a
+        // triangle — so they are built into the cloth pass and move with it.
+        //
+        // ACROSS-ROAD half-extent 2.4 m (the beam), 14.2 m along.
+        const b = this.builder();
+        b.uvScale = 1.0;
+        const hull = 0x6d4a2c, hullB = 0x54371f, deck = 0x8a6a42, trim = 0xb03024;
+        // Hull: three tapering sections so the sheer line rises aft.
+        b.box(0, 0.85, 0, 5.6, 0.85, 2.15, hull, { taper: 0.9, shade: { top: 1.06 } });
+        b.box(-6.6, 1.0, 0, 1.3, 0.7, 1.5, hull, { taper: 0.6, shade: { top: 1.08 } });
+        b.box(5.9, 1.55, 0, 1.3, 1.55, 2.0, hullB, { taper: 0.86, shade: { top: 1.1 } });
+        b.box(0, 1.75, 0, 5.5, 0.12, 2.05, deck, { shade: { top: 1.2 } });
+        b.box(5.9, 3.2, 0, 1.2, 0.2, 1.85, deck, { shade: { top: 1.22 } });
+        // Waterline boot-top and a rubbing strake, so the hull is not one colour.
+        b.box(0, 0.28, 0, 5.7, 0.16, 2.22, 0x2f2b26);
+        b.box(0, 1.55, 0, 5.62, 0.1, 2.14, trim);
+        // Deckhouse and a tiller.
+        b.box(3.1, 2.35, 0, 1.5, 0.6, 1.5, 0x7d5c38, { shade: { top: 1.14 } });
+        b.box(3.1, 3.0, 0, 1.65, 0.08, 1.65, 0x3e332a, { shade: { top: 1.2 } });
+        // Two raked masts and their yards.
+        const mast = (mx: number, h: number): void => {
+          b.tube(mx, 1.8, 0, mx - h * 0.11, 1.8 + h, 0, 0.15, 6, 0x4e3a26, 1.04);
+        };
+        mast(-1.2, 11.4);
+        mast(4.4, 7.6);
+        // Rigging: a forestay and two shrouds per mast, all landing on the deck.
+        for (const [mx, h] of [[-1.2, 11.4], [4.4, 7.6]] as const) {
+          b.tube(mx - h * 0.11, 1.8 + h, 0, mx - 4.6, 1.85, 0, 0.045, 4, 0x2f2a24);
+          for (const sz of [-1, 1]) {
+            b.tube(mx - h * 0.11, 1.8 + h, 0, mx, 1.85, sz * 1.9, 0.04, 4, 0x2f2a24);
+          }
+        }
+        const cloth = this.builder();
+        // Oxide red, and the battens a shade darker so the fan reads at 120 m.
+        const sailA = 0x9c3a22, batten = 0x5c2213;
+        const sail = (mx: number, h: number, w: number, hh: number): void => {
+          cloth.mastCloth(mx, 1.8 + h - 0.7, 0, w, hh, 0, sailA, 6, 5, undefined,
+            { double: true, bow: 0.5, wave: 0.16 });
+          const n = 5;
+          for (let i = 0; i <= n; i++) {
+            const y = 1.8 + h - 0.7 - (i / n) * hh;
+            cloth.flap = 0.35;
+            cloth.box(mx + w * 0.5, y, 0, w * 0.5, 0.055, 0.075, batten);
+            cloth.flap = 0;
+          }
+        };
+        sail(-1.2, 11.4, 6.4, 8.2);
+        sail(4.4, 7.6, 4.2, 5.4);
+        const glow = this.builder();
+        glow.sphere(-6.5, 2.1, 0, 0.16, 6, 4, 0xffd08a);
+        glow.sphere(5.9, 3.6, 0, 0.16, 6, 4, 0xffd08a);
+        return {
+          geo: b.build('junk'), cloth: cloth.build('junkSails'),
+          glow: glow.build('junkLamps'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'tramhk': {
+        // ---- the double-deck tram -------------------------------------------
+        // Narrow, tall and flat-fronted, with an open upper deck and a full-height
+        // advertising livery — the proportions are the whole identity, so the body
+        // is 2.05 m wide against 4.85 m tall.
+        //
+        // It carries 14 m of its own rail and a trolley standard, so it is
+        // standing on something. ACROSS-ROAD half-extent 2.15 m, 7.0 m along.
+        const b = this.builder();
+        b.uvScale = 1.1;
+        const livery = rng.next() < 0.5 ? 0x1f7a4a : 0xc4302a;
+        const cream = 0xe8e2d2, dark = 0x2b2f35;
+        // Rails and sleepers first: the ground contact.
+        for (const sz of [-0.72, 0.72]) {
+          b.box(0, 0.055, sz, 7.0, 0.055, 0.075, 0x6b6560, { shade: { top: 1.2 } });
+        }
+        for (let i = -4; i <= 4; i++) {
+          b.box(i * 1.6, 0.02, 0, 0.16, 0.02, 1.15, 0x4a443e);
+        }
+        // Trucks, lower saloon, upper deck, curved roof.
+        b.box(0, 0.42, 0, 2.9, 0.26, 0.85, dark);
+        b.box(0, 1.5, 0, 3.15, 0.9, 1.02, livery, { taper: 0.98, shade: { top: 1.06 } });
+        b.box(0, 2.45, 0, 3.2, 0.15, 1.05, cream, { shade: { top: 1.16 } });
+        b.box(0, 3.35, 0, 3.15, 0.85, 1.0, livery, { taper: 0.97, shade: { top: 1.06 } });
+        b.box(0, 4.32, 0, 3.05, 0.2, 0.98, cream, { taper: 0.9, shade: { top: 1.22 } });
+        // Upper-deck rail, so the top is not a solid brick.
+        for (const sz of [-1, 1]) {
+          b.box(0, 3.9, sz * 1.02, 3.1, 0.06, 0.05, cream);
+          b.box(0, 3.05, sz * 1.02, 3.1, 0.06, 0.05, cream);
+        }
+        // Destination board, fenders and the trolley standard.
+        b.box(0, 4.05, -1.03, 1.1, 0.28, 0.06, dark);
+        for (const sx of [-1, 1]) b.box(sx * 3.2, 0.75, 0, 0.1, 0.5, 0.95, dark);
+        b.prism(0.6, 4.5, 0, 0.06, 1.5, 5, 0x9aa1a9);
+        b.tube(0.6, 6.0, 0, -1.9, 6.9, 0, 0.045, 4, 0x9aa1a9);
+        const win = this.builder();
+        let wc = 0;
+        for (const y of [1.62, 3.45]) {
+          for (const sz of [1, -1]) {
+            for (let i = -2; i <= 2; i++) {
+              win.cell = wc++;
+              win.plate(i * 1.18, y, sz * 1.06, 0.95, 0.8, sz > 0 ? 0 : Math.PI,
+                0xffe9c0, { single: true });
+            }
+          }
+        }
+        win.cell = 0;
+        const glow = this.builder();
+        glow.box(0, 1.15, -1.06, 0.5, 0.12, 0.05, 0xfff2d0);
+        glow.box(0, 1.15, 1.06, 0.5, 0.12, 0.05, 0xd6402f);
+        glow.plate(0, 4.05, -1.1, 1.0, 0.2, Math.PI, 0xffd23a, { single: true });
+        return {
+          geo: b.build('tramHK'), windows: win.build('tramHKWindows'),
+          glow: glow.build('tramHKGlow'), cull: 460,
+        };
+      }
+
+      case 'lionrock': {
+        // ---- the ridge on the skyline ---------------------------------------
+        // Three layered ridges at different depths, heights and hues, so the
+        // horizon has aerial perspective instead of one cardboard cut-out; the
+        // nearest carries the blocky crag the mountain is named for.
+        //
+        // NOT a cone. The owner's complaint about Taipei was "strange pyramid
+        // structures in the background", and a low-poly cone at 400 m is exactly
+        // that. This is a swept ridgeline with a jagged crest.
+        //
+        // ACROSS-ROAD half-extent 74 m; authored at |lat| >= 560 on an UNBANKED
+        // node, because a lateral offset that size on a banked binormal buys
+        // spurious altitude (see the `lat` note in `CityDefs.ts`).
+        const b = this.builder();
+        b.uvScale = 0.24;
+        /** One ridge: a crest polyline swept back to a depth, closed to y=0. */
+        const ridge = (
+          span: number, depth: number, peak: number, base: number,
+          hexTop: number, hexSide: number, phase: number,
+        ): void => {
+          const N = 15;
+          const h = (i: number): number => {
+            const f = i / N;
+            const bell = Math.sin(Math.PI * f) ** 0.8;
+            const jag = 0.82 + 0.18 * Math.sin(f * 11.3 + phase)
+              + 0.09 * Math.sin(f * 27.1 + phase * 2.3);
+            return base + (peak - base) * bell * jag;
+          };
+          for (let i = 0; i < N; i++) {
+            const x0 = -span + (i / N) * span * 2;
+            const x1 = -span + ((i + 1) / N) * span * 2;
+            const y0 = h(i), y1 = h(i + 1);
+            // front face
+            b.quad(x0, 0, depth * 0.5, x1, 0, depth * 0.5, x1, y1, depth * 0.5,
+              x0, y0, depth * 0.5, hexSide, 1.0);
+            // crest, tipped back
+            b.quad(x0, y0, depth * 0.5, x1, y1, depth * 0.5,
+              x1, y1 * 0.86, -depth * 0.5, x0, y0 * 0.86, -depth * 0.5, hexTop, 1.16);
+            // back face
+            b.quad(x0, y0 * 0.86, -depth * 0.5, x1, y1 * 0.86, -depth * 0.5,
+              x1, 0, -depth * 0.5, x0, 0, -depth * 0.5, hexSide, 0.72);
+          }
+        };
+        ridge(74, 26, 132, 34, 0x6b7a68, 0x4e5a4e, 0.0);
+        ridge(96, 20, 96, 22, 0x5f6e6a, 0x46524f, 2.1);
+        ridge(120, 16, 68, 12, 0x55635f, 0x3d4845, 4.4);
+        // The crag: a blocky head at the crest of the near ridge.
+        const cragX = 22, cragY = 118;
+        b.box(cragX, cragY + 9, 4, 7.5, 9, 7.0, 0x7b7f72,
+          { taper: 0.78, shade: { side: 1.05, top: 1.2 } });
+        b.box(cragX + 6.5, cragY + 13, 4, 4.0, 4.6, 5.4, 0x83877a,
+          { taper: 0.7, shade: { top: 1.22 } });
+        b.box(cragX - 5.0, cragY + 15.5, 3, 3.4, 3.4, 4.6, 0x6f7368,
+          { taper: 0.62, shade: { top: 1.18 } });
+        b.prism(cragX + 1.5, cragY + 18, 2.5, 3.6, 6.5, 5,
+          0x878b7e, { taper: 0.32, shade: { top: 1.24 } });
+        return { geo: b.build('lionRock'), cull: 3200, shadow: false };
+      }
+
+      case 'harbourwater': {
+        // ---- the harbour surface, as a PROP ---------------------------------
+        // `waterLevel` cannot do this job on a `city` circuit and that was
+        // measured, not assumed — see the long note on `bostonHarbor.waterLevel`
+        // in `CityDefs.ts`: the theme scales the terrain field by 0.42 and the
+        // road corridor sinks below every level that would still read as water,
+        // so a global plane either covers 0.1 % of the map or floods the verge.
+        //
+        // A prop can do it, because a prop is seated on the heightfield at ONE
+        // point and carries its own skirt. This is a 300 x 210 m facetted
+        // surface on the `metal` material — roughness 0.34, metalness 0.85, so
+        // it takes the sky and the city glow as a reflection rather than being
+        // painted blue — with a 7 m apron all round that buries the seam.
+        //
+        // ACROSS-ROAD half-extent 105 m. Authored well out on the harbour side.
+        const b = this.builder();
+        b.uvScale = 0.06;
+        b.jitter = 0.06;
+        const SX = 150, SZ = 105, NX = 20, NZ = 14;
+        const deep = 0x14303e, shallow = 0x1c4657;
+        const wy = (x: number, z: number): number =>
+          0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
+        for (let i = 0; i < NX; i++) {
+          for (let j = 0; j < NZ; j++) {
+            const x0 = -SX + (i / NX) * SX * 2, x1 = -SX + ((i + 1) / NX) * SX * 2;
+            const z0 = -SZ + (j / NZ) * SZ * 2, z1 = -SZ + ((j + 1) / NZ) * SZ * 2;
+            const hex = (i + j) % 3 === 0 ? shallow : deep;
+            b.quad(
+              x0, wy(x0, z0), z0, x1, wy(x1, z0), z0,
+              x1, wy(x1, z1), z1, x0, wy(x0, z1), z1,
+              hex, 1.0 + 0.06 * Math.sin(i * 1.7 + j * 2.3),
+            );
+          }
+        }
+        // The apron. Walks down 7 m all the way round, so wherever the ground
+        // rises to meet it the seam is under the water rather than a hole in it.
+        const apron = 0x22262a;
+        for (const [ax, az, ux, uz] of [
+          [0, SZ, 1, 0], [0, -SZ, 1, 0], [SX, 0, 0, 1], [-SX, 0, 0, 1],
+        ] as ReadonlyArray<readonly [number, number, number, number]>) {
+          const span = ux ? SX : SZ;
+          const outX = ux ? 0 : Math.sign(ax);
+          const outZ = uz ? 0 : Math.sign(az);
+          b.quad(
+            ax - ux * span, 0, az - uz * span,
+            ax + ux * span, 0, az + uz * span,
+            ax + ux * span + outX * 0.6, -7, az + uz * span + outZ * 0.6,
+            ax - ux * span + outX * 0.6, -7, az - uz * span + outZ * 0.6,
+            apron, 0.7,
+          );
+        }
+        return { geo: b.build('harbourWater'), mat: this.metal, cull: 2400, shadow: false };
+      }
+
+      case 'flaghk': return this.flagMast(FLAG_HK);
+
+      // =====================================================================
+      //  NEW YORK CIRCUIT
+      // =====================================================================
+
+      case 'brooklyntower': {
+        // ---- the suspension bridge's masonry tower ---------------------------
+        // Granite, with TWO POINTED ARCHES side by side — one over each half of
+        // the carriageway. That pair of gothic openings is the entire identity
+        // of this bridge; a single arch is a viaduct and a square hole is a
+        // gatehouse.
+        //
+        // WIDTH, and it is the same argument `bridgearch` makes: authored at
+        // lat 0, so local +-X runs ACROSS the deck. The bridge section is
+        // hw 11 + kerb 1.55 + shoulder 1.2 = 13.75 m of corridor, so nothing may
+        // come inside 14.2 m of the centreline below the arch springing. The
+        // outer piers stand at |x| >= 14.9 and the springing is at 12.0 m, so the
+        // opening is the full width of the carriageway with 12 m of headroom.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('masonry');
+        const { pierW, gap, spring, crown, shoulderY, top } = BROOKLYN;
+        const gran = 0xa89e8c, granB = 0x968b79, cap = 0x7d7466;
+        for (const sx of [-1, 1]) {
+          // The pier, and the skirt that reaches for the ground beneath the
+          // deck. Same convention as `bridgearch`'s `pier`: the anchor IS the
+          // carriageway, so anything that meets the ground hangs from it.
+          b.box(sx * (gap + pierW), BROOKLYN.skirt * 0.5, 0, pierW, -BROOKLYN.skirt * 0.5,
+            4.6, granB, { taper: 1.14, shade: { top: 1.04 } });
+          b.box(sx * (gap + pierW), spring * 0.5, 0, pierW, spring * 0.5, 4.2, gran,
+            { taper: 0.985, shade: { side: 1.0, top: 1.08 } });
+        }
+        // ---- the two pointed arches -----------------------------------------
+        // Corbelled: nine voussoir courses per jamb, each stepping in and up, so
+        // the two faces of an opening meet in a point. Cheap, and it is the only
+        // way to get a gothic head out of axis-aligned masonry.
+        const COURSES = 9;
+        {
+          const inner = BROOKLYN.centreW, outer = gap;
+          const halfSpan = (outer - inner) * 0.5;
+          const mid = (inner + outer) * 0.5;
+          const hgt = (crown - spring) / COURSES * 0.5;
+          for (let i = 0; i < COURSES; i++) {
+            const f = (i + 1) / COURSES;
+            const y = spring + (crown - spring) * f;
+            // The opening narrows from BOTH jambs as f^2, so the two curves meet
+            // in a point at the crown instead of closing as a semicircle.
+            const grown = halfSpan * f * f;
+            for (const sx of [-1, 1]) {
+              for (const s2 of [-1, 1]) {
+                b.box(sx * (mid + s2 * (halfSpan - grown * 0.5)), y - hgt, 0,
+                  grown * 0.5 + 0.34, hgt, 4.05,
+                  i % 2 ? gran : granB, { shade: { top: 1.1 } });
+              }
+            }
+          }
+        }
+        // The centre pier is CORBELLED OFF above the traffic envelope and does
+        // not reach the deck. On the real bridge it lands between the two
+        // carriageways; here that would be a 4.8 m wall on the centreline of a
+        // racing circuit, which is an obstacle, not a landmark. It starts at
+        // `pendant` — 9.4 m of clear air over the crown of the road, against a
+        // kart 1.1 m tall — and terminates in a moulded boss, so the two arches
+        // still read as two arches from every approach.
+        b.box(0, (BROOKLYN.pendant + shoulderY) * 0.5, 0, BROOKLYN.centreW,
+          (shoulderY - BROOKLYN.pendant) * 0.5, 4.0, gran,
+          { taper: 0.99, shade: { top: 1.08 } });
+        b.box(0, BROOKLYN.pendant - 0.45, 0, BROOKLYN.centreW * 0.82, 0.45, 3.3, cap,
+          { taper: 0.62, shade: { top: 1.12 } });
+        // Spandrel wall over the arches, then the tower proper.
+        b.box(0, (crown + shoulderY) * 0.5, 0, gap + pierW * 2, (shoulderY - crown) * 0.5, 4.2,
+          gran, { shade: { top: 1.06 } });
+        b.box(0, shoulderY + 0.5, 0, gap + pierW * 2 + 0.5, 0.5, 4.7, cap,
+          { shade: { top: 1.2 } });
+        b.box(0, (shoulderY + top) * 0.5 + 1.0, 0, gap + pierW * 2 - 1.2,
+          (top - shoulderY) * 0.5, 3.7, granB, { taper: 0.94, shade: { top: 1.08 } });
+        // Saddle housings: the two boxes the main cables actually pass over, and
+        // the reason the cable geometry below has somewhere to die into.
+        for (const sx of [-1, 1]) {
+          b.box(sx * BROOKLYN.cableX, top + 1.1, 0, 1.5, 1.1, 2.4, cap,
+            { shade: { top: 1.22 } });
+        }
+        b.box(0, top + 0.6, 0, gap + pierW * 2 - 1.9, 0.6, 3.4, cap, { shade: { top: 1.22 } });
+        // A string course and blind panels so 30 m of granite is not one flat.
+        for (const y of [spring * 0.4, spring * 0.75, crown + 2.0]) {
+          b.box(0, y, 4.35, gap + pierW * 2, 0.28, 0.16, cap, { shade: { top: 1.16 } });
+          b.box(0, y, -4.35, gap + pierW * 2, 0.28, 0.16, cap, { shade: { top: 1.16 } });
+        }
+        const glow = this.builder();
+        glow.sphere(0, top + 2.6, 0, 0.34, 6, 4, 0xff5a3a);
+        for (const sx of [-1, 1]) {
+          glow.box(sx * (gap + pierW * 0.4), crown - 1.4, 4.3, 0.34, 0.12, 0.1, 0xfff0c8);
+        }
+        return {
+          geo: b.build('brooklynTower'),
+          metalPerAnchor: (a) => this.brooklynCables(a),
+          glow: glow.build('brooklynTowerGlow'),
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'empirespire': {
+        // ---- the setback spire ----------------------------------------------
+        // Five-storey base out to the lot line, four symmetric setbacks, then a
+        // slender shaft with continuous limestone piers and nickel spandrels,
+        // finishing in a tiered crown and a mooring mast.
+        // ACROSS-ROAD half-extent 15.5 m (the base), 15.5 m along. 190 m tall.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('masonry');
+        const stone = 0xc0b49c, stoneB = 0xb0a48c, nickel = 0x9aa2a6, capC = 0x8d8271;
+        const steps: ReadonlyArray<readonly [number, number, number]> = [
+          [0, 22, 15.5], [22, 40, 12.6], [40, 56, 10.4], [56, 70, 8.6], [70, 138, 6.9],
+        ];
+        for (let i = 0; i < steps.length; i++) {
+          const [y0, y1, hx] = steps[i];
+          b.box(0, (y0 + y1) * 0.5, 0, hx, (y1 - y0) * 0.5, hx * 0.72,
+            i % 2 ? stoneB : stone, { taper: 0.995, shade: { side: 1.0, top: 1.08 } });
+          b.box(0, y1 + 0.4, 0, hx + 0.4, 0.4, hx * 0.72 + 0.4, capC, { shade: { top: 1.22 } });
+          // Limestone piers: a vertical rhythm on all four faces. This is the
+          // building's whole surface treatment and it must not be flat stone.
+          const n = Math.max(3, Math.round(hx / 2.1));
+          for (let k = -n; k <= n; k++) {
+            const t = (k / n) * (hx - 0.4);
+            b.box(t, (y0 + y1) * 0.5, hx * 0.72 + 0.12, 0.3, (y1 - y0) * 0.5 - 0.3, 0.16,
+              nickel, { taper: 0.995 });
+            b.box(t, (y0 + y1) * 0.5, -hx * 0.72 - 0.12, 0.3, (y1 - y0) * 0.5 - 0.3, 0.16,
+              nickel, { taper: 0.995 });
+          }
+        }
+        // The crown: five diminishing tiers, then the mast.
+        let cy = 138.8;
+        for (let i = 0; i < 5; i++) {
+          const hx = 6.0 - i * 0.95;
+          b.box(0, cy + 3.2, 0, hx, 3.2, hx * 0.78, i % 2 ? stoneB : stone,
+            { taper: 0.93, shade: { top: 1.14 } });
+          b.box(0, cy + 6.6, 0, hx * 0.96, 0.28, hx * 0.78 * 0.96, nickel,
+            { shade: { top: 1.24 } });
+          cy += 6.9;
+        }
+        b.prism(0, cy, 0, 2.3, 16.0, 12, nickel, { taper: 0.42, shade: { top: 1.2 } });
+        // Mooring-mast fins, four of them, which is what stops the spire being
+        // a plain cone.
+        for (let s = 0; s < 4; s++) {
+          const yaw = s * Math.PI * 0.5 + Math.PI * 0.25;
+          b.box(Math.cos(yaw) * 1.6, cy + 5.0, Math.sin(yaw) * 1.6, 0.5, 5.0, 0.5,
+            0x8f979b, { taper: 0.3, yaw });
+        }
+        b.prism(0, cy + 16, 0, 0.3, 20.0, 6, 0xb6bec4, { taper: 0.2 });
+        const glow = this.builder();
+        glow.sphere(0, cy + 36.4, 0, 0.6, 7, 5, 0xff3b2e);
+        for (const y of [76, 110, 140]) glow.sphere(0, y, 7.2, 0.34, 6, 4, 0xff5a3a);
+        // The floodlit crown: the one thing this building is famous for after
+        // dark, and a warm wash on the tiers by day costs nothing.
+        for (let i = 0; i < 5; i++) {
+          for (let s = 0; s < 4; s++) {
+            const yaw = s * Math.PI * 0.5;
+            const hx = 6.0 - i * 0.95;
+            glow.cell = i * 4 + s;
+            glow.plate(Math.sin(yaw) * (hx * 0.8), 139.6 + i * 6.9, -Math.cos(yaw) * (hx * 0.8),
+              hx * 1.3, 0.55, yaw + Math.PI, 0xfff0c8, { single: true });
+          }
+        }
+        glow.cell = 0;
+        const win = this.builder();
+        let wc = 0;
+        for (let i = 0; i < steps.length; i++) {
+          const [y0, y1, hx] = steps[i];
+          const floors = Math.max(3, Math.round((y1 - y0) / 8.5));
+          for (let f = 0; f < floors; f++) {
+            const y = y0 + 3.4 + f * ((y1 - y0 - 5) / floors);
+            for (const [px, pz, yaw] of [
+              [0, hx * 0.72 + 0.2, 0], [0, -hx * 0.72 - 0.2, Math.PI],
+              [hx + 0.2, 0, Math.PI * 0.5], [-hx - 0.2, 0, -Math.PI * 0.5],
+            ] as ReadonlyArray<readonly [number, number, number]>) {
+              for (let k = -1; k <= 1; k++) {
+                win.cell = wc++;
+                const along = k * hx * 0.5;
+                win.plate(px + Math.cos(yaw) * along, y, pz + Math.sin(yaw) * along,
+                  hx * 0.4, 1.7, yaw, 0xd8e8ff, { single: true });
+              }
+            }
+          }
+        }
+        win.cell = 0;
+        return {
+          geo: b.build('empireSpire'), glow: glow.build('empireSpireGlow'),
+          windows: win.build('empireSpireWindows'),
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'chryslercrown': {
+        // ---- the stepped steel crown ----------------------------------------
+        // Seven diminishing shells, each with radial fins and triangular window
+        // slots, on the METAL pass so the crown reflects the sky — this is the
+        // one landmark on the daylight circuit whose whole point is that it is
+        // polished stainless steel and not stone.
+        // ACROSS-ROAD half-extent 12.4 m, 12.4 m along. 176 m to the needle tip.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('masonry');
+        const brick = 0xa89a86, band = 0x8a7f6d, trimC = 0xb8bec2;
+        const SHAFT = 128;
+        b.box(0, 9, 0, 12.4, 9, 12.4, 0x8f8474, { shade: { side: 1.0, top: 1.06 } });
+        b.box(0, 18.5, 0, 12.6, 0.5, 12.6, band, { shade: { top: 1.2 } });
+        b.box(0, (19 + 74) * 0.5, 0, 11.2, (74 - 19) * 0.5, 11.2, brick,
+          { taper: 0.995, shade: { side: 1.0, top: 1.08 } });
+        b.box(0, 74.5, 0, 11.5, 0.5, 11.5, band, { shade: { top: 1.2 } });
+        b.box(0, (75 + SHAFT) * 0.5, 0, 8.6, (SHAFT - 75) * 0.5, 8.6, brick,
+          { taper: 0.99, shade: { side: 1.0, top: 1.08 } });
+        // Corner eagles, stylised: a bracket and a wedge at the second setback.
+        for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+          b.box(sx * 11.0, 75.4, sz * 11.0, 1.0, 0.5, 1.0, trimC, { shade: { top: 1.24 } });
+          b.box(sx * 11.9, 76.4, sz * 11.9, 0.9, 0.55, 0.9, trimC,
+            { taper: 0.2, yaw: Math.PI * 0.25, shade: { top: 1.26 } });
+        }
+        // Vertical brick piers on the shaft.
+        for (let k = -3; k <= 3; k++) {
+          for (const [dx, dz] of [[0, 1], [0, -1], [1, 0], [-1, 0]] as const) {
+            b.box(dz * k * 2.4 + dx * 8.72, (75 + SHAFT) * 0.5, dx * k * 2.4 + dz * 8.72,
+              dx ? 0.14 : 0.28, (SHAFT - 75) * 0.5 - 0.5, dz ? 0.14 : 0.28,
+              band, { taper: 0.99 });
+          }
+        }
+        const met = this.builder();
+        met.uvScale = 0.5;
+        // The crown. Each shell is a shallow tapered drum; the radii fall on a
+        // curve rather than linearly, which is what gives the stack its parabola.
+        const SHELLS = 7;
+        let sy = SHAFT;
+        for (let i = 0; i < SHELLS; i++) {
+          const f = i / (SHELLS - 1);
+          const r = 8.4 * Math.sqrt(Math.max(0.06, 1 - f * f * 0.96));
+          const rTop = 8.4 * Math.sqrt(Math.max(0.05, 1 - ((i + 1) / (SHELLS - 1)) ** 2 * 0.96));
+          const h = 5.4 - f * 1.4;
+          met.prism(0, sy, 0, r, h, 14, i % 2 ? 0xd2d8dc : 0xbcc4ca,
+            { taper: rTop / r, shade: { side: 1.05, top: 1.24 } });
+          // Radial fins on the shell face — the sunburst.
+          for (let k = 0; k < 14; k++) {
+            const a = (k / 14) * Math.PI * 2;
+            met.box(Math.cos(a) * r * 0.99, sy + h * 0.5, Math.sin(a) * r * 0.99,
+              0.12, h * 0.5, 0.12, 0xe4eaee, { yaw: a, taper: rTop / r });
+          }
+          // Triangular window slots, three per shell, alternating faces.
+          for (let k = 0; k < 3; k++) {
+            const a = (k / 3) * Math.PI * 2 + i * 0.4;
+            met.prism(Math.cos(a) * r * 0.96, sy + h * 0.25, Math.sin(a) * r * 0.96,
+              0.9, h * 0.5, 3, 0x2c3238, { taper: 0.06, yaw: a });
+          }
+          sy += h;
+        }
+        met.prism(0, sy, 0, 1.1, 8.0, 8, 0xd2d8dc, { taper: 0.22 });
+        met.prism(0, sy + 8, 0, 0.26, 26.0, 6, 0xe4eaee, { taper: 0.1 });
+        const glow = this.builder();
+        glow.sphere(0, sy + 34.4, 0, 0.5, 6, 4, 0xff3b2e);
+        const win = this.builder();
+        let wc = 0;
+        for (let f = 0; f < 22; f++) {
+          const y = 10 + f * ((SHAFT - 18) / 22);
+          const hx = y > 74 ? 8.6 : (y > 18.5 ? 11.2 : 12.4);
+          for (let s = 0; s < 4; s++) {
+            const yaw = s * Math.PI * 0.5;
+            const ca = Math.cos(yaw), sa = Math.sin(yaw);
+            for (let k = -1; k <= 1; k++) {
+              win.cell = wc++;
+              const off = k * hx * 0.52;
+              win.plate(ca * off + sa * (hx + 0.14), y, sa * off - ca * (hx + 0.14),
+                hx * 0.36, 1.8, yaw + Math.PI, 0xd8e8ff, { single: true });
+            }
+          }
+        }
+        win.cell = 0;
+        return {
+          geo: b.build('chryslerCrown'), metal: met.build('chryslerCrownSteel'),
+          glow: glow.build('chryslerCrownGlow'), windows: win.build('chryslerCrownWindows'),
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'watertankrow': {
+        // ---- the tenement row, with the tanks on the roof --------------------
+        // Two walk-ups as one prop, so a run of them at a matched step becomes a
+        // continuous street wall for one draw call — the same trick
+        // `brownstoneRow` uses, and the step in `CityDefs` matches the length.
+        //
+        // The ROOF TANK is the point: a cedar cylinder on a steel stand, which is
+        // the single most New York silhouette above the second floor. It is on
+        // this recipe rather than free-standing precisely so it has a roof under
+        // it — a tank prop of its own would be a cylinder in the sky.
+        //
+        // ACROSS-ROAD half-extent 6.6 m (the fire escape), 15.6 m along.
+        const b = this.builder();
+        b.uvScale = 1 / this.facadeTileOf('masonry');
+        const N = 2, W = 7.8, D = 4.9, H = 17.4;
+        const bricks = [0x8f5a46, 0xa2664c, 0x7d4c3c, 0x986051];
+        const halfRun = N * W * 0.5;
+        for (let i = 0; i < N; i++) {
+          const x = -halfRun + W * (i + 0.5);
+          const brick = bricks[(i + rng.int(0, 3)) % bricks.length];
+          b.box(x, H * 0.5, 0, W * 0.5, H * 0.5, D, brick, { shade: { top: 1.06 } });
+          // Storefront at grade, with a fabric awning.
+          b.box(x, 1.9, D + 0.2, W * 0.5 - 0.3, 1.9, 0.3, 0x39312b, { shade: { top: 1.1 } });
+          b.quad(x - 2.6, 4.3, D + 0.4, x + 2.6, 4.3, D + 0.4,
+            x + 2.6, 3.5, D + 2.3, x - 2.6, 3.5, D + 2.3, 0x2d5c46, 1.16);
+          // Cornice, and a stone lintel band per floor.
+          b.box(x, H + 0.42, 0, W * 0.5 + 0.36, 0.42, D + 0.4, 0x6b6157, { shade: { top: 1.22 } });
+          for (let f = 1; f <= 4; f++) {
+            b.box(x, 3.4 + f * 3.1, D + 0.06, W * 0.5, 0.18, 0.1, 0xb2a693,
+              { shade: { top: 1.2 } });
+          }
+        }
+        // Parapet, so the roof is a roof rather than a lid.
+        b.box(0, H + 1.3, D - 0.2, halfRun, 0.45, 0.22, 0x6b6157, { shade: { top: 1.2 } });
+        const met = this.builder();
+        met.uvScale = 0.8;
+        // The fire escape: landings, balustrades and the zig-zag flights. Reaches
+        // 1.7 m off the facade, which is what sets the across-road half-extent.
+        for (let i = 0; i < N; i++) {
+          const x = -halfRun + W * (i + 0.5);
+          for (let f = 1; f <= 4; f++) {
+            const y = 3.4 + f * 3.1;
+            met.box(x, y, D + 0.85, 2.5, 0.06, 0.85, 0x4c4a46, { shade: { top: 1.14 } });
+            met.box(x, y + 0.55, D + 1.68, 2.5, 0.55, 0.05, 0x585652);
+            for (const sx of [-1, 1]) {
+              met.tube(x + sx * 2.45, y, D + 0.2, x + sx * 2.45, y + 3.1, D + 0.2,
+                0.05, 4, 0x585652);
+            }
+            if (f < 4) {
+              met.tube(x - 2.1, y + 0.1, D + 1.5, x + 2.1, y + 3.0, D + 0.4,
+                0.06, 4, 0x4c4a46);
+            }
+          }
+        }
+        // Two tanks, on stands, on the roof.
+        for (const tx of [-halfRun * 0.55, halfRun * 0.55]) {
+          for (const [ox, oz] of [[-1.2, -1.2], [1.2, -1.2], [-1.2, 1.2], [1.2, 1.2]] as const) {
+            met.box(tx + ox, H + 1.9, oz, 0.1, 1.5, 0.1, 0x54524e);
+          }
+          met.box(tx, H + 3.4, 0, 1.5, 0.09, 1.5, 0x54524e, { shade: { top: 1.16 } });
+          met.tube(tx - 1.3, H + 1.7, -1.3, tx + 1.3, H + 3.3, 1.3, 0.05, 4, 0x54524e);
+          met.prism(tx, H + 3.5, 0, 1.35, 3.1, 12, 0x86694a, { shade: { side: 1.02, top: 1.1 } });
+          for (const ry of [H + 4.2, H + 5.7]) {
+            met.prism(tx, ry, 0, 1.4, 0.12, 12, 0x4a453e);
+          }
+          met.prism(tx, H + 6.6, 0, 1.42, 1.5, 12, 0x5f5348, { taper: 0.1, shade: { top: 1.2 } });
+        }
+        const glow = this.builder();
+        const litChance = 0.16 + 0.5 * this.night;
+        for (let i = 0; i < N; i++) {
+          const x = -halfRun + W * (i + 0.5);
+          for (let f = 1; f <= 4; f++) {
+            for (const ox of [-2.1, 0, 2.1]) {
+              const col = rng.next() < litChance ? 0xffdca8 : 0x191c22;
+              glow.plate(x + ox, 2.2 + f * 3.1, D + 0.05, 1.15, 1.75, 0, col, { single: true });
+            }
+          }
+        }
+        return {
+          geo: b.build('waterTankRow'), metal: met.build('waterTankRowSteel'),
+          glow: glow.build('waterTankRowGlow'),
+          mat: this.facadeMat('masonry'), softGlow: true, cull: CULL_FAR,
+        };
+      }
+
+      case 'yellowcab': {
+        // ---- the cab ---------------------------------------------------------
+        // A three-box saloon with a roof light and a chequer band. Deliberately
+        // NOT the `parkedCar` recipe: this one is always the same yellow, always
+        // has the light, and appears in ranks at the kerb.
+        // ACROSS-ROAD half-extent 1.0 m, 2.4 m along (yawed by `CityDefs`).
+        const b = this.builder();
+        b.uvScale = 1.3;
+        const cabY = 0xf0b81c, dark = 0x1b1e22, glassC = 0x39414a;
+        b.box(0, 0.56, 0, 0.94, 0.36, 2.25, cabY, { taper: 0.96, shade: { top: 1.06 } });
+        b.box(0, 1.02, -0.16, 0.82, 0.32, 1.12, cabY, { taper: 0.84, shade: { top: 1.14 } });
+        b.box(0, 1.05, -0.16, 0.845, 0.24, 1.0, glassC, { taper: 0.86 });
+        b.box(0, 0.22, 0, 0.98, 0.16, 2.3, dark);
+        for (const sx of [-1, 1]) for (const sz of [-1.48, 1.48]) {
+          b.prism(sx * 0.92, 0.02, sz, 0.32, 0.2, 8, 0x14171a, { yaw: Math.PI * 0.5 });
+        }
+        // Chequer band and door line.
+        for (let i = -4; i <= 4; i++) {
+          for (const sx of [-1, 1]) {
+            b.box(sx * 0.955, 0.62, i * 0.25, 0.01, 0.09, 0.125,
+              i % 2 ? 0x1b1e22 : 0xf4f2ec);
+          }
+        }
+        b.box(0, 1.42, -0.2, 0.34, 0.11, 0.16, dark);
+        const glow = this.builder();
+        glow.box(0, 1.42, -0.2, 0.3, 0.08, 0.13, 0xffd23a);
+        glow.box(0, 0.66, 2.28, 0.62, 0.09, 0.04, 0xfff2d0);
+        glow.box(0, 0.66, -2.28, 0.62, 0.09, 0.04, 0xd6402f);
+        return {
+          geo: b.build('yellowCab'), glow: glow.build('yellowCabGlow'),
+          softGlow: true, cull: 300,
+        };
+      }
+
+      case 'steamvent': {
+        // ---- steam out of the street ----------------------------------------
+        // The orange-and-white stack over a manhole, and the plume. The plume is
+        // built as a stack of squashed spheres of falling radiance which STARTS
+        // AT THE ROAD: it is on `glowSoft`, whose `bob` gives it a slow vertical
+        // drift, so it moves without a particle system.
+        // ACROSS-ROAD half-extent 0.72 m, 0.72 m along.
+        const b = this.builder();
+        b.uvScale = 1.4;
+        b.prism(0, 0.0, 0, 0.62, 0.09, 14, 0x4e4a45, { shade: { top: 1.1 } });
+        b.prism(0, 0.09, 0, 0.52, 0.05, 14, 0x3a3733, { shade: { top: 1.04 } });
+        // The stack: alternating orange and white collars, 2.4 m.
+        for (let i = 0; i < 8; i++) {
+          b.prism(0, 0.14 + i * 0.28, 0, 0.34, 0.28, 10,
+            i % 2 ? 0xe06a1c : 0xe8e6df, { shade: { side: 1.04 } });
+        }
+        b.prism(0, 2.38, 0, 0.36, 0.1, 10, 0x2f2c28, { shade: { top: 1.14 } });
+        const glow = this.builder();
+        // Nine puffs, widening and dimming with height. `cell` varies so the
+        // window hash does not make them all move together.
+        for (let i = 0; i < 9; i++) {
+          const f = i / 8;
+          const y = 2.5 + f * 5.4;
+          const r = 0.42 + f * 1.35;
+          const v = Math.round(0xe8 * (1 - f * 0.72));
+          const hex = (v << 16) | (v << 8) | Math.round(v * 1.04);
+          glow.cell = i;
+          glow.flap = 0.25 + f * 0.75;
+          glow.sphere((f - 0.3) * 0.9, y, f * 0.5, r, 7, 4, hex, { squash: 0.66 });
+        }
+        glow.flap = 0;
+        glow.cell = 0;
+        return {
+          geo: b.build('steamVent'), glow: glow.build('steamVentPlume'),
+          softGlow: true, cull: 260,
+        };
+      }
+
+      case 'parklake': {
+        // ---- the boating lake -----------------------------------------------
+        // Same argument as `harbourWater`: the global water plane cannot serve a
+        // `city` circuit, so the lake is a prop. An irregular 17-sided outline —
+        // a circle would read as a puddle — with a coped stone rim, a 4 m apron
+        // under it, and the surface on the `metal` pass so it takes the sky.
+        // ACROSS-ROAD half-extent 34 m.
+        const b = this.builder();
+        b.uvScale = 0.35;
+        const N = 17;
+        const rimHex = 0x8f887a, rock = 0x6f6a60;
+        const rad: number[] = [];
+        for (let i = 0; i < N; i++) {
+          rad.push(30 + 9 * Math.sin(i * 1.7) + 5 * Math.sin(i * 3.1 + 1.2));
+        }
+        const px = (i: number, k: number): number =>
+          Math.cos((i % N / N) * Math.PI * 2) * rad[i % N] * k;
+        const pz = (i: number, k: number): number =>
+          Math.sin((i % N / N) * Math.PI * 2) * rad[i % N] * k;
+        for (let i = 0; i < N; i++) {
+          // Coping ring.
+          b.quad(px(i, 1.0), 0.34, pz(i, 1.0), px(i + 1, 1.0), 0.34, pz(i + 1, 1.0),
+            px(i + 1, 1.08), 0.42, pz(i + 1, 1.08), px(i, 1.08), 0.42, pz(i, 1.08),
+            rimHex, 1.2);
+          // Outer face of the coping, down to grade.
+          b.quad(px(i, 1.08), 0.42, pz(i, 1.08), px(i + 1, 1.08), 0.42, pz(i + 1, 1.08),
+            px(i + 1, 1.12), 0, pz(i + 1, 1.12), px(i, 1.12), 0, pz(i, 1.12), rimHex, 0.94);
+          // Inner face, down into the water, and the apron below it.
+          b.quad(px(i + 1, 1.0), 0.34, pz(i + 1, 1.0), px(i, 1.0), 0.34, pz(i, 1.0),
+            px(i, 0.985), -4, pz(i, 0.985), px(i + 1, 0.985), -4, pz(i + 1, 0.985),
+            rock, 0.6);
+          b.quad(px(i, 1.12), 0, pz(i, 1.12), px(i + 1, 1.12), 0, pz(i + 1, 1.12),
+            px(i + 1, 1.2), -4, pz(i + 1, 1.2), px(i, 1.2), -4, pz(i, 1.2), rock, 0.55);
+        }
+        // A few boulders on the rim — this park is famous for its schist.
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2 + 0.6;
+          const r = 30 + 5 * Math.sin(i * 2.2);
+          b.box(Math.cos(a) * r * 1.16, 0.55, Math.sin(a) * r * 1.16,
+            1.6 + i * 0.2, 0.55, 1.3, rock,
+            { yaw: a, taper: 0.72, shade: { top: 1.16 } });
+        }
+        const met = this.builder();
+        met.uvScale = 0.1;
+        met.jitter = 0.05;
+        const water = 0x24413c, waterB = 0x2d5148;
+        for (let i = 0; i < N; i++) {
+          for (let k = 0; k < 4; k++) {
+            const k0 = k / 4, k1 = (k + 1) / 4;
+            const wob = (t: number): number => 0.05 * Math.sin(t * 4.0 + k * 1.7);
+            met.quad(
+              px(i, k0), 0.2 + wob(i), pz(i, k0),
+              px(i + 1, k0), 0.2 + wob(i + 1), pz(i + 1, k0),
+              px(i + 1, k1), 0.2 + wob(i + 1.5), pz(i + 1, k1),
+              px(i, k1), 0.2 + wob(i + 0.5), pz(i, k1),
+              (i + k) % 3 === 0 ? waterB : water, 1.0,
+            );
+          }
+        }
+        return {
+          geo: b.build('parkLake'), metal: met.build('parkLakeWater'),
+          cull: 900, shadow: false,
+        };
+      }
+
+      case 'parktree': {
+        // ---- the broadleaf ----------------------------------------------------
+        // An elm, not a conifer: a short bole, three rising limbs and an
+        // overlapping canopy of four squashed masses. The canopy goes on the
+        // CLOTH pass so it moves in the wind; the trunk does not.
+        // ACROSS-ROAD half-extent 3.4 m.
+        const b = this.builder();
+        b.uvScale = 1.4;
+        const H = rng.range(8.5, 12.0);
+        const bark = 0x5a4a3a, barkB = 0x4a3d30;
+        b.prism(0, 0, 0, 0.46, H * 0.42, 8, bark, { taper: 0.62, capBottom: true });
+        // Root flare: three small buttresses, which is what stops a trunk
+        // looking like a pipe pushed into the ground.
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2 + rng.range(0, 1.2);
+          b.box(Math.cos(a) * 0.42, 0.28, Math.sin(a) * 0.42, 0.3, 0.28, 0.22, barkB,
+            { yaw: a, taper: 0.4 });
+        }
+        const limbs = 3;
+        for (let i = 0; i < limbs; i++) {
+          const a = (i / limbs) * Math.PI * 2 + rng.range(0, 0.9);
+          const r = H * 0.24;
+          b.tube(0, H * 0.42, 0, Math.cos(a) * r, H * 0.72, Math.sin(a) * r,
+            0.19, 5, barkB, 0.98);
+        }
+        const cloth = this.builder();
+        const greens = [0x4a6b32, 0x557a38, 0x40602c, 0x5f8440];
+        cloth.flap = 0.3;
+        cloth.sphere(0, H * 0.80, 0, H * 0.27, 8, 5, greens[0], { squash: 0.78 });
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2 + 0.7;
+          cloth.flap = 0.34 + i * 0.06;
+          cloth.sphere(Math.cos(a) * H * 0.17, H * (0.70 + i * 0.055), Math.sin(a) * H * 0.17,
+            H * (0.19 - i * 0.012), 7, 4, greens[1 + i], { squash: 0.82 });
+        }
+        cloth.flap = 0;
+        return {
+          geo: b.build('parkTree'), cloth: cloth.build('parkTreeCanopy'),
+          cull: 420,
+        };
+      }
+
       default: return this.simpleAuthored(key);
     }
   }
@@ -8530,6 +9852,143 @@ export class Props implements ISubsystem {
   }
 
   /**
+   * The main cables, the suspenders and the diagonal stay web for ONE
+   * suspension-bridge tower, plus the edge girder they all land on.
+   *
+   * ---- THIS IS SOLVED AGAINST THE DECK, NOT AGAINST CONSTANTS ---------------
+   * Same construction as `bridgeFan` and for the same measured reason: over the
+   * 96 m this web reaches, the New York deck is banked 5 deg, falls, and curves
+   * away from a straight chord — a shared geometry cannot be right at both
+   * towers. Every point that has to MEET the road is resolved in world space
+   * against `deckFrameAt()` at that point's own arc length and brought back into
+   * the tower's local frame, so bank, grade, curvature and a changing
+   * `halfWidth` all land in the geometry.
+   *
+   * The main cable is a real parabola between the two saddles — `sag` is
+   * measured DOWN from the chord joining them — and the suspenders are solved as
+   * the vertical distance from that parabola to the girder axis at the same arc
+   * length, which is what stops a cable end hanging in space. The owner reported
+   * floating bridge cables twice; the fix both times was to stop authoring the
+   * deck end as a literal.
+   */
+  private brooklynCables(a: Anchor): THREE.BufferGeometry {
+    const met = this.builder();
+    met.uvScale = 0.8;
+    const {
+      top, shoulderY, cableX, reach, suspenders, stays,
+      mainR, hangR, stayR, anchorH, inset,
+    } = BROOKLYN;
+    const arc0 = this.arcNearest(a.x, a.z);
+    const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
+    const sc = a.scale || 1;
+    const toLocal = (w: THREE.Vector3, o: THREE.Vector3): THREE.Vector3 => {
+      const dx = w.x - a.x, dy = w.y - a.y, dz = w.z - a.z;
+      return o.set((dx * ca - dz * sa) / sc, dy / sc, (dx * sa + dz * ca) / sc);
+    };
+    // Which lateral sign is the tower's local +X? Measured off the real deck
+    // frame, exactly as `bridgeFan` does — the spline's handedness decides it.
+    this.deckFrameAt(arc0, _deck);
+    const localX = _v.set(ca, 0, sa);
+    const latSign = _deck.b.dot(localX) >= 0 ? 1 : -1;
+
+    /** The shoulder point at `along` metres of arc, in the tower's local frame. */
+    const shoulderAt = (along: number, side: number, out: THREE.Vector3): THREE.Vector3 => {
+      const frame = this.deckFrameAt(arc0 + along, _deck);
+      const sh = side < 0 ? frame.shL : frame.shR;
+      const edge = frame.hw + CROSS.kerbW + sh;
+      const lat = side * (edge - inset);
+      const base = this.roadCross(lat, frame.hw, sh);
+      _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
+      return toLocal(_v, out);
+    };
+    /** The girder axis: the shoulder point lifted by the girder's own depth. */
+    const girderAt = (along: number, side: number): THREE.Vector3 => {
+      const f = shoulderAt(along, side, _v2).clone();
+      f.y += anchorH;
+      return f;
+    };
+
+    // ---- the edge girder -----------------------------------------------------
+    // The continuous beam every suspender dies into. Resolved station by station
+    // so it follows the bank and the curve; propped every 6 m so it reads as
+    // carried. Both numbers are `bridgeFan`'s, measured there.
+    const STEP = 2.0, SPAN = reach + 2;
+    for (const sx of [-1, 1]) {
+      const side = sx * latSign;
+      let prev: THREE.Vector3 | null = null;
+      let k = 0;
+      for (let along = -SPAN; along <= SPAN + 1e-6; along += STEP, k++) {
+        const foot = shoulderAt(along, side, _v2).clone();
+        const axis = new THREE.Vector3(foot.x, foot.y + anchorH, foot.z);
+        if (prev) met.tube(prev.x, prev.y, prev.z, axis.x, axis.y, axis.z, 0.32, 6, 0x8d959d, 1.0);
+        prev = axis;
+        if (k % 3 === 0) {
+          const y0 = foot.y - 0.10;
+          met.box(foot.x, (y0 + axis.y) * 0.5, foot.z, 0.20, (axis.y - y0) * 0.5, 0.25,
+            0x7d858d, { taper: 1.25, shade: { top: 1.1 } });
+        }
+      }
+    }
+
+    // ---- the main cables -----------------------------------------------------
+    // A parabola from this saddle out to `reach` each way, sagging toward — and
+    // finishing ON — the girder axis at the far end, which is where the next
+    // tower's cable meets it. `SEG` segments a side; each joint is a real point
+    // on the curve, so the polyline never crosses the deck it is supposed to
+    // clear.
+    const SEG = 10;
+    /** Height of the main cable above the girder at fraction `f` of the reach. */
+    const cableY = (f: number, gy: number, sy: number): number => {
+      // Parabolic: full height at the saddle (f = 0), meeting the girder at f = 1.
+      const k = 1 - f * f;
+      return gy + (sy - gy) * k;
+    };
+    for (const sx of [-1, 1]) {
+      const side = sx * latSign;
+      const saddleX = sx * cableX;
+      for (const sz of [-1, 1]) {
+        let prev: THREE.Vector3 | null = null;
+        for (let i = 0; i <= SEG; i++) {
+          const f = i / SEG;
+          const along = sz * reach * f;
+          const g = girderAt(along, side);
+          // Blend the cable's lateral position from the saddle to the girder, so
+          // the cable planes converge on the deck edges the way the real ones do.
+          const x = saddleX + (g.x - saddleX) * f;
+          const z = g.z * f;
+          const y = cableY(f, g.y, top + 2.2);
+          const p = new THREE.Vector3(x, y, z);
+          if (prev) met.tube(prev.x, prev.y, prev.z, p.x, p.y, p.z, mainR, 6, 0xb4bcc4, 1.05);
+          prev = p;
+        }
+        // ---- the suspenders --------------------------------------------------
+        // Vertical droppers from the cable to the girder axis at the SAME arc
+        // length, so both ends are on something by construction.
+        for (let i = 1; i <= suspenders; i++) {
+          const f = i / (suspenders + 1);
+          const along = sz * reach * f;
+          const g = girderAt(along, side);
+          const x = saddleX + (g.x - saddleX) * f;
+          const y = cableY(f, g.y, top + 2.2);
+          met.tube(x, y, g.z * f, g.x, g.y, g.z, hangR, 4, 0xc4ccd4, 1.0);
+        }
+        // ---- the diagonal stay web -------------------------------------------
+        // Straight stays fanning from the tower shaft down to the girder. This
+        // web crossing the suspenders is what makes the bridge unmistakable, and
+        // it is structural: the real one is a hybrid suspension/stayed span.
+        for (let i = 0; i < stays; i++) {
+          const f = (i + 1) / stays;
+          const along = sz * (reach * 0.24 + reach * 0.62 * f);
+          const g = girderAt(along, side);
+          const ty = shoulderY + (top - 6 - shoulderY) * f;
+          met.tube(sx * (cableX - 3.2), ty, 0, g.x, g.y, g.z, stayR, 4, 0xc4ccd4, 1.0);
+        }
+      }
+    }
+    return met.build('brooklynCables');
+  }
+
+  /**
    * A plaza flag mast carrying one cell of the flag atlas.
    *
    * This is `flagpole`'s machinery, not a second cloth system: a mast plus one
@@ -8848,6 +10307,31 @@ function normaliseType(type: string): string | null {
     case 'districtbrick': case 'brickdistrict': return 'district:brick';
     case 'districtmidrise': case 'midrisedistrict': return 'district:midrise';
     case 'districtneon': case 'neondistrict': return 'district:tokyo';
+    // ---- the two new City Series circuits --------------------------------
+    case 'districtpodium': case 'hongkongdistrict': case 'podiumdistrict':
+      return 'district:hongkong';
+    case 'districtziggurat': case 'newyorkdistrict': case 'decodistrict':
+      return 'district:newyork';
+    case 'bankofchina': case 'triangletower': case 'prismtower': return 'bankofchina';
+    case 'harboursupertall': case 'harborsupertall': case 'icctower':
+      return 'harboursupertall';
+    case 'bambooscaffold': case 'bamboo': case 'scaffold': return 'bambooscaffold';
+    case 'neoncantilever': case 'shopsign': case 'cantileversign':
+      return 'neoncantilever';
+    case 'junk': case 'junkboat': case 'redsail': return 'junk';
+    case 'tramhk': case 'doubledecktram': case 'dingding': return 'tramhk';
+    case 'lionrock': case 'ridgeline': case 'skylineridge': return 'lionrock';
+    case 'harbourwater': case 'harborwater': case 'waterplate': return 'harbourwater';
+    case 'flaghk': case 'hkflag': case 'bauhiniaflag': return 'flaghk';
+    case 'brooklyntower': case 'suspensiontower': case 'gothictower':
+      return 'brooklyntower';
+    case 'empirespire': case 'setbackspire': case 'decospire': return 'empirespire';
+    case 'chryslercrown': case 'steelcrown': case 'crowntower': return 'chryslercrown';
+    case 'watertankrow': case 'tenementrow': case 'watertower': return 'watertankrow';
+    case 'yellowcab': case 'taxi': case 'cab': return 'yellowcab';
+    case 'steamvent': case 'manholesteam': case 'steamstack': return 'steamvent';
+    case 'parklake': case 'lake': case 'boatingpond': return 'parklake';
+    case 'parktree': case 'broadleaf': case 'elm': return 'parktree';
 
     // --- volcano dressing ------------------------------------------------
     case 'basaltcolumn': case 'basalt': case 'columncluster': return 'basaltcolumn';
