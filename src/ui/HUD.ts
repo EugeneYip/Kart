@@ -76,6 +76,104 @@ const tmpV = new THREE.Vector3();
 /** Module-level so the nameplate sort allocates no closure per frame. */
 function byDistance(a: { d: number }, b: { d: number }): number { return a.d - b.d; }
 
+// ===========================================================================
+// Minimap feed
+//
+// Split out of `HUD` so the world→marker chain can be driven — and asserted
+// on — headlessly, without standing up the whole DOM. `.probe-tmp/minimap-
+// arcwalk.ts` walks every circuit through exactly these functions and the
+// real `Minimap`.
+// ===========================================================================
+
+export interface CoursePath {
+  /** Closed loop, `y` carrying world Z. */
+  pts: { x: number; y: number }[];
+  space: 'world' | 'unit';
+}
+
+/**
+ * Which circuit is loaded, as a string that changes whenever the geometry
+ * does.
+ *
+ * This exists because `Track.loadTrack()` swaps the spline **in place on the
+ * same `Track` instance**. Nothing downstream can notice a course change by
+ * object identity, and `RaceDirector.beginRace()` does not await the load, so
+ * the new circuit can arrive several frames after `race:start`. Polling a
+ * signature is the only reliable way to see it.
+ *
+ * Empty when the track cannot identify itself at all; callers fall back to the
+ * geometry in that case.
+ */
+export function trackSignature(track: unknown): string {
+  const parts: string[] = [];
+  const id = probe<string>(track, 'trackId');
+  if (typeof id === 'string' && id) parts.push(id);
+  const len = probe<number>(track, 'lapLength');
+  if (typeof len === 'number' && Number.isFinite(len) && len > 1) parts.push(len.toFixed(3));
+  return parts.join('#');
+}
+
+/** Order-sensitive digest of a loop, for tracks that report no identity. */
+function courseKey(pts: readonly { x: number; y: number }[]): string {
+  let a = 0;
+  let b = 0;
+  for (let i = 0; i < pts.length; i++) {
+    a = (a + pts[i].x * (i + 1)) % 1e9;
+    b = (b + pts[i].y * (i + 3)) % 1e9;
+  }
+  return `~${pts.length}:${a.toFixed(2)}:${b.toFixed(2)}`;
+}
+
+/** Largest bounding-box dimension of a 2-D loop. Distinguishes metres from 0..1. */
+export function courseSpread(pts: readonly { x: number; y: number }[]): number {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return Math.max(maxX - minX, maxY - minY);
+}
+
+/**
+ * The minimap ribbon for whatever circuit `track` currently holds, or `null`
+ * if it cannot supply one yet.
+ *
+ * The ribbon must live in the same coordinate space as `kart.position`, or the
+ * racer dots plot thousands of pixels off-canvas — which is exactly why the
+ * map once showed no dots at all. `Track.getMinimapPath()` returns a
+ * bounding-box *normalised* 0..1 loop, so prefer the world-space centreline
+ * sampler and treat the normalised path as a fallback that only draws the
+ * ribbon.
+ */
+export function sampleCourse(track: unknown, samples = MINIMAP_SAMPLES): CoursePath | null {
+  const sample = probe<(d: number) => { position: THREE.Vector3 }>(track, 'sampleAtDistance');
+  const lapLength = probe<number>(track, 'lapLength') ?? 0;
+  if (typeof sample === 'function' && lapLength > 1) {
+    const pts: { x: number; y: number }[] = [];
+    try {
+      for (let i = 0; i < samples; i++) {
+        const s = sample.call(track, (i / samples) * lapLength);
+        const q = s?.position;
+        if (!q || !Number.isFinite(q.x) || !Number.isFinite(q.z)) { pts.length = 0; break; }
+        pts.push({ x: q.x, y: q.z });
+      }
+    } catch { pts.length = 0; }
+    // A track that isn't built yet samples to a degenerate point; reject it.
+    if (pts.length > 2 && courseSpread(pts) > 1) return { pts, space: 'world' };
+  }
+
+  const path = tryCall<readonly { x: number; y: number }[]>(track, 'getMinimapPath');
+  if (path && path.length > 2) {
+    // Auto-detect the space so a track that later returns world metres just
+    // works. Normalised paths can draw the ribbon but not place karts.
+    const space = courseSpread(path) > 4 ? 'world' : 'unit';
+    return { pts: path.map((p) => ({ x: p.x, y: p.y })), space };
+  }
+  return null;
+}
+
 export class HUD implements ISubsystem {
   // --- injected ------------------------------------------------------------
   private container: HTMLElement;
@@ -126,8 +224,12 @@ export class HUD implements ISubsystem {
 
   // minimap + rivals
   private minimap = new Minimap();
-  /** True once a usable centreline has been adopted. */
-  private pathReady = false;
+  /**
+   * Identity of the circuit the ribbon was built for; `''` until there is one.
+   * This used to be a plain `pathReady` boolean, which latched on the FIRST
+   * course the HUD ever saw and never let go — see `refreshTrackPath`.
+   */
+  private pathKey = '';
   private pathRetryAt = 0;
   private warnedUnitPath = false;
   private rivalsBox!: HTMLDivElement;
@@ -461,61 +563,56 @@ export class HUD implements ISubsystem {
   }
 
   /**
-   * Pull the minimap geometry from the track. Safe (and expected) to call again:
-   * `Game` awaits `hud.init()` *before* `engine.initAll()` runs `Track.init()`,
-   * so the first attempt always comes back empty and `tick()` retries.
+   * Adopt the minimap geometry for the circuit the track currently holds.
    *
-   * The ribbon must live in the same coordinate space as `kart.position`, or the
-   * racer dots plot thousands of pixels off-canvas — which is exactly why the
-   * map showed no dots at all. `Track.getMinimapPath()` returns a bounding-box
-   * *normalised* 0..1 loop, so prefer the world-space centreline sampler and
-   * treat the normalised path as a fallback that only draws the ribbon.
+   * Called on `init()`, on `race:start`, and twice a second from `tick()`. It
+   * must be called repeatedly and it must be able to change its mind, for two
+   * separate reasons:
+   *
+   *  1. `Game` awaits `hud.init()` *before* `engine.initAll()` runs
+   *     `Track.init()`, so the first attempt always comes back empty.
+   *  2. Picking a different course calls `Track.loadTrack()`, which swaps the
+   *     spline **in place on the same `Track` object** and is deliberately not
+   *     awaited by `RaceDirector.beginRace()`.
+   *
+   * This used to guard on a `pathReady` boolean that latched the first time it
+   * saw a usable centreline. That first time is `Track.init()`'s default
+   * circuit, sampled while the player is still sitting in the main menu — so
+   * the ribbon, and with it `Minimap.fit()`'s world→pixel transform, was
+   * frozen on Sunset Coastline for the whole session. Every other circuit then
+   * drew its racers through a transform fitted to a course they were not on:
+   * the markers wandered off the drawn ribbon, moved at the wrong scale, and
+   * on the larger circuits left the canvas entirely.
+   *
+   * Keying on the circuit instead of on "have we ever succeeded" is the fix.
    */
   refreshTrackPath(): void {
-    if (this.pathReady) return;
+    const sig = trackSignature(this.track);
+    if (sig !== '' && sig === this.pathKey) return;   // same circuit as the ribbon
 
-    const sample = probe<(d: number) => { position: THREE.Vector3 }>(this.track, 'sampleAtDistance');
-    const lapLength = probe<number>(this.track, 'lapLength') ?? 0;
-    if (typeof sample === 'function' && lapLength > 1) {
-      const pts: { x: number; y: number }[] = [];
-      try {
-        for (let i = 0; i < MINIMAP_SAMPLES; i++) {
-          const s = sample.call(this.track, (i / MINIMAP_SAMPLES) * lapLength);
-          const q = s?.position;
-          if (!q || !Number.isFinite(q.x) || !Number.isFinite(q.z)) { pts.length = 0; break; }
-          pts.push({ x: q.x, y: q.z });
-        }
-      } catch { pts.length = 0; }
-      // A track that isn't built yet samples to a degenerate point; reject it.
-      if (pts.length > 2 && HUD.spread(pts) > 1) {
-        this.minimap.setPath(pts, 'world');
-        this.pathReady = true;
-      }
+    const course = sampleCourse(this.track, MINIMAP_SAMPLES);
+    if (!course) return;                              // keep the ribbon we have
+
+    // A track that reports no identity at all still must not be resampled into
+    // `setPath` twice a second — that would clear the racer dots every tick.
+    const key = sig !== '' ? sig : courseKey(course.pts);
+    if (key === this.pathKey) return;
+    this.pathKey = key;
+
+    this.minimap.setPath(course.pts, course.space);
+    if (course.space === 'unit' && !this.warnedUnitPath) {
+      this.warnedUnitPath = true;
+      console.warn(
+        '[HUD] track.getMinimapPath() is bounding-box normalised, not world '
+        + 'metres, and track.sampleAtDistance() was unavailable — the minimap '
+        + 'ribbon will draw but racer dots cannot be placed.',
+      );
     }
-
-    if (!this.pathReady) {
-      const path = tryCall<readonly { x: number; y: number }[]>(this.track, 'getMinimapPath');
-      if (path && path.length > 2) {
-        // Auto-detect the space so a track that later returns world metres just
-        // works. Normalised paths can draw the ribbon but not place karts.
-        const space = HUD.spread(path) > 4 ? 'world' : 'unit';
-        this.minimap.setPath(path, space);
-        this.pathReady = true;
-        if (space === 'unit' && !this.warnedUnitPath) {
-          this.warnedUnitPath = true;
-          console.warn(
-            '[HUD] track.getMinimapPath() is bounding-box normalised, not world '
-            + 'metres, and track.sampleAtDistance() was unavailable — the minimap '
-            + 'ribbon will draw but racer dots cannot be placed.',
-          );
-        }
-      }
-    }
-
-    if (!this.pathReady) return;
 
     // Item boxes: `getItemBoxPositions` never existed on Track (it is
     // `getItemBoxSpawns`, and it returns Vector3s in world space).
+    // `setPath` drops the old markers with the old coordinate space, so these
+    // have to be re-supplied for every circuit, not just the first.
     const flat = tryCall<readonly { x: number; y: number }[]>(this.track, 'getItemBoxPositions')
       ?? tryCall<readonly { x: number; y: number }[]>(this.items, 'getBoxPositions');
     if (flat && flat.length) { this.minimap.setItemBoxes(flat); return; }
@@ -525,18 +622,6 @@ export class HUD implements ISubsystem {
       for (const s of spawns) if (s?.position) out.push({ x: s.position.x, y: s.position.z });
       if (out.length) this.minimap.setItemBoxes(out);
     }
-  }
-
-  /** Largest bounding-box dimension of a 2-D loop. Distinguishes metres from 0..1. */
-  private static spread(pts: readonly { x: number; y: number }[]): number {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of pts) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    }
-    return Math.max(maxX - minX, maxY - minY);
   }
 
   // =======================================================================
@@ -759,14 +844,15 @@ export class HUD implements ISubsystem {
     const dt = ctx.dt;
     const p = this.player();
 
-    // The track finishes building after the HUD does, so keep asking — twice a
-    // second, and never again once we have a ribbon.
-    if (!this.pathReady) {
-      this.pathRetryAt -= dt;
-      if (this.pathRetryAt <= 0) {
-        this.pathRetryAt = 0.5;
-        this.refreshTrackPath();
-      }
+    // The track finishes building after the HUD does, AND swaps circuits under
+    // us without warning, so keep asking — twice a second, for the whole
+    // session. Once the ribbon matches the loaded circuit this costs two
+    // property reads and a string compare; it is not worth latching off, and
+    // latching it off is precisely what froze the map on one course.
+    this.pathRetryAt -= dt;
+    if (this.pathRetryAt <= 0) {
+      this.pathRetryAt = 0.5;
+      this.refreshTrackPath();
     }
 
     // --- visibility gate --------------------------------------------------
