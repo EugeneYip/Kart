@@ -330,6 +330,18 @@ export class Minimap {
     return out;
   }
 
+  /**
+   * Angle the marker for `kartId` was last drawn at, in canvas space, or
+   * `null` if it has not been painted. This is the value the player's arrow is
+   * rotated by, so it can be checked against the direction the marker is
+   * actually travelling across the map.
+   */
+  markerHeading(kartId: number): number | null {
+    const d = this.dots.get(kartId);
+    if (!d || !d.drawn) return null;
+    return d.a + this.drawRot;
+  }
+
   /** Where a world point would land right now, in canvas pixels. */
   worldToCanvas(wx: number, wz: number, out: Pt): Pt {
     this.ensureFit();
