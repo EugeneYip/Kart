@@ -1259,20 +1259,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'towerBlock', t: 0.016, lat: -45, step: 0.015, end: 0.120 },
       { type: 'streetLamp', t: 0.020, lat: 17, step: 0.017, end: 0.120, mirror: true },
       // ---- THE HARBOUR ------------------------------------------------------
-      // The water plate is 300 x 210 m and its across-road half-extent is 105 m,
-      // so at lat 132 its near edge sits at lat 27 — 8 m outside the 19.05 m
-      // corridor, i.e. just beyond the sea wall — and its far edge at lat 237.
-      // `up: -1.0` biases it BELOW the local ground on purpose: where the bank
-      // rises the terrain covers the seam, and where it falls the plate's own
-      // 7 m apron does. Measured in the report.
-      { type: 'harbourWater', t: 0.020, lat: 132, up: -1.0 },
+      // MEASURED, then placed. `.probe-tmp/citysite.ts` walks the ground on the
+      // harbour side of this straight: 0.09 m at lat 40, 0.42 at 60, 0.93 at 80,
+      // 1.53 at 100, 5.6 at 170 and 16.7 at 330 — the outfield RISES, which is
+      // why the plate is 140 m across and not 210. Centred at lat 95 it spans
+      // lat 25 to 165: the near edge is 6 m outside the 19.05 m corridor and
+      // just beyond the sea wall, and the far edge is about 4 m under the
+      // natural bank, so the bank reads as the far shore rather than as a seam.
+      // `up: -0.6` biases the whole plate below local ground for the same reason.
+      { type: 'harbourWater', t: 0.020, lat: 95, up: -0.6 },
       { type: 'seaWall', t: 0.010, lat: 20, step: 0.008, end: 0.112 },
       { type: 'flagPole', t: 0.018, lat: 22, step: 0.013, end: 0.072 },
       // A junk under sail, moored off the promenade. It stands on the water
       // plate: both are seated on the same heightfield sample, so the hull is on
       // the surface by construction rather than by a hand-tuned `up`.
-      { type: 'junk', t: 0.048, lat: 64, yaw: 0.4 },
-      { type: 'junk', t: 0.088, lat: 112, yaw: -0.9, scale: 0.85 },
+      { type: 'junk', t: 0.048, lat: 58, yaw: 0.4 },
+      { type: 'junk', t: 0.086, lat: 96, yaw: -0.9, scale: 0.85 },
       // ---- THE TWO LANDMARKS, ACROSS THE WATER ------------------------------
       // Read the Taipei supertall note before moving either. A tower needs
       // roughly (its height / tan(half the vertical FOV above the eyeline)) of
@@ -1294,7 +1296,14 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'neonCantilever', t: 0.176, lat: 20, step: 0.0072, end: 0.302, mirror: true },
       { type: 'marketStall', t: 0.182, lat: 19, step: 0.010, end: 0.296 },
       { type: 'trafficLight', t: 0.174, lat: -14 },
-      { type: 'holoAd', t: 0.200, lat: 0, up: 11, step: 0.030, end: 0.286 },
+      // NO `holoAd`. It was here, at `up: 11` over the canyon, and
+      // `.probe-tmp/floating.ts` counted all three instances as floating anchor
+      // groups with 6.13-8.26 m of air under them — which is what a hologram IS,
+      // but the owner's complaint is literally "objects that appear unnaturally
+      // suspended in the air" and a hologram is not worth arguing the point over
+      // when the cantilevered boxes already carry the overhead signage here.
+      // Removing it takes this circuit to 0 floating groups and gives back three
+      // draw calls.
       { type: 'signChevron', t: 0.300, lat: -14, step: 0.006, end: 0.330 },
       // ---- the tram street and the scaffolded block -------------------------
       // `bambooScaffold` reaches 10.2 m toward the road (the nylon canopy is what
@@ -1323,8 +1332,10 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // pyramid structures in the background", and a low-poly cone at 400 m is
       // exactly that. Authored at lat 640 on the ONE unbanked band on this half
       // of the lap, because a lateral offset that size on a banked binormal buys
-      // spurious altitude — 640 x sin(10 deg) would be 111 m of it.
-      { type: 'lionRock', t: 0.560, lat: 640 },
+      // spurious altitude. Measured at lat 560 the binormal still lifts it 52.8 m,
+      // which the re-seater then undoes; the ridge carries a 28 m skirt so the
+      // 5.0 m of relief across its own footprint cannot show daylight under it.
+      { type: 'lionRock', t: 0.560, lat: 560 },
       { type: 'crowdStand', t: 0.552, lat: -26 },
       { type: 'flagHK', t: 0.546, lat: 22 },
       { type: 'signChevron', t: 0.594, lat: -15, step: 0.006, end: 0.626 },
@@ -1430,11 +1441,13 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // by the recipe's own placement convention, so lat 15.5 against a 19.05 m
       // corridor leaves them on the pavement edge where a rank belongs.
       { type: 'yellowCab', t: 0.030, lat: 15.5, step: 0.011, end: 0.116, mirror: true },
-      // Steam off the street, one each side, on the kerb line rather than the
-      // racing line: the plume starts AT the road surface, so there is nothing
-      // suspended in the air about it.
-      { type: 'steamVent', t: 0.042, lat: -13.5 },
-      { type: 'steamVent', t: 0.086, lat: 13.5 },
+      // Steam off the street, one each side. The plume starts AT the road
+      // surface, so nothing about it is suspended in the air — and lat 16 rather
+      // than 13.5 because the puffs widen to 1.77 m as they rise and drift
+      // 0.4 m sideways, which at 13.5 put the top of the column 1.2 m inside the
+      // drivable road (`.probe-tmp/sightline.ts`). At 16 it clears by 1.35 m.
+      { type: 'steamVent', t: 0.042, lat: -16 },
+      { type: 'steamVent', t: 0.086, lat: 16 },
       { type: 'brakeBoard', t: 0.120, lat: -15 },
       { type: 'tyreStack', t: 0.136, lat: 12.5, step: 0.005, end: 0.164 },
       { type: 'signChevron', t: 0.138, lat: -14.5, step: 0.006, end: 0.170 },
@@ -1443,8 +1456,16 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // the whole thing fits the frustum. 190 m + 36 m of mast wants ~260 m and
       // 176 m wants ~215 m; the eye looks at the horizon, so only the upper half
       // of the vertical FOV is available above it. Re-measured in the report.
-      { type: 'empireSpire', t: 0.104, lat: -262 },
-      { type: 'chryslerCrown', t: 0.836, lat: 224 },
+      // BOTH ARE IN THE INFIELD, and that was measured rather than composed.
+      // The outfield on this circuit is the terrain's own rising ring: ground
+      // 14.5 m at lat -180, 21.0 at -220, 31.3 at -300, with 10-20 m of relief
+      // across a tower footprint. A 226 m spire out there stands on a hillside,
+      // which is a hill town and not Manhattan. The infield is a plain — relief
+      // 0.5 m, ground -0.2 m — and at 150 m and 145 m from the nearest
+      // carriageway these two read as a downtown cluster from three different
+      // parts of the lap instead of from one straight.
+      { type: 'empireSpire', t: 0.030, lat: 150 },
+      { type: 'chryslerCrown', t: 0.760, lat: 180 },
       // ---- the cross street --------------------------------------------------
       // `brownstoneRow`'s across-road half-extent is 6.3 m and `waterTankRow`'s
       // is 6.6 m (the fire escape), against a corridor of hw 9 + 1.55 + 2 =
@@ -1467,10 +1488,16 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'parkTree', t: 0.352, lat: 22, step: 0.0062, end: 0.452 },
       { type: 'parkTree', t: 0.356, lat: 34, step: 0.0090, end: 0.462 },
       { type: 'parkTree', t: 0.362, lat: -24, step: 0.0110, end: 0.448 },
-      // The lake's across-road half-extent is 34 m (an irregular 17-sided rim),
-      // so lat 78 puts its near coping 44 m in from the road: a lawn, then the
-      // water, which is what you actually see from the park drive.
-      { type: 'parkLake', t: 0.402, lat: 78 },
+      // MOVED after measuring, and this is the failure mode `lat` cannot see: a
+      // circuit that folds back on itself has ANOTHER carriageway behind the
+      // infield. At t 0.402 / lat 78 the lake was 66 m from the park drive it was
+      // authored against and the road-surface guard still pushed it 10.14 m,
+      // because the nearest road there is the cross street at arc 700 and a
+      // 44 m-radius rim has an 74.7 m AABB corner. At t 0.360 / lat 95 the
+      // nearest carriageway is 94 m away and the ground relief over the plate
+      // falls from 4.15 m to 0.34 m — which for a flat water surface is the
+      // number that actually matters.
+      { type: 'parkLake', t: 0.360, lat: 95 },
       { type: 'parkTree', t: 0.392, lat: 132, step: 0.014, end: 0.470 },
       { type: 'signChevron', t: 0.396, lat: -15, step: 0.006, end: 0.426 },
       { type: 'brakeBoard', t: 0.412, lat: -14 },
@@ -1497,7 +1524,7 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'towerBlock', t: 0.668, lat: 43, step: 0.014, end: 0.782, mirror: true },
       { type: 'skyscraper', t: 0.660, lat: 88, step: 0.022, end: 0.800, mirror: true, scale: 1.4 },
       { type: 'streetLamp', t: 0.678, lat: 17, step: 0.017, end: 0.790, mirror: true },
-      { type: 'steamVent', t: 0.704, lat: -13.5 },
+      { type: 'steamVent', t: 0.704, lat: -16 },
       { type: 'yellowCab', t: 0.700, lat: 15.5, step: 0.013, end: 0.772 },
       { type: 'billboard', t: 0.742, lat: -24, scale: 1.25 },
       { type: 'trafficLight', t: 0.726, lat: 15 },

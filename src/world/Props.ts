@@ -2453,8 +2453,30 @@ const BROOKLYN = {
   stayR: 0.12,
   /** Height of the deck edge girder above the shoulder it stands on. */
   anchorH: 1.85,
-  /** Metres inboard of the shoulder's outer edge the girder stands. */
-  inset: 0.35,
+  /**
+   * Width of the drawn shoulder on the bridge sections, metres.
+   *
+   * ---- WHY THIS IS A CONSTANT AND NOT `deckFrameAt().shR` -------------------
+   * MEASURED: `PathStation` has `shoulderL` / `shoulderR` fields and
+   * `Environment.stationFrom()` never writes them — `readSample()` returns
+   * position, tangent, normal, binormal, halfWidth and bank, and nothing else.
+   * So `deckFrameAt()` falls back to `SH_FALLBACK` (3 m) at every station on
+   * every circuit, and a girder placed at `hw + kerbW + 3 - inset` stands
+   * outboard of a deck whose authored shoulder is 1.2 m.
+   *
+   * Measured on this circuit before the fix (`.probe-tmp/cabledbg.ts`): the
+   * drawn ribbon reaches |lat| 13.87 at the tower and the girder was solved to
+   * |lat| 15.2 — 1.3 m past the edge and, because the deck is superelevated,
+   * 1.5-2.3 m below it. That is the owner's floating-cable report exactly, and
+   * it arrived through the ONE term in the solve that was not solved.
+   *
+   * `bridgeFan` (Boston) reads the same field and therefore has the same
+   * offset; that is reported rather than changed here, because it is an
+   * existing circuit's geometry.
+   */
+  shoulder: 1.2,
+  /** Metres inboard of the drawn shoulder's outer edge the girder stands. */
+  inset: 0.65,
 } as const;
 
 /** Half-width of the obelisk shaft at height `y`, in the tower's local frame. */
@@ -8662,19 +8684,24 @@ export class Props implements ISubsystem {
               + 0.09 * Math.sin(f * 27.1 + phase * 2.3);
             return base + (peak - base) * bell * jag;
           };
+          // The base runs to -28, not to 0. The ridge is authored 550 m off the
+          // road on ground with ~5 m of relief across its own 240 m span, so a
+          // flat-bottomed silhouette seated on one heightfield sample would show
+          // daylight under one end of it. Nothing above the skirt changes.
+          const FOOT = -28;
           for (let i = 0; i < N; i++) {
             const x0 = -span + (i / N) * span * 2;
             const x1 = -span + ((i + 1) / N) * span * 2;
             const y0 = h(i), y1 = h(i + 1);
             // front face
-            b.quad(x0, 0, depth * 0.5, x1, 0, depth * 0.5, x1, y1, depth * 0.5,
+            b.quad(x0, FOOT, depth * 0.5, x1, FOOT, depth * 0.5, x1, y1, depth * 0.5,
               x0, y0, depth * 0.5, hexSide, 1.0);
             // crest, tipped back
             b.quad(x0, y0, depth * 0.5, x1, y1, depth * 0.5,
               x1, y1 * 0.86, -depth * 0.5, x0, y0 * 0.86, -depth * 0.5, hexTop, 1.16);
             // back face
             b.quad(x0, y0 * 0.86, -depth * 0.5, x1, y1 * 0.86, -depth * 0.5,
-              x1, 0, -depth * 0.5, x0, 0, -depth * 0.5, hexSide, 0.72);
+              x1, FOOT, -depth * 0.5, x0, FOOT, -depth * 0.5, hexSide, 0.72);
           }
         };
         ridge(74, 26, 132, 34, 0x6b7a68, 0x4e5a4e, 0.0);
@@ -8702,16 +8729,23 @@ export class Props implements ISubsystem {
         // so a global plane either covers 0.1 % of the map or floods the verge.
         //
         // A prop can do it, because a prop is seated on the heightfield at ONE
-        // point and carries its own skirt. This is a 300 x 210 m facetted
+        // point and carries its own skirt. This is a 300 x 140 m facetted
         // surface on the `metal` material — roughness 0.34, metalness 0.85, so
         // it takes the sky and the city glow as a reflection rather than being
-        // painted blue — with a 7 m apron all round that buries the seam.
+        // painted blue — with a 5.5 m apron all round that buries the near seam.
         //
-        // ACROSS-ROAD half-extent 105 m. Authored well out on the harbour side.
+        // ACROSS-ROAD half-extent 70 m, and that number is MEASURED, not chosen
+        // for looks. `.probe-tmp/citysite.ts` walks the ground on the harbour
+        // side of Hong Kong's promenade: it rises 0.09 m at lat 40, 1.53 m at
+        // 100, 5.6 m at 170 and 16.7 m at 330. So the far half of any wider
+        // plate would be underground. At 70 the far edge sits about 4 m below
+        // the natural bank, which is not a defect — that bank IS the far shore,
+        // and the towers across the water stand up it. Hong Kong Island rises
+        // straight out of the harbour, so a rising far bank is the correct read.
         const b = this.builder();
         b.uvScale = 0.06;
         b.jitter = 0.06;
-        const SX = 150, SZ = 105, NX = 20, NZ = 14;
+        const SX = 150, SZ = 70, NX = 20, NZ = 10;
         const deep = 0x14303e, shallow = 0x1c4657;
         const wy = (x: number, z: number): number =>
           0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
@@ -8727,8 +8761,9 @@ export class Props implements ISubsystem {
             );
           }
         }
-        // The apron. Walks down 7 m all the way round, so wherever the ground
-        // rises to meet it the seam is under the water rather than a hole in it.
+        // The apron. Walks down 5.5 m all the way round, so wherever the ground
+        // falls away from it the seam is under the water rather than a hole in it.
+        const APRON = -5.5;
         const apron = 0x22262a;
         for (const [ax, az, ux, uz] of [
           [0, SZ, 1, 0], [0, -SZ, 1, 0], [SX, 0, 0, 1], [-SX, 0, 0, 1],
@@ -8739,8 +8774,8 @@ export class Props implements ISubsystem {
           b.quad(
             ax - ux * span, 0, az - uz * span,
             ax + ux * span, 0, az + uz * span,
-            ax + ux * span + outX * 0.6, -7, az + uz * span + outZ * 0.6,
-            ax - ux * span + outX * 0.6, -7, az - uz * span + outZ * 0.6,
+            ax + ux * span + outX * 0.6, APRON, az + uz * span + outZ * 0.6,
+            ax - ux * span + outX * 0.6, APRON, az - uz * span + outZ * 0.6,
             apron, 0.7,
           );
         }
@@ -9172,7 +9207,9 @@ export class Props implements ISubsystem {
           const hex = (v << 16) | (v << 8) | Math.round(v * 1.04);
           glow.cell = i;
           glow.flap = 0.25 + f * 0.75;
-          glow.sphere((f - 0.3) * 0.9, y, f * 0.5, r, 7, 4, hex, { squash: 0.66 });
+          // The drift is deliberately small: at 0.9 the top puff reached 1.2 m
+          // inside the drivable road from a lat of 13.5 (`.probe-tmp/sightline.ts`).
+          glow.sphere((f - 0.3) * 0.55, y, f * 0.42, r, 7, 4, hex, { squash: 0.66 });
         }
         glow.flap = 0;
         glow.cell = 0;
@@ -9883,7 +9920,7 @@ export class Props implements ISubsystem {
     met.uvScale = 0.8;
     const {
       top, shoulderY, cableX, reach, suspenders, stays,
-      mainR, hangR, stayR, anchorH, inset,
+      mainR, hangR, stayR, anchorH, inset, shoulder,
     } = BROOKLYN;
     const arc0 = this.arcNearest(a.x, a.z);
     const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
@@ -9901,10 +9938,10 @@ export class Props implements ISubsystem {
     /** The shoulder point at `along` metres of arc, in the tower's local frame. */
     const shoulderAt = (along: number, side: number, out: THREE.Vector3): THREE.Vector3 => {
       const frame = this.deckFrameAt(arc0 + along, _deck);
-      const sh = side < 0 ? frame.shL : frame.shR;
-      const edge = frame.hw + CROSS.kerbW + sh;
+      // `shoulder`, NOT `frame.shL/shR` — see the note on BROOKLYN.shoulder.
+      const edge = frame.hw + CROSS.kerbW + shoulder;
       const lat = side * (edge - inset);
-      const base = this.roadCross(lat, frame.hw, sh);
+      const base = this.roadCross(lat, frame.hw, shoulder);
       _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
       return toLocal(_v, out);
     };
@@ -9920,16 +9957,21 @@ export class Props implements ISubsystem {
     // so it follows the bank and the curve; propped every 6 m so it reads as
     // carried. Both numbers are `bridgeFan`'s, measured there.
     const STEP = 2.0, SPAN = reach + 2;
+    const NSTEP = Math.round((SPAN * 2) / STEP);
     for (const sx of [-1, 1]) {
       const side = sx * latSign;
       let prev: THREE.Vector3 | null = null;
-      let k = 0;
-      for (let along = -SPAN; along <= SPAN + 1e-6; along += STEP, k++) {
+      for (let k = 0; k <= NSTEP; k++) {
+        const along = -SPAN + k * STEP;
         const foot = shoulderAt(along, side, _v2).clone();
         const axis = new THREE.Vector3(foot.x, foot.y + anchorH, foot.z);
         if (prev) met.tube(prev.x, prev.y, prev.z, axis.x, axis.y, axis.z, 0.32, 6, 0x8d959d, 1.0);
         prev = axis;
-        if (k % 3 === 0) {
+        // A post every 6 m, AND one at each end. Without the end posts the last
+        // 4 m of beam has nothing under it — measured as the single floating
+        // band on this circuit (`.probe-tmp/citynew.ts`, arc 992, +1.51 m of
+        // air), which is exactly the defect the whole solve exists to avoid.
+        if (k % 3 === 0 || k === NSTEP) {
           const y0 = foot.y - 0.10;
           met.box(foot.x, (y0 + axis.y) * 0.5, foot.z, 0.20, (axis.y - y0) * 0.5, 0.25,
             0x7d858d, { taper: 1.25, shade: { top: 1.1 } });
