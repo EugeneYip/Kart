@@ -340,20 +340,37 @@ export class AIManager implements ISubsystem {
    *     callOpt(this.ai, 'setDifficulty', this.cc);
    *     callOpt(this.ai, 'resetRace');                    // did NOT rebuild
    *
-   * So the first race of a session was driven on the right line and EVERY LATER
-   * RACE ON A DIFFERENT CIRCUIT was driven on the previous circuit's line — the
-   * AI aiming at corners that are not there, at speeds set by a different set of
-   * corners, on a road whose barriers are somewhere else. That is the owner's
-   * report exactly: NPCs repeatedly hitting walls and failing to follow the
-   * course, on multiple circuits, in normal races.
+   * `Game` builds `AIManager` exactly once, at boot, immediately after
+   * `track.init()` — which loads `DEFAULT_TRACK`. So the baked line was ALWAYS
+   * sunsetCoastline's, and seven of the eight circuits were raced on it: the AI
+   * aiming at corners that are not there, braking for corners that are somewhere
+   * else, on a road whose barriers are elsewhere. That is the owner's report
+   * exactly — NPCs repeatedly hitting walls and failing to follow the course, on
+   * multiple circuits, in normal races — and it explains why sunsetCoastline was
+   * the one circuit that always looked fine.
    *
    * It was invisible to every probe in `.probe-tmp` because all of them load the
    * circuit first and construct `AIManager` afterwards, which is the one order
-   * the game never uses. Measured with the shipping order
-   * (`.probe-tmp/loopdet.ts`, `staleLineFrom`), volcanoRush entered from the
-   * previous circuit: 8653 barrier-contact episodes, 807 s of contact, 226 pins,
-   * a 33 s off-road excursion, and 0 of 11 AI karts finishing three laps inside
-   * 400 s. On the same seed with the line rebuilt: 7 episodes, 0.7 s.
+   * the game never uses.
+   *
+   * MEASURED, `.probe-tmp/loopdet.ts`, twelve karts, three full laps, items on,
+   * a braking player mid-pack, lateral shoves, 400 s cap. Shipping entry order.
+   * Eight circuits; "before" is 2 seeds each, "after" 6 seeds each, per race:
+   *
+   *                     contact episodes   contact s   pins  AI not finishing
+   *   before (stale)        6193 – 15364   775 – 1857  199 – 535   11 of 11
+   *   after  (rebuilt)         0.5 – 10.2  0.0 – 0.9   0.0 – 0.2    0 of 11
+   *
+   * Loop events (3+ contacts by one kart inside 10 s and 40 m) went from
+   * 445 – 623 per race to 0.17 – 0.83, and every survivor is 3 – 8 brushes
+   * totalling under 0.7 s, in `race` mode, with no recovery entry — a racing
+   * contact, not a limit cycle. The pre-fix mode mix was dominated by `realign`
+   * and `reverse`, i.e. wall, failed recovery, wall again.
+   *
+   * The rebuild is a true restoration, not an approximation: entering
+   * volcanoRush and hongKongHarbour from sunsetCoastline gives results
+   * BIT-IDENTICAL on every metric to constructing the manager fresh on those
+   * circuits (seed 4242).
    *
    * Checked on the existing half-second `resolveStates` cadence rather than only
    * in `resetRace()`, so it also covers a swap made by any other path and the
