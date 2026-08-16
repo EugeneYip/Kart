@@ -24,6 +24,11 @@ interface Dot {
   /** Smoothed heading, radians, in map space. */
   a: number;
   init: boolean;
+  /** Canvas pixel the glyph was last blitted at (post-rotation). */
+  mx: number;
+  my: number;
+  /** False until this dot has been painted at least once. */
+  drawn: boolean;
 }
 
 /** Third column of a quaternion's rotation matrix → the kart's forward (−Z). */
@@ -41,6 +46,8 @@ function shortestAngle(from: number, to: number): number {
 }
 
 const tmpFwd: Pt = { x: 0, y: 0 };
+const tmpA: Pt = { x: 0, y: 0 };
+const tmpB: Pt = { x: 0, y: 0 };
 
 export class Minimap {
   /** `.ak-map` wrapper — append this anywhere in the HUD. */
@@ -64,6 +71,8 @@ export class Minimap {
   private dpr = 1;
   private rotate = false;
   private rotation = 0;    // smoothed map rotation, radians
+  /** Rotation actually applied to the last painted frame. */
+  private drawRot = 0;
 
   private dots = new Map<number, Dot>();
   private label: HTMLDivElement;
@@ -118,6 +127,11 @@ export class Minimap {
   setRotate(on: boolean): void {
     if (this.rotate === on) return;
     this.rotate = on;
+    // `fit()` pads differently in rotate mode (the loop must not clip as it
+    // spins), and `fit()` only runs from `bakeLayer()`. Without this the new
+    // padding was not applied until something else happened to dirty the
+    // layer — usually a window resize, often never.
+    this.layerDirty = true;
     this.setLabel(on ? 'MAP · TRACK-UP' : 'MAP');
   }
 
@@ -256,6 +270,73 @@ export class Minimap {
 
   // -----------------------------------------------------------------------
 
+  // =======================================================================
+  // The transform, in one place
+  //
+  // The ribbon, the item boxes and every racer marker go through `toLayer`,
+  // and everything painted on top of the rotated layer goes through
+  // `toCanvas`. Keeping them as the single implementation is what stops the
+  // course and the markers from ever being drawn in two different spaces.
+  // =======================================================================
+
+  /** World (x, z) metres → unrotated layer pixel. */
+  private toLayer(wx: number, wz: number, out: Pt): Pt {
+    out.x = wx * this.sx + this.ox;
+    out.y = wz * this.sx + this.oy;
+    return out;
+  }
+
+  /** Layer pixel → canvas pixel, applying the rotation of the painted frame. */
+  private toCanvas(lx: number, ly: number, out: Pt): Pt {
+    const half = this.px * 0.5;
+    const c = Math.cos(this.drawRot);
+    const s = Math.sin(this.drawRot);
+    out.x = (lx - half) * c - (ly - half) * s + half;
+    out.y = (lx - half) * s + (ly - half) * c + half;
+    return out;
+  }
+
+  private ensureFit(): void {
+    if (this.layerDirty) this.bakeLayer();
+  }
+
+  /** Vertices in the drawn course ribbon. */
+  get courseLength(): number { return this.path.length; }
+
+  /**
+   * Ribbon vertex `i` in canvas pixels, with the live map rotation applied —
+   * i.e. where that piece of course actually is on screen. Exposed so a test
+   * can measure marker-to-course distance through the real transform instead
+   * of a re-derivation of it.
+   */
+  courseAt(i: number, out: Pt): Pt {
+    this.ensureFit();
+    const p = this.path[i];
+    if (!p) { out.x = out.y = NaN; return out; }
+    this.toLayer(p.x, p.y, tmpA);
+    return this.toCanvas(tmpA.x, tmpA.y, out);
+  }
+
+  /**
+   * Canvas pixel the marker for `kartId` was last painted at, or `null` if it
+   * has not been painted. This is the true end of the chain — it is recorded
+   * where the sprite is blitted, so it cannot silently diverge from the pixel.
+   */
+  markerAt(kartId: number, out: Pt): Pt | null {
+    const d = this.dots.get(kartId);
+    if (!d || !d.drawn) return null;
+    out.x = d.mx;
+    out.y = d.my;
+    return out;
+  }
+
+  /** Where a world point would land right now, in canvas pixels. */
+  worldToCanvas(wx: number, wz: number, out: Pt): Pt {
+    this.ensureFit();
+    this.toLayer(wx, wz, tmpA);
+    return this.toCanvas(tmpA.x, tmpA.y, out);
+  }
+
   private fit(): void {
     if (this.path.length < 3 || this.px <= 0) return;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -289,15 +370,16 @@ export class Minimap {
       return;
     }
 
-    const X = (p: Pt) => p.x * this.sx + this.ox;
-    const Y = (p: Pt) => p.y * this.sx + this.oy;
-
     // Ribbon: dark casing, bright road, dashed centre line.
     c.lineJoin = 'round';
     c.lineCap = 'round';
     c.beginPath();
-    c.moveTo(X(this.path[0]), Y(this.path[0]));
-    for (let i = 1; i < this.path.length; i++) c.lineTo(X(this.path[i]), Y(this.path[i]));
+    this.toLayer(this.path[0].x, this.path[0].y, tmpA);
+    c.moveTo(tmpA.x, tmpA.y);
+    for (let i = 1; i < this.path.length; i++) {
+      this.toLayer(this.path[i].x, this.path[i].y, tmpA);
+      c.lineTo(tmpA.x, tmpA.y);
+    }
     c.closePath();
 
     c.strokeStyle = 'rgba(2,5,12,0.92)';
@@ -320,9 +402,10 @@ export class Minimap {
 
     // Item boxes.
     for (const b of this.boxes) {
-      const x = X(b), y = Y(b), r = S * 0.024;
+      this.toLayer(b.x, b.y, tmpA);
+      const r = S * 0.024;
       c.save();
-      c.translate(x, y);
+      c.translate(tmpA.x, tmpA.y);
       c.rotate(Math.PI * 0.25);
       c.fillStyle = 'rgba(255,220,90,0.95)';
       c.strokeStyle = 'rgba(6,10,22,0.9)';
@@ -337,9 +420,11 @@ export class Minimap {
     // Start / finish: checker bar perpendicular to the tangent at index 0.
     const p0 = this.path[0];
     const p1 = this.path[Math.min(3, this.path.length - 1)];
-    const ang = Math.atan2(Y(p1) - Y(p0), X(p1) - X(p0));
+    this.toLayer(p0.x, p0.y, tmpA);
+    this.toLayer(p1.x, p1.y, tmpB);
+    const ang = Math.atan2(tmpB.y - tmpA.y, tmpB.x - tmpA.x);
     c.save();
-    c.translate(X(p0), Y(p0));
+    c.translate(tmpA.x, tmpA.y);
     c.rotate(ang);
     const hw = S * 0.032;
     const hh = S * 0.012;
@@ -373,6 +458,7 @@ export class Minimap {
       this.rotation += shortestAngle(this.rotation, target) * (1 - Math.pow(2, -dt / 0.09));
       rot = this.rotation;
     }
+    this.drawRot = rot;
 
     if (rot !== 0) {
       c.save();
@@ -393,10 +479,6 @@ export class Minimap {
       if (p < bestPos) { bestPos = p; leaderId = k.id; }
     }
 
-    const cos = Math.cos(rot);
-    const sin = Math.sin(rot);
-    const half = S * 0.5;
-
     // AI first so the player's arrow always sits on top.
     for (let pass = 0; pass < 2; pass++) {
       for (const k of karts) {
@@ -404,10 +486,14 @@ export class Minimap {
         if ((pass === 0) === isPlayer) continue;
 
         let d = this.dots.get(k.id);
-        if (!d) { d = { x: 0, y: 0, a: 0, init: false }; this.dots.set(k.id, d); }
+        if (!d) {
+          d = { x: 0, y: 0, a: 0, init: false, mx: 0, my: 0, drawn: false };
+          this.dots.set(k.id, d);
+        }
 
-        const tx = k.position.x * this.sx + this.ox;
-        const ty = k.position.z * this.sx + this.oy;
+        this.toLayer(k.position.x, k.position.z, tmpA);
+        const tx = tmpA.x;
+        const ty = tmpA.y;
         forwardXZ(k.quaternion, tmpFwd);
         const ta = Math.atan2(tmpFwd.y, tmpFwd.x);
         if (!d.init) {
@@ -419,8 +505,12 @@ export class Minimap {
         }
 
         // Apply the map rotation manually so dot glyphs stay upright-ish.
-        const rx = (d.x - half) * cos - (d.y - half) * sin + half;
-        const ry = (d.x - half) * sin + (d.y - half) * cos + half;
+        this.toCanvas(d.x, d.y, tmpB);
+        const rx = tmpB.x;
+        const ry = tmpB.y;
+        d.mx = rx;
+        d.my = ry;
+        d.drawn = true;
 
         const color = isPlayer ? '#ffffff' : kartColor(k.id);
 
