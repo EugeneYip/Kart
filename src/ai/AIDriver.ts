@@ -451,6 +451,23 @@ export const DRIFT = {
    *
    * 0.30 was tried: volcanoRush 23.3 against 0.7-7.0 for the rest, i.e. out of
    * band again on the only number that started this.
+   *
+   * ⚠️ TWO CAVEATS ON THE 24.8 -> 2.2 ABOVE. Both were found later; the tuning
+   * still stands, the number is just narrower than it reads.
+   *
+   *  1. It counts RISING EDGES of barrier contact, so it cannot see duration. A
+   *     kart held against a barrier scores 1, the same as one that clips a kerb
+   *     for a single tick. Measured (`.probe-tmp/pintest.ts`): a kart steered
+   *     into the sunsetCoastline barrier for 25 s spends 22.24 s in contact with
+   *     a longest unbroken scrape of 21.83 s, and 21.83 s of that scores ONE.
+   *     Use contact seconds / pins / stalls from `.probe-tmp/loopdet.ts` when the
+   *     question is "is this kart grinding along a wall", which is the complaint.
+   *
+   *  2. It was measured with the AI's racing line freshly built for the circuit
+   *     under test — which the shipping game did not do until `AIManager`
+   *     rebuilt it on a circuit swap. See `syncLineToTrack` in `AIManager.ts`.
+   *     Before that fix, seven of the eight circuits ran on sunsetCoastline's
+   *     line and no drift tuning of any value would have made them raceable.
    */
   projectSeconds: 0.45,
   /** Low-pass factor per tick on the road-crossing rate, 0..1. */
