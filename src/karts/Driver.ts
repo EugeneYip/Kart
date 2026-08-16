@@ -2093,12 +2093,21 @@ function buildTail(b: RigBucket, d: DriverDef, s: Skeleton): void {
   // curls back, so the plume is a second mass beside the head with a real notch
   // between the two — which is a shape no other driver on the roster has.
   //
-  // Clearance: the fox driver is only ever built on the `standard` chassis
-  // (`CHARACTERS.foxy.bodyId`, and a relabelled repeat keeps the same bodyId),
-  // so the binding constraint is that chassis' seat back, not the buggy roll
-  // hoop the original routing was written defensively around. Everything above
-  // y = 0.24 here sits at |x| >= 0.19, which is outboard of the seat shoulder on
-  // every chassis in the table — see `.probe-tmp/fox-space.ts`.
+  // CLEARANCE IS MEASURED, AND THE MEASUREMENT IS CHASSIS-SPECIFIC.
+  // `.probe-tmp/fox-space.ts` aggregates the free space over all six chassis and
+  // that aggregate map says y = 0.36 / z = 0.30 is solid — which is the BUGGY's
+  // roll hoop, and the reason the old routing crested below y = 0.35. The fox
+  // driver is only ever built on `standard` (`CHARACTERS.foxy.bodyId`, and a
+  // relabelled repeat keeps its bodyId), so that is not this tail's constraint.
+  //
+  // Re-run restricted to the standard chassis (`fox-space-std`), worst station:
+  //   station 2  x 24.4 cm  y 0.31  z 0.12   needs >= 15 cm   ok
+  //   station 3  x 26.8 cm  y 0.35  z 0.21   needs >= 14 cm   ok
+  //   station 4  x 21.6 cm  y 0.35  z 0.32   midline free     ok
+  // Tube radius included: the fattest station reaches y = 0.45, and rows 0.44
+  // and up are clear across the whole z range on this chassis. Below y = 0.18 is
+  // solid on every chassis, so the root starts inside the tub — unavoidable and
+  // invisible, exactly as the driver's own pelvis does.
   const path = [
     new THREE.Vector3(0.022, y0 + 0.116, 0.014),
     new THREE.Vector3(0.140, y0 + 0.208, 0.058),
