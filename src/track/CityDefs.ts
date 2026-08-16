@@ -1481,11 +1481,17 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // ---- the cross street --------------------------------------------------
       // `brownstoneRow`'s across-road half-extent is 6.3 m and `waterTankRow`'s
       // is 6.6 m (the fire escape), against a corridor of hw 9 + 1.55 + 2 =
-      // 12.55 m. lat 22 and 24 leave 3.2 m and 4.9 m of clear verge, and the
+      // 12.55 m. lat 22 and 26 leave 3.2 m and 6.9 m of clear verge, and the
       // steps match the recipes' own lengths (23.4 m and 15.6 m) so each run is
       // a continuous street wall rather than a row of detached blocks.
+      //
+      // 26 rather than 24 on the tenements after measuring: this circuit lines
+      // BOTH sides of an 18 m street with terrace and then does it again
+      // downtown, so `.probe-tmp/crowding.ts` put near-road props at 6.73 % of
+      // frame against bostonHarbor's 2.87 %. Two metres is the cheapest metre
+      // and a half of that back without thinning the street wall.
       { type: 'brownstoneRow', t: 0.180, lat: 22, step: 0.0148, end: 0.268, mirror: true },
-      { type: 'waterTankRow', t: 0.276, lat: 24, step: 0.0099, end: 0.316, mirror: true },
+      { type: 'waterTankRow', t: 0.276, lat: 26, step: 0.0099, end: 0.316, mirror: true },
       { type: 'streetLamp', t: 0.190, lat: 16, step: 0.026, end: 0.310 },
       { type: 'yellowCab', t: 0.200, lat: -14, step: 0.019, end: 0.300 },
       { type: 'planter', t: 0.196, lat: 14, step: 0.016, end: 0.296 },
@@ -1529,10 +1535,23 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // measured on Boston and on Tokyo and the answer has not changed.
       { type: 'brooklynTower', t: 0.534, lat: 0 },
       { type: 'brooklynTower', t: 0.594, lat: 0 },
+      // ---- THE RIVER, AND WHY IT IS BESIDE THE DECK AND NOT UNDER IT --------
+      // `WorldTextures.bake` only declines to pave ground that a LOWER
+      // carriageway also reaches, so under an ISOLATED elevated deck the terrain
+      // follows the deck up — measured here: 6.07 m of ground at lat 30 against
+      // a deck at 8.5 m. There is no void beneath this bridge to put a river in,
+      // which is the same finding that killed Boston's `bridgePylon` run.
+      //
+      // Natural ground resumes fast: -0.78 m at lat 45 and -0.77 to +1.72 all
+      // the way out to lat 190, with 1.7-2.3 m of relief. So the water goes
+      // ALONGSIDE, centred at lat -105 and spanning lat -35 to -175, where it
+      // sits 9 m below the deck and reads as the river the crossing is over.
+      // A plate straddling lat 0 would be a flat sheet through the carriageway.
+      { type: 'harbourWater', t: 0.560, lat: -105, up: -0.6 },
       { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.660 },
       { type: 'brakeBoard', t: 0.624, lat: -14 },
       // ---- downtown -----------------------------------------------------------
-      { type: 'waterTankRow', t: 0.670, lat: 24, step: 0.0102, end: 0.712, mirror: true },
+      { type: 'waterTankRow', t: 0.670, lat: 26, step: 0.0102, end: 0.712, mirror: true },
       { type: 'towerBlock', t: 0.668, lat: 43, step: 0.014, end: 0.782, mirror: true },
       { type: 'skyscraper', t: 0.660, lat: 88, step: 0.022, end: 0.800, mirror: true, scale: 1.4 },
       { type: 'streetLamp', t: 0.678, lat: 17, step: 0.017, end: 0.790, mirror: true },
