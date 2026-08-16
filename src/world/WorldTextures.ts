@@ -1216,10 +1216,13 @@ export class TerrainField {
     const STACK_ARC = 60;
 
     const nSt = this.stations.length;
+    // 3D, to match `PathStation.s` — this is only used to wrap the difference of
+    // two `s` values below, and a horizontal total against a 3D `s` would put
+    // the wrap point 11 m out on volcano.
     let lapLen = 0;
     for (let i = 0; i < nSt; i++) {
       const a = this.stations[i], b = this.stations[(i + 1) % nSt];
-      lapLen += Math.hypot(b.px - a.px, b.pz - a.pz);
+      lapLen += Math.hypot(b.px - a.px, b.py - a.py, b.pz - a.pz);
     }
     /** Per station: does it ride over another carriageway at all? */
     const carried = new Uint8Array(nSt);

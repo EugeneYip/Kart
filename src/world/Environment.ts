@@ -1041,14 +1041,39 @@ function spanOf(stations: PathStation[]): number {
   return Math.max(maxX - minX, maxZ - minZ);
 }
 
-/** Rewrite `s` as true accumulated arc length (tracks lie about it sometimes). */
+/**
+ * Rewrite `s` as true accumulated arc length (tracks lie about it sometimes).
+ *
+ * The `dy` term is not decoration. This used to accumulate `hypot(dx, dz)` —
+ * the HORIZONTAL chord — under a comment claiming it was the true arc length,
+ * and `PathStation.s` is documented as "arc length from the start line,
+ * metres". On anything that climbs, the two are different numbers: measured
+ * with `.probe-tmp/arcdrift.ts` against the spline's own arc, the stations ran
+ * short by 11.36 m on volcano, 7.01 m on coastal and 6.06 m on neon (0.4-0.7 m
+ * on the five flat city circuits).
+ *
+ * That matters because `s` is the key every arc lookup in the world uses, and
+ * some of them mix conventions. `Props.bridgeFan` / `brooklynCables` resolve
+ * their deck ends at `arc0 + along`, where `arc0` is a station's `s` and
+ * `along` is a real distance in metres along the deck — so on a graded span the
+ * cross-section they solve against was the one a few metres up the road. It is
+ * also why a probe grading the world's assumed corridor against the spline's
+ * own found a 6.39 m shoulder disagreement on volcano's SHORTCUT, where the
+ * shoulder ramps 0.7 m of width per metre of arc: the two were reading the same
+ * road at different places.
+ *
+ * Everything downstream is relative and self-consistent, so this shifts nothing
+ * on its own — it just makes `s` mean metres, and `WorldContext.lapLength`
+ * (derived from the last station's `s`) agree with `Track.lapLength` to a
+ * station spacing instead of to 11 m.
+ */
 function resampleArcLength(stations: PathStation[]): void {
   let acc = 0;
   for (let i = 0; i < stations.length; i++) {
     stations[i].s = acc;
     const a = stations[i];
     const b = stations[(i + 1) % stations.length];
-    acc += Math.hypot(b.px - a.px, b.pz - a.pz);
+    acc += Math.hypot(b.px - a.px, b.py - a.py, b.pz - a.pz);
   }
 }
 
