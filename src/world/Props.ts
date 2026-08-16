@@ -7049,15 +7049,46 @@ export class Props implements ISubsystem {
         const win = this.builder();
         win.uvScale = 0.5;
 
-        // Blue-green double-glazed curtain wall. Authored COOL on purpose: this
-        // circuit runs at sunset under a warm key and a warm env, and the road
-        // palette note in `CityDefs.ts` records the same rule for the kerbs —
-        // warmth in the albedo compounds into gold. `facadeTexel`'s vision glass
-        // multiplies this by (0.84, 0.94, 1.16), which pushes it further toward
-        // cyan before the sun ever touches it.
-        const GLASS = 0x71968c;
-        const TRIM = 0x9fbcb0;      // anodised aluminium fascia
-        const SOFFIT = 0x2f4a46;    // the eave underside — real AO, not a guess
+        // ---- BLUE-GREEN GLASS, AUTHORED FAR PAST BLUE-GREEN -----------------
+        // This was #71968c — the real building's colour, near enough — and on
+        // screen it read charcoal-brown. Measured rather than argued
+        // (`.probe-tmp/t101.ts`, section 6c, which resolves the REAL map bytes
+        // times the REAL vertex colours through the REAL preset):
+        //
+        //   albedo               #628586  h 183 deg  s 15 %
+        //   sunlit face          h 33-39 deg, s 11-32 %   <- orange, every bracket
+        //   shaded face          h 26 / 239 / 213 deg     <- no hue of its own AT ALL
+        //
+        // Three things eat the colour and all three are multiplicative:
+        //  1. `facadeTexel`'s mullions land on (1.16, 1.17, 1.20) x 235 and CLAMP
+        //     to white, and the spandrel band is near-neutral, so 37 % of the wall
+        //     area is colourless before the vertex colour is applied. The map's
+        //     area mean is #ced9eb at luminance 0.687 — bright and almost grey.
+        //  2. `facadeMat('curtain')` carries `metalness: 0.45`, so 45 % of the
+        //     diffuse albedo is removed and reappears as a specular tinted by F0
+        //     and coloured by the ENVIRONMENT — which at sunset is orange.
+        //  3. The key is #ffa055 at intensity 3.7 and the sun sits 4.5 deg up, so
+        //     a VERTICAL face turned toward it has NdotL 0.997 and takes the whole
+        //     of it. Linear-space, the light landing on a shaded face is already
+        //     (0.336, 0.192, 0.284); green only wins there if the albedo's g:r
+        //     exceeds 1.75 and its g:b exceeds 1.48.
+        //
+        // So the authored colour has to be pushed well past the target, which is
+        // exactly the rule `CityDefs.ts:678-682` already records for this
+        // circuit's kerbs: "warmth in the albedo compounds with a warm key and a
+        // warm env into gold". Same argument, one surface up. The gate is on
+        // CHROMA and on HUE STABILITY ACROSS THE ENV BRACKET, because the failure
+        // was not "wrong hue", it was "no hue of its own".
+        // The RED channel is the one that has to go, not the overall value: the
+        // specular term is `F0 x E`, F0 is `0.022 + 0.45 x albedo`, and E at dusk
+        // is red-dominant — so albedo red is multiplied into the frame twice, once
+        // through the diffuse and once through a specular that is 45 % of the
+        // shaded face's whole radiance. Dropping linear red from 0.125 to 0.085
+        // takes the shaded face from s 9 % to s 20 % in the pessimistic bracket
+        // and costs the sunlit face nothing it should not lose.
+        const GLASS = 0x51b98a;
+        const TRIM = 0x9ad9bd;      // anodised aluminium fascia, same treatment
+        const SOFFIT = 0x265449;    // the eave underside — real AO, not a guess
         const STONE = 0x5d6a68;     // podium granite
         const GOLD = 0xffc23a;      // ruyi medallions and the coin motif
         const STEEL = 0xc4d0d2;     // the pinnacle
@@ -7096,13 +7127,27 @@ export class Props implements ISubsystem {
         let cell = 1;
         for (let i = 0; i < MODS; i++) {
           const y = Y0 + i * MOD;
-          // Wall in three shade bands: a lifted middle with the contact shadow of
-          // the cornice above baked into the top band. `quad` shades per face, so
-          // this is the only way to get a vertical gradient without a second map.
-          const AO: readonly number[] = [0.93, 1.04, 0.90];
-          for (let s = 0; s < 3; s++) {
-            const a = y + (11.0 / 3) * s, c = y + (11.0 / 3) * (s + 1);
-            band(a, c, R_LO + (R_HI - R_LO) * (s / 3), R_LO + (R_HI - R_LO) * ((s + 1) / 3),
+          // ---- A GRADIENT, NOT A STRIPE -------------------------------------
+          // This was three bands at [0.93, 1.04, 0.90] — a bright middle between
+          // two darker ends. Intended as a fake vertical gradient; what it
+          // actually is, is an 11.8 % luminance step a third of the way up each
+          // module and a 13.5 % step two thirds of the way up. Measured, the
+          // module stack carried SIX strong contrast edges per module, one every
+          // ~1.3 m, and the reviewer's screenshot from 230 m read it exactly as
+          // that is: "a stack of many shallow bands rather than eight substantial
+          // blocks — closer to a pagoda spine". The eye counts tiers by counting
+          // contrast edges, and there were six per tier.
+          //
+          // Now four bands on a MONOTONE ramp, steps of 2.9 / 4.0 / 5.3 %, all
+          // under the 8 % the probe treats as a resolvable edge. Monotone is also
+          // the physically right shape: ambient occlusion increases toward the
+          // overhanging cornice above, so the wall darkens as it rises. The one
+          // strong edge per module is now the cornice assembly, which is what it
+          // is on the real building. Costs 16 triangles a module.
+          const AO: readonly number[] = [1.02, 0.99, 0.95, 0.90];
+          for (let s = 0; s < 4; s++) {
+            const a = y + (11.0 / 4) * s, c = y + (11.0 / 4) * (s + 1);
+            band(a, c, R_LO + (R_HI - R_LO) * (s / 4), R_LO + (R_HI - R_LO) * ((s + 1) / 4),
               GLASS, { shade: AO[s] });
           }
           band(y + 11.00, y + 11.35, R_LIP, R_HI, SOFFIT, { shade: 0.58 });
