@@ -943,6 +943,13 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     weather: 'clear',
     laps: 3,
     terrainSeed: 41102,
+    // Same answer as Boston's, re-measured at ultra: sweeping every level from
+    // -3.39 to +4.45 in 0.25 m steps, nothing is both visible and dry. The lowest
+    // DRAWN road point here is -3.39 m (t=0.899, lat -13.0) against a natural
+    // ground minimum of -3.14, so the plane is under the terrain before it is
+    // clear of the road. The river is a prop — see `harbourWater` below, which is
+    // the largest body of water in the City Series at 30 190 m2 because Taipei is
+    // the one circuit whose outfield on the water side FALLS.
     waterLevel: null,
     // ---- THIS FIELD IS INERT, AND THAT IS THE POINT ------------------------
     // `fogColor` / `fogDensity` on a `TrackDef` reach exactly one reader,
@@ -1149,6 +1156,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     weather: 'clear',
     laps: 3,
     terrainSeed: 81003,
+    // ---- TOKYO IS DELIBERATELY THE DRY ONE, AND IT IS THE ONLY ONE ---------
+    // Four of the five city circuits carry water. This one does not, and the
+    // reason is authored rather than geometric: its subtitle and its section
+    // header both say "standing water", and that means WET ASPHALT — the
+    // `asphalt: 'wet'` road recipe and the near-mirror reflections in the
+    // scramble crossing — not a body of water. There is no quay, no bridge over
+    // anything, no river in the node tags and no landmark authored across water.
+    // Boston, Hong Kong and New York are all named for or built around one; Tokyo
+    // Neon is a night street circuit, and giving it a harbour would be inventing
+    // a place rather than finishing one.
+    //
+    // The geometry agrees, for what it is worth: the drawn road here reaches
+    // -4.86 m (t=0.900, lat 12.5) against a natural ground minimum of -3.98, so a
+    // global plane is under the terrain before it clears the road, exactly as on
+    // the other four. But that is not why this field is null — it is null because
+    // nothing on this circuit is asking for water.
     waterLevel: null,
     fogColor: 0x121a30,
     fogDensity: 0.0031,
@@ -1294,7 +1317,10 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     weather: 'clear',
     laps: 3,
     terrainSeed: 52807,
-    // See the section header: the harbour is a prop, not a plane.
+    // See the section header: the harbour is a prop, not a plane. Re-measured at
+    // ultra with `.probe-tmp/harbour.ts` — the drawn road reaches -4.35 m
+    // (t=0.962, lat -13.0) against a ground minimum of -3.77, so no level is both
+    // visible and dry, same as the other four.
     waterLevel: null,
     // NOT dead, whatever a grep for `getAtmosphere` suggests: `Catalogue.ts`
     // reads `def.fogColor` as `themeB`, the second stop of the course card's
