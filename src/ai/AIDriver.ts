@@ -1348,9 +1348,14 @@ export class AIDriver {
     // on quantisation rather than on a slide.
     {
       const latC = this.near.lateralFromCentre;
+      // Clamped to something a kart can physically do. A respawn, a teleport, or
+      // `nearest()` re-latching onto a different part of the lap all move
+      // `lateralFromCentre` by tens of metres in one tick, and an unclamped
+      // spike would sit in the filter for a third of a second and hold the drift
+      // gate shut for no reason.
       const raw = Number.isNaN(this.prevLatFromCentre)
         ? 0
-        : (latC - this.prevLatFromCentre) / Math.max(1e-4, dt);
+        : clamp((latC - this.prevLatFromCentre) / Math.max(1e-4, dt), -45, 45);
       this.prevLatFromCentre = latC;
       this.latRateSmooth += (raw - this.latRateSmooth) * DRIFT.rateSmooth;
     }
