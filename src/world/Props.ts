@@ -9150,29 +9150,34 @@ export class Props implements ISubsystem {
         // A three-box saloon with a roof light and a chequer band. Deliberately
         // NOT the `parkedCar` recipe: this one is always the same yellow, always
         // has the light, and appears in ranks at the kerb.
-        // ACROSS-ROAD half-extent 1.0 m, 2.4 m along (yawed by `CityDefs`).
+        // ACROSS-ROAD half-extent 0.98 m, 2.34 m along.
+        // BUILT LENGTHWISE ALONG LOCAL +X, which is ALONG the road: a trackside
+        // prop is yawed so local +Z faces the carriageway (convention 1 in
+        // `Track.ts`), so a car modelled nose-forward in +Z parks nose-IN to the
+        // kerb and its 4.6 m length becomes its across-road extent. Measured that
+        // way it left 0.70 m of verge at lat 15.5; lengthwise it leaves 2.02 m.
         const b = this.builder();
         b.uvScale = 1.3;
         const cabY = 0xf0b81c, dark = 0x1b1e22, glassC = 0x39414a;
-        b.box(0, 0.56, 0, 0.94, 0.36, 2.25, cabY, { taper: 0.96, shade: { top: 1.06 } });
-        b.box(0, 1.02, -0.16, 0.82, 0.32, 1.12, cabY, { taper: 0.84, shade: { top: 1.14 } });
-        b.box(0, 1.05, -0.16, 0.845, 0.24, 1.0, glassC, { taper: 0.86 });
-        b.box(0, 0.22, 0, 0.98, 0.16, 2.3, dark);
-        for (const sx of [-1, 1]) for (const sz of [-1.48, 1.48]) {
-          b.prism(sx * 0.92, 0.02, sz, 0.32, 0.2, 8, 0x14171a, { yaw: Math.PI * 0.5 });
+        b.box(0, 0.56, 0, 2.25, 0.36, 0.94, cabY, { taper: 0.96, shade: { top: 1.06 } });
+        b.box(0.16, 1.02, 0, 1.12, 0.32, 0.82, cabY, { taper: 0.84, shade: { top: 1.14 } });
+        b.box(0.16, 1.05, 0, 1.0, 0.24, 0.845, glassC, { taper: 0.86 });
+        b.box(0, 0.22, 0, 2.3, 0.16, 0.98, dark);
+        for (const sz of [-1, 1]) for (const sx of [-1.48, 1.48]) {
+          b.prism(sx, 0.02, sz * 0.92, 0.32, 0.2, 8, 0x14171a);
         }
         // Chequer band and door line.
         for (let i = -4; i <= 4; i++) {
-          for (const sx of [-1, 1]) {
-            b.box(sx * 0.955, 0.62, i * 0.25, 0.01, 0.09, 0.125,
+          for (const sz of [-1, 1]) {
+            b.box(i * 0.25, 0.62, sz * 0.955, 0.125, 0.09, 0.01,
               i % 2 ? 0x1b1e22 : 0xf4f2ec);
           }
         }
-        b.box(0, 1.42, -0.2, 0.34, 0.11, 0.16, dark);
+        b.box(0.2, 1.42, 0, 0.16, 0.11, 0.34, dark);
         const glow = this.builder();
-        glow.box(0, 1.42, -0.2, 0.3, 0.08, 0.13, 0xffd23a);
-        glow.box(0, 0.66, 2.28, 0.62, 0.09, 0.04, 0xfff2d0);
-        glow.box(0, 0.66, -2.28, 0.62, 0.09, 0.04, 0xd6402f);
+        glow.box(0.2, 1.42, 0, 0.13, 0.08, 0.3, 0xffd23a);
+        glow.box(-2.28, 0.66, 0, 0.04, 0.09, 0.62, 0xfff2d0);
+        glow.box(2.28, 0.66, 0, 0.04, 0.09, 0.62, 0xd6402f);
         return {
           geo: b.build('yellowCab'), glow: glow.build('yellowCabGlow'),
           softGlow: true, cull: 300,

@@ -1285,7 +1285,11 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'harbourSupertall', t: 0.052, lat: 330 },
       { type: 'bankOfChina', t: 0.086, lat: 258 },
       { type: 'brakeBoard', t: 0.118, lat: 15 },
-      { type: 'tyreStack', t: 0.128, lat: -12.5, step: 0.005, end: 0.156 },
+      // -14.2, not -12.5: this run straddles the end of the 12.5 m half-width
+      // straight, where `.probe-tmp/crowding.ts`'s lat audit measured the stack
+      // 0.72 m INSIDE the asphalt and the carriageway guard was pushing one
+      // instance clear on every load.
+      { type: 'tyreStack', t: 0.128, lat: -14.2, step: 0.005, end: 0.156 },
       { type: 'signChevron', t: 0.130, lat: 14.5, step: 0.006, end: 0.164 },
       // ---- the neon canyon --------------------------------------------------
       // `neonCantilever`'s across-road half-extent is 5.0 m — it is authored to
@@ -1456,16 +1460,24 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // the whole thing fits the frustum. 190 m + 36 m of mast wants ~260 m and
       // 176 m wants ~215 m; the eye looks at the horizon, so only the upper half
       // of the vertical FOV is available above it. Re-measured in the report.
-      // BOTH ARE IN THE INFIELD, and that was measured rather than composed.
-      // The outfield on this circuit is the terrain's own rising ring: ground
-      // 14.5 m at lat -180, 21.0 at -220, 31.3 at -300, with 10-20 m of relief
-      // across a tower footprint. A 226 m spire out there stands on a hillside,
-      // which is a hill town and not Manhattan. The infield is a plain — relief
-      // 0.5 m, ground -0.2 m — and at 150 m and 145 m from the nearest
-      // carriageway these two read as a downtown cluster from three different
-      // parts of the lap instead of from one straight.
-      { type: 'empireSpire', t: 0.030, lat: 150 },
-      { type: 'chryslerCrown', t: 0.760, lat: 180 },
+      // BOTH ARE 300+ m OUT, and both numbers were measured twice over.
+      //
+      // The first attempt put them in the infield, at 150 m and 145 m from the
+      // nearest carriageway, because the infield is the flat ground here (relief
+      // 0.5 m against the outfield ring's 4-23 m). `.probe-tmp/landmark.ts` was
+      // unambiguous about it: the spire was seen WHOLE from 0.0 % of the lap and
+      // was in frame at all from 15.5 %, against `taipeiCircuit.pagodaTower`'s
+      // 23.2 % / 24.7 %. That is the Taipei defect exactly — a landmark close
+      // enough that its top is never in the frustum — and it does not matter how
+      // flat the ground under it is.
+      //
+      // `.probe-tmp/lmscout.ts` searched the whole (t, lat) space; these are its
+      // leaders that also stand on ground the recipe can be bedded into (28 m and
+      // 14 m of elevation, 3.9-18.9 m of relief over an 80 m span, against a
+      // tower footprint of 31 m and 25 m). Re-measured after the move and
+      // reported.
+      { type: 'empireSpire', t: 0.280, lat: -340 },
+      { type: 'chryslerCrown', t: 0.810, lat: -300 },
       // ---- the cross street --------------------------------------------------
       // `brownstoneRow`'s across-road half-extent is 6.3 m and `waterTankRow`'s
       // is 6.6 m (the fire escape), against a corridor of hw 9 + 1.55 + 2 =
