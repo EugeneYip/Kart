@@ -69,15 +69,24 @@ const THEME_SURFACE: Record<WorldTheme, ThemeSurface> = {
   },
   city: {
     tile: 7.5, rough: new THREE.Vector4(0.88, 0.92, 0.76, 0.92),
-    // ---- DIRT 0.34 -> 0.20 ON THE CITY GROUND ------------------------------
+    // ---- THE BIAS IS BACK AT 0.48 / 0.34, DELIBERATELY ---------------------
     // Owner on Taipei: *"care must be taken to avoid a desert-like feeling."*
-    // The dirt layer is the warmest thing in the splat (#5f4230, h 22 deg) and
-    // it was carrying 41 % of the bias weight on all three city circuits — a
-    // third of the verge is bare warm earth, which under a low warm key is a
-    // dune. Boston, Taipei and Tokyo are all humid basins with grass to the
-    // kerb; grass takes the weight. Measured before/after in
-    // `.probe-tmp/palette.ts`.
-    bias: new THREE.Vector4(0.60, 0.20, 0.0, -0.8),
+    // Round one answered that by moving the splat weight off dirt — the warmest
+    // layer, `#5f4230` at h 22 deg — and onto grass, 0.48/0.34 -> 0.60/0.20.
+    // The reasoning was sound and the hue numbers improved, but it was the wrong
+    // lever and it cost something that did not show up in a hue measurement.
+    //
+    // Reviewed on screen, the Taipei ground then read as a uniform flat green
+    // with visible large-scale faceting. Measured rather than argued: the bias
+    // change cost **40 % of the ground's large-scale variation**, because
+    // pushing weight onto one layer is exactly the same thing as flattening the
+    // splat. A single warm wash had been replaced by a single green one.
+    //
+    // `THEME_TINT.city` alone clears every palette gate on all five circuits
+    // without touching the mix, so the tint is doing the work and this is back
+    // where it started. Ground at 300 m still moves h 75 deg -> h 101 deg; the
+    // variation comes back with it. See `.probe-tmp/palette.ts`.
+    bias: new THREE.Vector4(0.48, 0.34, 0.0, -0.8),
     normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.5),
     sandTop: -1e5, sandFade: 6, detailScale: 4,
   },

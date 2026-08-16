@@ -2865,6 +2865,7 @@ export class Props implements ISubsystem {
   private carriagewayDrops = 0;
   private carriagewayWorst = 0;
   private carriagewayTypes: string[] = [];
+  private carriagewayPushTypes: string[] = [];
   /** Authored placements grouped by normalised type, minus any already claimed. */
   private authored = new Map<string, Anchor[]>();
 
@@ -3005,8 +3006,9 @@ export class Props implements ISubsystem {
       // recipe. See the CARRIAGEWAY GUARD block.
       console.warn(
         `[Props] carriageway guard: ${this.carriagewayPushes} props walked off the drivable`
-        + ` road (worst move ${this.carriagewayWorst.toFixed(2)} m);`
-        + ` ${this.carriagewayDrops} DROPPED because they were still on it`
+        + ` road (worst move ${this.carriagewayWorst.toFixed(2)} m)`
+        + `${this.carriagewayPushTypes.length ? ` [${this.carriagewayPushTypes.join(', ')}]` : ''}`
+        + `; ${this.carriagewayDrops} DROPPED because they were still on it`
         + `${this.carriagewayTypes.length ? `: ${this.carriagewayTypes.join(', ')}` : ''}`,
       );
     }
@@ -3246,6 +3248,18 @@ export class Props implements ISubsystem {
     mesh.renderOrder = RENDER_ORDER.PROPS;
     mesh.instanceMatrix.setUsage(o.motion ? THREE.DynamicDrawUsage : THREE.StaticDrawUsage);
 
+    // Worst HORIZONTAL distance from the anchor to a box corner, whatever the
+    // yaw — the radius the carriageway guard's cheap rejection needs. Taken from
+    // the box rather than from `radius` above, because a bounding SPHERE is
+    // centred on the geometry, not on the anchor, and understates the reach of
+    // anything authored off its own origin.
+    const guardReach = localBox
+      ? Math.max(
+        Math.hypot(localBox.max.x, localBox.max.z), Math.hypot(localBox.min.x, localBox.min.z),
+        Math.hypot(localBox.max.x, localBox.min.z), Math.hypot(localBox.min.x, localBox.max.z),
+      )
+      : 0;
+
     const cull = o.cull ?? CULL_NEAR;
     const phase = new Float32Array(anchors.length);
     const cullAttr = new Float32Array(anchors.length);
@@ -3255,6 +3269,7 @@ export class Props implements ISubsystem {
     let n = 0;
     let blocked = 0;
     let onRoad = 0;
+    let pushed = 0;
     const bounds = new THREE.Box3();
     for (let i = 0; i < anchors.length; i++) {
       const a = anchors[i];
@@ -3272,8 +3287,24 @@ export class Props implements ISubsystem {
       // `takeAuthored`. Both of the intrusions this was written for fell through
       // exactly those two gaps. Push first — a prop the track asked for belongs
       // beside the road, not deleted — and only if that fails, drop.
-      if (o.corridor !== true && !o.place && localBox && !this.farFromRoad(a, radius * a.scale)) {
-        if (this.pushOffCarriageway(a, localBox)) this.carriagewayPushes++;
+      // `o.motion` recipes are exempt, and the reason is the whole point of the
+      // FIFTH "BOX AT THE START LINE" note above: `seagull` and `tram` anchors
+      // are literally `{ x: 0, y: 0, z: 0, yaw: 0, scale: 1 }`, a placeholder,
+      // because their real transform is `updateGulls()` / `updateTrams()`
+      // recomputing a flight path or a tramline every frame. World (0, 0, 0) is
+      // the start/finish line on these circuits, so the guard read 22 seagulls
+      // (Coastal) and 3 trams (Neon) as standing on the tarmac and walked them
+      // off it — 25 of the 27 pushes in the whole game, worst move 13.89 m.
+      //
+      // Pushing a placeholder is at best wasted work and at worst a 13 m offset
+      // applied to a tramline that is supposed to sit on visible rails. A prop
+      // whose transform is recomputed every frame is not placed by its anchor,
+      // so testing that anchor against the road cannot mean anything. Volcano's
+      // obsidian — the boulder this guard exists for — is unaffected: it is a
+      // real `roadside()` placement with no motion.
+      if (o.corridor !== true && !o.place && !o.motion && localBox
+        && !this.farFromRoad(a, guardReach * a.scale)) {
+        if (this.pushOffCarriageway(a, localBox)) { this.carriagewayPushes++; pushed++; }
       }
       _m.identity();
       if (o.place) {
@@ -3284,7 +3315,18 @@ export class Props implements ISubsystem {
       }
       // FAIL CLOSED. Measured from the transform the instance will actually be
       // drawn with, so it is exact for `o.place` recipes too.
-      if (o.corridor !== true && localBox && !this.farFromRoad(a, radius * a.scale)
+      //
+      // `o.motion` is exempt here for the same reason it is exempt from the push
+      // above, and getting this half-right is worse than not doing it at all: on
+      // the first attempt only the push was exempted, so the flock and the trams
+      // sailed past it and were then DELETED by this test instead — 22 seagulls
+      // off Coastal and all 3 trams off Neon. The matrix composed above is the
+      // identity for these recipes, because their anchor is a placeholder and
+      // `updateGulls()` / `updateTrams()` writes the real transform on the first
+      // `Props.update()`. Measuring that identity against the road measures the
+      // start/finish line, not the prop.
+      if (o.corridor !== true && !o.motion && localBox
+        && !this.farFromRoad(a, guardReach * a.scale)
         && this.onCarriageway(a, localBox, _m)) {
         onRoad++;
         continue;
@@ -3348,6 +3390,7 @@ export class Props implements ISubsystem {
       this.carriagewayDrops += onRoad;
       this.carriagewayTypes.push(`${name} x${onRoad}`);
     }
+    if (pushed > 0) this.carriagewayPushTypes.push(`${name} x${pushed}`);
     if (n === 0) { mesh.dispose(); geo.dispose(); return null; }
     mesh.count = n;
     mesh.instanceMatrix.needsUpdate = true;
