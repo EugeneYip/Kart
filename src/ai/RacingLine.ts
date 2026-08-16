@@ -86,11 +86,54 @@ export interface RacingLineOptions {
    * passes it (4.2 m clears the 2.78 m minimum) but a kart 3.4 m off its line is
    * in the rail there against 8–10 m anywhere else.
    *
-   * Not changed here on purpose: `edgeMargin` is shared by all six circuits and
-   * every number measured this session was measured against 1.95. Making it
-   * shoulder-aware is a real fix and it needs its own before/after pass.
+   * `barrierMargin` below is that fix. `edgeMargin` stays as the road-edge
+   * constraint (it is what stops the line hanging off the drivable surface);
+   * `barrierMargin` adds the constraint this comment says is missing.
    */
   edgeMargin: number;
+  /**
+   * Clearance kept from the BARRIER FACE, metres — the constraint `edgeMargin`
+   * was always meant to be.
+   *
+   * The limit applied to a station is `min(halfWidth - edgeMargin,
+   * barrierDistance - barrierMargin)`, where `barrierDistance` is measured with
+   * `ITrackService.collideWalls` — the same function the physics collides
+   * against — rather than inferred from the authored cross-section.
+   *
+   * Measured (`.probe-tmp/shoulder.ts`): the longest CONTINUOUS run of lap that
+   * is simultaneously a corner (R < 100 m) and inside 6 m of a barrier, on the
+   * optimal line, was
+   *
+   *     sunsetCoastline   99 m     bostonHarbor    82 m
+   *     neonMetropolis    46 m     taipeiCircuit   61 m
+   *     tokyoNeon         67 m     volcanoRush    358 m
+   *
+   * — because volcanoRush's spiral holds a 1.4 m shoulder for 358 m where the
+   * rest of that circuit runs 6–8 m, and `edgeMargin` cannot see the difference.
+   *
+   * ⚠️ MEASURED, AND IT DOES NOT WORK. DEFAULT 0. Do not turn this on again
+   * without reading this.
+   *
+   * At 5.3 the constraint binds and does exactly what it says: every circuit's
+   * tightest line-to-barrier clearance rises to >= 5.30 m (volcanoRush's worst
+   * goes 3.49 -> 5.36, its p1 5.11 -> 5.36; `.probe-tmp/lineclear.ts`). It then
+   * makes volcanoRush WORSE, not better:
+   *
+   *     3 seeds x 200 s, config A, .probe-tmp/wallab.ts
+   *     barrierMargin 0.0    77.0 contacts   med 1.00/lap   worst 17.0   offTr 48.1
+   *     barrierMargin 5.3    94.7 contacts   med 1.33/lap   worst 23.5   offTr 56.6
+   *
+   * Which is the useful result: the contacts are not "the line is parked too
+   * close to the rail". They are drift excursions with an amplitude of 9–11 m
+   * (`.probe-tmp/volctrace.ts`), and against that, moving the line by 1.1 m only
+   * changes which barrier gets hit. The mechanism that matters is in
+   * `AIDriver.updateDrift`, not here.
+   *
+   * The measurement itself is kept and is used: `LineSample.barrierHalf` and
+   * `stats().minBarrierClearance` come from the same probe, and the drift bail
+   * test needs to know where the barrier is rather than where the tarmac ends.
+   */
+  barrierMargin: number;
   /** Clearance for the defensive / overtaking lines, metres. */
   variantMargin: number;
   /** How far `inside` pulls toward the apex kerb, metres. */
@@ -119,6 +162,7 @@ export const LINE_DEFAULTS: RacingLineOptions = {
   refinementRounds: 2,
   refinementIterations: 40,
   edgeMargin: 1.95,
+  barrierMargin: 0,
   variantMargin: 2.5,
   insideShift: 3.0,
   outsideShift: 3.2,
@@ -151,6 +195,12 @@ export interface LineSample {
   lateral: number;
   /** Drivable half-width of the road here, metres. */
   halfWidth: number;
+  /**
+   * Lateral distance from the CENTRELINE to the nearer barrier face, metres,
+   * as `collideWalls` sees it. `Infinity` where there is no barrier within
+   * `BARRIER_PROBE` of the road edge. Always >= `halfWidth`.
+   */
+  barrierHalf: number;
   /** Normalised lap progress, [0,1). */
   t: number;
   /** Arc length along the line, metres. */
@@ -169,6 +219,7 @@ export function createLineSample(): LineSample {
     curvature: 0,
     lateral: 0,
     halfWidth: 10,
+    barrierHalf: Infinity,
     t: 0,
     distance: 0,
     station: 0,
@@ -189,6 +240,8 @@ export interface NearestResult {
   lateralFromCentre: number;
   /** Drivable half-width there, metres. */
   halfWidth: number;
+  /** Centreline-to-barrier-face distance there, metres. See `LineSample`. */
+  barrierHalf: number;
 }
 
 export function createNearestResult(): NearestResult {
@@ -200,6 +253,7 @@ export function createNearestResult(): NearestResult {
     distance: 0,
     lateralFromCentre: 0,
     halfWidth: 10,
+    barrierHalf: Infinity,
   };
 }
 
@@ -276,6 +330,13 @@ const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _e = new THREE.Vector3();
 
+/**
+ * Radius used for the one-shot barrier probe, metres. Anything further from the
+ * drivable edge than this is "no barrier here" as far as the line is concerned —
+ * `barrierMargin` is at most ~6 m, so a face beyond 9 m can never bind.
+ */
+const BARRIER_PROBE = 9.0;
+
 // ---------------------------------------------------------------------------
 
 export class RacingLine {
@@ -291,6 +352,8 @@ export class RacingLine {
   private readonly cnorm: Float64Array;
   private readonly cbin: Float64Array;
   private readonly chalf: Float64Array;
+  /** Centreline-to-nearer-barrier-face distance, metres. `Infinity` = none. */
+  private readonly cbarrier: Float64Array;
   /** Usable half-width for the optimal line, metres. */
   private readonly usable: Float64Array;
   /** Usable half-width for the alternate lines, metres. */
@@ -317,6 +380,7 @@ export class RacingLine {
     this.cnorm = new Float64Array((n + 1) * 3);
     this.cbin = new Float64Array((n + 1) * 3);
     this.chalf = new Float64Array(n + 1);
+    this.cbarrier = new Float64Array(n + 1);
     this.usable = new Float64Array(n + 1);
     this.usableVariant = new Float64Array(n + 1);
     this.cornerSign = new Float64Array(n + 1);
@@ -355,6 +419,7 @@ export class RacingLine {
         this.cbin[i3] = Math.cos(ang);
         this.cbin[i3 + 2] = Math.sin(ang);
         this.chalf[i] = 10;
+        this.cbarrier[i] = Infinity;
         continue;
       }
       this.cpos[i3] = s.position.x;
@@ -386,6 +451,7 @@ export class RacingLine {
 
       const hw = Number.isFinite(s.halfWidth) && s.halfWidth > 0.5 ? s.halfWidth : 10;
       this.chalf[i] = hw;
+      this.cbarrier[i] = this.measureBarrier(track, i, hw);
     }
     // Mirror station N = station 0.
     const n3 = n * 3;
@@ -396,11 +462,65 @@ export class RacingLine {
       this.cbin[n3 + k] = this.cbin[k];
     }
     this.chalf[n] = this.chalf[0];
+    this.cbarrier[n] = this.cbarrier[0];
 
+    const barrierM = this.opt.barrierMargin;
+    // The alternates already sit 0.55 m further from the road edge than the
+    // optimal line does; keep that ordering against the barrier too, so turning
+    // the barrier constraint on cannot collapse three lines into one.
+    const barrierV = barrierM + (this.opt.variantMargin - this.opt.edgeMargin);
     for (let i = 0; i <= n; i++) {
-      this.usable[i] = Math.max(0.6, this.chalf[i] - this.opt.edgeMargin);
-      this.usableVariant[i] = Math.max(0.4, this.chalf[i] - this.opt.variantMargin);
+      let lim = this.chalf[i] - this.opt.edgeMargin;
+      let limV = this.chalf[i] - this.opt.variantMargin;
+      if (barrierM > 0 && Number.isFinite(this.cbarrier[i])) {
+        lim = Math.min(lim, this.cbarrier[i] - barrierM);
+        limV = Math.min(limV, this.cbarrier[i] - barrierV);
+      }
+      this.usable[i] = Math.max(0.6, lim);
+      this.usableVariant[i] = Math.max(0.4, limV);
     }
+  }
+
+  /**
+   * Lateral distance from station `i` to the nearer barrier face, metres.
+   *
+   * Probed with `ITrackService.collideWalls`, which reports `depth = radius -
+   * clearance` for the nearest face whose vertical band contains the query — so
+   * a single large-radius query at the road edge reads the clearance directly.
+   * Using the collision function rather than the authored cross-section matters:
+   * it is the geometry the kart will actually hit, including any barrier the
+   * cross-section does not describe.
+   *
+   * Both sides are probed and the NEARER is kept. The relaxation limit is a
+   * symmetric `±lim`, and on every stretch where this constraint binds
+   * (measured: volcanoRush 860–1200 m) the two shoulders are equal anyway.
+   */
+  private measureBarrier(track: ITrackService, i: number, halfWidth: number): number {
+    const i3 = i * 3;
+    let best = Infinity;
+    for (let s = -1; s <= 1; s += 2) {
+      _d.set(
+        this.cpos[i3] + this.cbin[i3] * halfWidth * s,
+        this.cpos[i3 + 1] + this.cbin[i3 + 1] * halfWidth * s,
+        this.cpos[i3 + 2] + this.cbin[i3 + 2] * halfWidth * s,
+      );
+      let hit;
+      try {
+        hit = track.collideWalls(_d, BARRIER_PROBE);
+      } catch {
+        continue;
+      }
+      if (!hit || !hit.hit) continue;
+      // Keep only a face on the side we probed: at the road edge the opposite
+      // barrier is 2·halfWidth away and would otherwise be reported on narrow
+      // roads, which would clamp the line to the centreline.
+      _e.set(this.cbin[i3], this.cbin[i3 + 1], this.cbin[i3 + 2]);
+      if (hit.normal && hit.normal.dot(_e) * s > 0) continue;
+      const clearance = BARRIER_PROBE - hit.depth;
+      const dist = halfWidth + Math.max(0, clearance);
+      if (dist < best) best = dist;
+    }
+    return best;
   }
 
   /**
@@ -855,6 +975,9 @@ export class RacingLine {
     out.curvature = lerp(p.curv[i0], p.curv[i1], frac);
     out.lateral = lerp(p.offsets[i0], p.offsets[i1 % n], frac);
     out.halfWidth = lerp(this.chalf[i0], this.chalf[i1], frac);
+    // `Infinity` on either side must stay Infinity, not NaN, so take the min
+    // rather than interpolating.
+    out.barrierHalf = Math.min(this.cbarrier[i0], this.cbarrier[i1]);
     out.distance = lerp(p.cum[i0], p.cum[i1], frac);
     out.t = tt;
     out.station = i0;
@@ -994,6 +1117,7 @@ export class RacingLine {
     out.distanceToLine = _c.length();
     out.distance = lerp(p.cum[s0], p.cum[s0 + 1], frac);
     out.halfWidth = lerp(this.chalf[s0], this.chalf[s0 + 1], frac);
+    out.barrierHalf = Math.min(this.cbarrier[s0], this.cbarrier[s0 + 1]);
     const lineOffset = lerp(p.offsets[s0], p.offsets[(s0 + 1) % n], frac);
     out.lateralFromCentre = lineOffset + out.lateral;
     return out;
@@ -1118,6 +1242,11 @@ export class RacingLine {
     return this.chalf;
   }
 
+  /** Centreline-to-barrier distance per station, metres. Do not mutate. */
+  debugBarrier(): Float64Array {
+    return this.cbarrier;
+  }
+
   /** Summary numbers for assertions. */
   stats(): {
     stations: number;
@@ -1130,6 +1259,12 @@ export class RacingLine {
     meanAbsOffset: number;
     maxAbsOffset: number;
     totalTurning: number;
+    /**
+     * Tightest clearance from the optimal line to a barrier face anywhere on the
+     * lap, metres. Reported because it is the number that separated volcanoRush
+     * from the other five circuits and nothing surfaced it.
+     */
+    minBarrierClearance: number;
     finite: boolean;
   } {
     const p = this.path('optimal');
@@ -1137,11 +1272,16 @@ export class RacingLine {
     let sum = 0;
     let max = 0;
     let finite = true;
+    let minClear = Infinity;
     for (let i = 0; i < n; i++) {
       const a = Math.abs(p.offsets[i]);
       sum += a;
       if (a > max) max = a;
       if (!Number.isFinite(p.offsets[i]) || !Number.isFinite(p.speed[i])) finite = false;
+      if (Number.isFinite(this.cbarrier[i])) {
+        const c = this.cbarrier[i] - Math.abs(p.offsets[i]);
+        if (c < minClear) minClear = c;
+      }
     }
     return {
       stations: n,
@@ -1154,6 +1294,7 @@ export class RacingLine {
       meanAbsOffset: sum / n,
       maxAbsOffset: max,
       totalTurning: p.totalAbs,
+      minBarrierClearance: minClear,
       finite,
     };
   }

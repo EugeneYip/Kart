@@ -286,7 +286,8 @@ export class AIManager implements ISubsystem {
       console.info(
         `[AI] racing line: ${s.stations} stations, ${s.optimalLength.toFixed(1)} m ` +
           `(centre ${s.centreLength.toFixed(1)} m), v ${s.minSpeed.toFixed(1)}–` +
-          `${s.maxSpeed.toFixed(1)} m/s, built in ${(t1 - t0).toFixed(1)} ms`,
+          `${s.maxSpeed.toFixed(1)} m/s, barrier clearance >= ` +
+          `${s.minBarrierClearance.toFixed(2)} m, built in ${(t1 - t0).toFixed(1)} ms`,
       );
     }
 
