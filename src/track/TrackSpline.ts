@@ -224,6 +224,8 @@ const _b = new THREE.Vector3();
 const _ax = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
 const _tmp2 = new THREE.Vector3();
+/** `scalars4` output: hw, bank, shoulderL, shoulderR. Read before the next call. */
+const _sc4 = new Float64Array(4);
 
 /** Rodrigues rotation of `v` about the unit axis `k` by `ang`, in place. */
 function rotateAbout(v: THREE.Vector3, k: THREE.Vector3, ang: number): THREE.Vector3 {
@@ -732,6 +734,39 @@ export class TrackSpline {
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  /**
+   * All four smooth channels at one parameter, into `_sc4` as
+   * `[hw, bank, shL, shR]`.
+   *
+   * `scalarAtParam` redoes `split()`, the floor and the segment index on every
+   * call, which is most of its cost — the cubic itself is three multiply-adds.
+   * `sampleAtDistance` used to pay that twice (hw, bank) and now needs four
+   * channels, so it pays it ONCE instead. Measured on `bostonHarbor` over
+   * 1.5 M calls (`.probe-tmp/samplecost.ts`): 1339 ns per sample with four
+   * separate `scalarAtParam` calls and 853 ns with this. The two-channel
+   * version that shipped is the 1339 figure minus the two channels it did not
+   * evaluate, ~1206 ns — so carrying the shoulders is not merely free, the
+   * sample path is ~29 % cheaper than it was WITHOUT them. `attribsAtDistance`,
+   * which is on the physics ground probe, goes 362 -> 195 ns for the same
+   * reason.
+   */
+  private scalars4(s: number): Float64Array {
+    s = this.split(s);
+    let i = Math.floor(s);
+    if (i >= this.segCount) i = this.segCount - 1;
+    const u = s - i;
+    const u2 = u * u, u3 = u2 * u;
+    const sc = this.sc, en = this.scEnds;
+    const base = i * 16, eb = i * 8;
+    for (let ch = 0; ch < 4; ch++) {
+      const o = base + ch * 4;
+      const v = sc[o] + sc[o + 1] * u + sc[o + 2] * u2 + sc[o + 3] * u3;
+      const lo = en[eb + ch * 2], hi = en[eb + ch * 2 + 1];
+      _sc4[ch] = v < lo ? lo : v > hi ? hi : v;
+    }
+    return _sc4;
+  }
+
   /** Owning control-point index at an arc length. */
   nodeIndexAtDistance(d: number): number {
     const s = this.paramAtDistance(d);
@@ -745,10 +780,11 @@ export class TrackSpline {
     let i = Math.floor(this.split(s));
     if (i >= this.segCount) i = this.segCount - 1;
     const nd = this.nodes[i];
-    out.halfWidth = this.scalarAtParam(s, 0);
-    out.bank = this.scalarAtParam(s, 1);
-    out.shoulderL = this.scalarAtParam(s, 2);
-    out.shoulderR = this.scalarAtParam(s, 3);
+    const ch = this.scalars4(s);
+    out.halfWidth = ch[0];
+    out.bank = ch[1];
+    out.shoulderL = ch[2];
+    out.shoulderR = ch[3];
     out.surface = nd.surface;
     out.shoulderSurface = nd.shoulderSurface;
     out.wallL = nd.wallL;
@@ -787,21 +823,21 @@ export class TrackSpline {
     if (nl < 1e-6) _n.set(0, 1, 0);
     else _n.multiplyScalar(1 / nl);
 
-    const bank = this.scalarAtParam(s, 1);
+    // One split, four channels — see `scalars4`. Channels 2 and 3 are the
+    // shoulders; see `SplineSample` for what happened while they were dropped.
+    const ch = this.scalars4(s);
+    const bank = ch[1];
     if (bank !== 0) rotateAbout(_n, out.tangent, bank);
 
     out.normal.copy(_n);
     out.binormal.crossVectors(out.tangent, _n).normalize();
 
-    out.halfWidth = this.scalarAtParam(s, 0);
+    out.halfWidth = ch[0];
     out.bank = bank;
     out.distance = dw;
     out.t = dw / this.length;
-    // Channels 2 and 3 on the parameter that is already solved: two cubics, no
-    // second LUT search. See `SplineSample` for what used to happen without
-    // them — every consumer outside `src/track` guessed 3 m.
-    out.shoulderL = this.scalarAtParam(s, 2);
-    out.shoulderR = this.scalarAtParam(s, 3);
+    out.shoulderL = ch[2];
+    out.shoulderR = ch[3];
 
     // Signed curvature about the road up: k = (r'' . right) / |r'|^2
     this.deriv2Param(s, _d2);

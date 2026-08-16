@@ -9823,6 +9823,16 @@ export class Props implements ISubsystem {
      */
     const shoulderAt = (along: number, side: number, out: THREE.Vector3): THREE.Vector3 => {
       const frame = this.deckFrameAt(arc0 + along, _deck);
+      // ---- `frame.shL/shR` IS A REAL NUMBER NOW, AND THAT IS THE FIX --------
+      // This line has always read the station's shoulder. Until the field was
+      // plumbed the station never had one, so it read `SH_FALLBACK` (3 m)
+      // against an authored 1.2 m and put the whole edge girder 1.8 m too far
+      // out — measured against the DRAWN ribbon (`.probe-tmp/shoulderfix.ts`
+      // claim C, `bostonHarbor`): all 42 girder post feet with NO drawn road
+      // beneath them, worst 1.50 m outboard of the deck edge and 2.06 m of air
+      // under the foot. Afterwards: 0 of 32 anchor bands off the deck, worst
+      // 0.34 m INBOARD of the edge and 0.03 m of embedment. That is the owner's
+      // twice-reported floating cables, and nothing in this function changed.
       const sh = side < 0 ? frame.shL : frame.shR;
       const edge = frame.hw + CROSS.kerbW + sh;
       const lat = side * (edge - inset);
