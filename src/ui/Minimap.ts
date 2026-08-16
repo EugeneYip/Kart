@@ -303,6 +303,9 @@ export class Minimap {
   /** Vertices in the drawn course ribbon. */
   get courseLength(): number { return this.path.length; }
 
+  /** Rotation applied to the last painted frame, radians. 0 unless track-up. */
+  get mapRotation(): number { return this.drawRot; }
+
   /**
    * Ribbon vertex `i` in canvas pixels, with the live map rotation applied —
    * i.e. where that piece of course actually is on screen. Exposed so a test
