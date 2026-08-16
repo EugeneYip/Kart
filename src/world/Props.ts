@@ -143,6 +143,14 @@ interface Anchor {
    */
   blocked?: boolean;
   /**
+   * Set by the carriageway guard in `emit()`. Memoised for exactly the reason
+   * `blocked` is: the companion passes (glow, cloth, metal, sign) share the
+   * anchor array with the body, and the body is emitted first, so the verdict
+   * has to come from the full silhouette. Without this, a shard cluster would be
+   * dropped and its glow left standing on the racing line.
+   */
+  onRoad?: boolean;
+  /**
    * Authored offset from the surface, metres — only set for authored anchors that
    * `collectAuthored()` re-seated. Kept so anything that re-seats the anchor
    * again (the road-volume push in `clearAuthored()`) preserves it instead of
@@ -164,6 +172,16 @@ const _s = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _axisY = new THREE.Vector3(0, 1, 0);
 const _volDir = new THREE.Vector3();
+// The carriageway guard keeps its own scratch. `emit()`'s `o.place` callbacks
+// compose into `_m` and freely use `_v` / `_q` / `_s` while doing it, so the
+// guard cannot borrow those without clobbering a transform mid-build.
+const _roadV = new THREE.Vector3();
+const _roadQ = new THREE.Quaternion();
+const _roadS = new THREE.Vector3();
+const _roadM = new THREE.Matrix4();
+const _roadDir = new THREE.Vector3();
+/** Eight world-space box corners, xyz interleaved. */
+const _roadCorners = new Float64Array(24);
 
 /**
  * One resolved cross-section of the DRAWN carriageway, in world space — the
@@ -2661,6 +2679,111 @@ const PROP_KERB_W = 1.55;
 /** How far outboard an anchor may be walked before the push is abandoned. */
 const PROP_PUSH_LIMIT = 6;
 
+/**
+ * ===========================================================================
+ *  THE CARRIAGEWAY GUARD — every guard in this file failed OPEN
+ * ===========================================================================
+ *  Measured on the shipping build (`.probe-tmp/roadintrude.ts`, which walks the
+ *  eight world corners of every emitted instance against the drawn asphalt):
+ *
+ *      volcanoRush      Prop:obsidian  9.0 m inside an 11.0 m half-width road
+ *                       at d=784 m / t=0.514 — i.e. on the centreline of a
+ *                       222 m left-hander, rolled 34 deg. 5 x 6 x 3 m.
+ *      sunsetCoastline  Prop:rock      1.6 m inside a 12.5 m half-width road
+ *                       at d=1522 m / t=0.948.
+ *
+ *  Neither had any guard between it and the racing line, for two DIFFERENT
+ *  reasons, which is why one fix has to sit where every prop passes:
+ *
+ *   * The obsidian shard is an AUTHORED `obsidianSpire` — placement #14 of the
+ *     `t 0.62 -> 0.78, lat -32` run on the helix, confirmed by identity
+ *     (`.probe-tmp/obsidiag.ts`: the emitted instance is 0.00 m from the
+ *     authored anchor). The helix passes over the caldera chute, so at that XZ
+ *     `field.heightAt()` is not ground — it is the chute's own baked road
+ *     plane, 24 m above where the prop was authored. `collectAuthored()`
+ *     re-seats anything outside its own corridor onto the heightfield, so the
+ *     spire was lifted 23.4 -> 47.5 m and landed on a different carriageway.
+ *     Then `buildVolcano()` claims it with `takeAuthored('obsidianspire')` —
+ *     and `takeAuthored` removes it from the pending set, so `buildAuthored()`,
+ *     the ONLY caller of `clearAuthored()` and `clearRoadSurface()`, never sees
+ *     it. `clearKerb()` cannot help either: authored anchors carry `side: 0`
+ *     and it returns false on the first line.
+ *   * The coastal rock came from `annulus({ minRoadDist: 17 })`, which is also
+ *     `side: 0`, so `clearKerb` skipped it too. Its ANCHOR is 4.4 m clear of
+ *     the asphalt (`roadDistanceAt` 17.8) and only its cluster reaches in —
+ *     the same "min is the clearance of the ANCHOR, not of the prop" mistake
+ *     `PROP_KERB_VERGE` above was written for, one scatterer along.
+ *
+ *  So the rule is applied once, in `emit()`, from the REAL instance matrix, for
+ *  every non-corridor prop whatever produced its anchor — and it FAILS CLOSED:
+ *  a prop still standing on the drivable road after the push has been attempted
+ *  is dropped. Dropping one shard out of 63 is invisible; a boulder on the
+ *  centreline is what the owner has reported three times.
+ *
+ *  ---- IT HAS TO WORK IN THE ROAD'S OWN PLANE -------------------------------
+ *  `PathStation.halfWidth` is the asphalt half-width measured ALONG THE BANKED
+ *  SURFACE — `Track.getDecorationHints()` resolves a prop's `lat` with
+ *  `position + binormal * lat` on the full 3-D binormal and compares that same
+ *  `lat` against `halfWidth + kerbW + shoulder`. But `PathStation.bx/bz` is
+ *  that binormal flattened into XZ and renormalised, so `roadVerge()` and
+ *  `roadClearance()` — which take `Math.hypot(x - cx, z - cz)` and subtract
+ *  `halfWidth` — compare a HORIZONTAL distance against a ROAD-PLANE width.
+ *
+ *  On the flat the two agree. On volcano's caldera chute, rolled 34 deg, an
+ *  11.0 m half-width road is 11.0*cos(34) = 9.1 m wide in plan and its edge
+ *  stands 6.2 m above the centreline, so the plan-frame test invents 1.9 m of
+ *  road that is not there. Measured: it reports volcano's five authored
+ *  `warningPost`s at `lat -12.5` as 0.9 m INSIDE a road they clear by 1.5 m.
+ *
+ *  That error is harmless where it only makes a PUSH more generous, which is
+ *  the one thing `clearKerb`/`clearRoadSurface` do with it — so they are left
+ *  alone. It is not harmless when the verdict is "delete this prop". So the
+ *  guard below works from the two numbers the road mesh itself uses: a plan
+ *  half-extent of `halfWidth * cos(roll)`, and a surface that rises `tanBank`
+ *  per metre of horizontal lateral offset.
+ * ===========================================================================
+ */
+/**
+ * Penetration of the asphalt, in metres, that is tolerated before a prop counts
+ * as standing on the carriageway.
+ *
+ * Chosen from the measured distribution rather than picked: across all six
+ * circuits the closest thing to the road that is *meant* to be there is a
+ * `tyreWall` at 1.0-2.0 m OUTSIDE the edge, and nothing else comes within 1.0 m
+ * of it. So 0.35 m leaves 1.35 m of headroom under the nearest legitimate prop
+ * while still catching a 1.6 m intrusion. (Same intent as `AUTHORED_ROAD_SLACK`,
+ * an order of magnitude tighter, because that one guards a *push* and this one
+ * guards a *drop*.)
+ */
+const PROP_ROAD_SLACK = 0.35;
+/**
+ * Vertical band around a carriageway, relative to its surface, in which a prop
+ * is in the driver's way. Asymmetric, and applied to the prop's whole world
+ * y-span rather than to one corner:
+ *
+ *  * below: volcano's `lavaFountain` is authored `lat 0, up -26`, deliberately
+ *    under the broken bridge, and its glow tops out 5.7 m under the deck. Two
+ *    metres is enough to cover a prop bedded into a verge that stands a little
+ *    proud of the tarmac, and far too little to reach a deck.
+ *  * above: eight metres clears a kart and anything it can fly over, and stops
+ *    a prop on the basin floor being judged against a carriageway overhead.
+ *
+ * Using the SPAN means a prop tall enough to pass through a deck is caught even
+ * though no single corner of it is level with the road.
+ */
+const PROP_ROAD_UNDER = 2.0;
+const PROP_ROAD_OVER = 8.0;
+/**
+ * Skip radius for the guard: an anchor whose baked road distance exceeds
+ * `maxHalfWidth + its own reach + this` cannot touch any carriageway, so it
+ * never pays for the chord scan. Generous because `roadDistanceAt` is a
+ * nearest-texel lookup that over-reports by up to a texel half-diagonal
+ * (~3.5 m at the `low` tier) — see the note on `roadVerge` in WorldTextures.
+ */
+const PROP_ROAD_SKIP_PAD = 8;
+/** Measured steps the push may take before the prop is dropped instead. */
+const PROP_ROAD_STEPS = 3;
+
 const SHADOW_MIN_RADIUS = 0.95;
 
 /**
@@ -2736,6 +2859,12 @@ export class Props implements ISubsystem {
   private roadSurfaceWorst = 0;
   private roadSurfaceRefused = 0;
   private roadSurfaceTypes: string[] = [];
+  /** Anchors the carriageway guard walked off the drivable road — reported once. */
+  private carriagewayPushes = 0;
+  /** Instances it DROPPED because they were still on the road afterwards. */
+  private carriagewayDrops = 0;
+  private carriagewayWorst = 0;
+  private carriagewayTypes: string[] = [];
   /** Authored placements grouped by normalised type, minus any already claimed. */
   private authored = new Map<string, Anchor[]>();
 
@@ -2866,6 +2995,19 @@ export class Props implements ISubsystem {
       console.info(
         `[Props] kerb clearance: ${this.kerbPushes} roadside anchors walked outboard so their`
         + ` geometry leaves ${PROP_KERB_VERGE} m past the kerb (see clearKerb)`,
+      );
+    }
+    if (this.carriagewayPushes || this.carriagewayDrops) {
+      // Loud, and it should stay loud. A DROP is the guard failing closed on a
+      // placement that has no legal home — an authored `lat` whose XZ lands on
+      // another branch of the spline, or a scatter band narrower than the recipe
+      // standing on it — and the real fix for each is in TrackDefs or in the
+      // recipe. See the CARRIAGEWAY GUARD block.
+      console.warn(
+        `[Props] carriageway guard: ${this.carriagewayPushes} props walked off the drivable`
+        + ` road (worst move ${this.carriagewayWorst.toFixed(2)} m);`
+        + ` ${this.carriagewayDrops} DROPPED because they were still on it`
+        + `${this.carriagewayTypes.length ? `: ${this.carriagewayTypes.join(', ')}` : ''}`,
       );
     }
     this.poseMotionProps();
@@ -3112,6 +3254,7 @@ export class Props implements ISubsystem {
 
     let n = 0;
     let blocked = 0;
+    let onRoad = 0;
     const bounds = new THREE.Box3();
     for (let i = 0; i < anchors.length; i++) {
       const a = anchors[i];
@@ -3122,12 +3265,29 @@ export class Props implements ISubsystem {
       // compose their own transform so the anchor is not the thing that moves.
       if (o.corridor !== true && !o.place && this.clearKerb(a, localBox)) this.kerbPushes++;
       if (o.corridor !== true && this.insideRoadVolume(a, localBox)) { blocked++; continue; }
+      // ...and off the OPEN carriageway, which no volume describes. See the
+      // CARRIAGEWAY GUARD block: `clearKerb` cannot reach an authored or
+      // annulus anchor (`side: 0`), and `clearRoadSurface` only ever runs from
+      // `buildAuthored()`, which never sees a group a theme builder claimed with
+      // `takeAuthored`. Both of the intrusions this was written for fell through
+      // exactly those two gaps. Push first — a prop the track asked for belongs
+      // beside the road, not deleted — and only if that fails, drop.
+      if (o.corridor !== true && !o.place && localBox && !this.farFromRoad(a, radius * a.scale)) {
+        if (this.pushOffCarriageway(a, localBox)) this.carriagewayPushes++;
+      }
       _m.identity();
       if (o.place) {
         if (!o.place(a, i, _m)) continue;
       } else {
         _q.setFromAxisAngle(_axisY, a.yaw);
         _m.compose(_v.set(a.x, a.y, a.z), _q, _s.setScalar(a.scale));
+      }
+      // FAIL CLOSED. Measured from the transform the instance will actually be
+      // drawn with, so it is exact for `o.place` recipes too.
+      if (o.corridor !== true && localBox && !this.farFromRoad(a, radius * a.scale)
+        && this.onCarriageway(a, localBox, _m)) {
+        onRoad++;
+        continue;
       }
       mesh.setMatrixAt(n, _m);
       phase[n] = a.seed;
@@ -3184,6 +3344,10 @@ export class Props implements ISubsystem {
       n++;
     }
     if (blocked > 0) this.volumeDrops += blocked;
+    if (onRoad > 0) {
+      this.carriagewayDrops += onRoad;
+      this.carriagewayTypes.push(`${name} x${onRoad}`);
+    }
     if (n === 0) { mesh.dispose(); geo.dispose(); return null; }
     mesh.count = n;
     mesh.instanceMatrix.needsUpdate = true;
@@ -3282,6 +3446,166 @@ export class Props implements ISubsystem {
   }
 
   private readonly _verge: RoadVerge = { verge: 0, halfWidth: 11, outX: 1, outZ: 0 };
+
+  /**
+   * How far an oriented bounding box reaches INSIDE the drawn asphalt, past
+   * `PROP_ROAD_SLACK`, in metres. Zero when it clears. `dir` receives the
+   * horizontal unit direction that leads away from the offending carriageway.
+   *
+   * Works from the instance MATRIX rather than from the anchor, so it is exact
+   * for `o.place` recipes that compose their own transform (the hay bale is
+   * tipped 90 deg about X; the parked car is yawed a further 90 deg) as well as
+   * for the plain yaw-and-scale path.
+   *
+   * Three things it does that the two older guards do not — see the CARRIAGEWAY
+   * GUARD block for the measurements behind each:
+   *
+   *  1. **Road plane, not plan.** The asphalt covers `halfWidth * cos(roll)` in
+   *     plan, and its surface rises `tanBank` per metre of horizontal offset.
+   *  2. **Every branch, not the nearest.** It scans all chords, so a prop is
+   *     judged against the carriageway it is LEVEL with. Volcano's helix runs
+   *     directly over the caldera chute and neon's flyover over its own
+   *     approach; a plan-only "nearest" answers for whichever happens to be
+   *     closer in XZ, which is how a pylon 40 m under a deck reads as being in
+   *     the road and a shard standing ON one reads as being clear.
+   *  3. **The prop's whole y-span.** A prop tall enough to pass through a deck
+   *     is caught even when no corner of it is level with the surface.
+   */
+  private roadBoxIntrusion(bb: THREE.Box3, m: THREE.Matrix4, dir: THREE.Vector3): number {
+    const st = this.ctx.stations;
+    const n = st.length;
+    if (n < 2) return 0;
+    let yLo = Infinity, yHi = -Infinity;
+    for (let c = 0; c < 8; c++) {
+      _roadV.set(
+        c & 1 ? bb.max.x : bb.min.x,
+        c & 2 ? bb.max.y : bb.min.y,
+        c & 4 ? bb.max.z : bb.min.z,
+      ).applyMatrix4(m);
+      _roadCorners[c * 3] = _roadV.x;
+      _roadCorners[c * 3 + 1] = _roadV.y;
+      _roadCorners[c * 3 + 2] = _roadV.z;
+      if (_roadV.y < yLo) yLo = _roadV.y;
+      if (_roadV.y > yHi) yHi = _roadV.y;
+    }
+    let worst = 0;
+    for (let c = 0; c < 8; c++) {
+      const x = _roadCorners[c * 3], z = _roadCorners[c * 3 + 2];
+      let bestLat = Infinity, inside = 0, ox = 0, oz = 0;
+      for (let i = 0; i < n; i++) {
+        const p = st[i], q = st[(i + 1) % n];
+        const ex = q.px - p.px, ez = q.pz - p.pz;
+        const len2 = ex * ex + ez * ez;
+        if (len2 < 1e-6) continue;
+        const t = clamp(((x - p.px) * ex + (z - p.pz) * ez) / len2, 0, 1);
+        const dx = x - (p.px + ex * t), dz = z - (p.pz + ez * t);
+        const lat = Math.hypot(dx, dz);
+        if (lat >= bestLat) continue;
+        const tanBank = p.tanBank + (q.tanBank - p.tanBank) * t;
+        // Sign of the offset, for the cross-fall. The MAGNITUDE stays `lat`: the
+        // binormal projection collapses toward zero where `t` clamps to a chord
+        // end (the offset is then mostly along the road), and using it as a width
+        // would report a prop 134 m off the circuit as 10.9 m inside it.
+        let bx = p.bx + (q.bx - p.bx) * t, bz = p.bz + (q.bz - p.bz) * t;
+        const bl = Math.hypot(bx, bz);
+        if (bl > 1e-6) { bx /= bl; bz /= bl; }
+        const roadY = p.py + (q.py - p.py) * t
+          + (dx * bx + dz * bz >= 0 ? lat : -lat) * tanBank;
+        if (yHi < roadY - PROP_ROAD_UNDER || yLo > roadY + PROP_ROAD_OVER) continue;
+        bestLat = lat;
+        const halfWidth = p.halfWidth + (q.halfWidth - p.halfWidth) * t;
+        inside = halfWidth / Math.sqrt(1 + tanBank * tanBank) - lat - PROP_ROAD_SLACK;
+        if (lat > 1e-4) { ox = dx / lat; oz = dz / lat; } else { ox = bx; oz = bz; }
+      }
+      if (inside > worst) { worst = inside; dir.set(ox, 0, oz); }
+    }
+    return worst;
+  }
+
+  /**
+   * Compose the transform `emit()` will use for a plain (non-`place`) anchor.
+   * Shared so the push below and the final verdict cannot disagree about what
+   * they are measuring.
+   */
+  private anchorMatrix(a: Anchor, out: THREE.Matrix4): THREE.Matrix4 {
+    _roadQ.setFromAxisAngle(_axisY, a.yaw);
+    return out.compose(_roadV.set(a.x, a.y, a.z), _roadQ, _roadS.setScalar(a.scale));
+  }
+
+  /**
+   * Walk an anchor off the drivable road. Returns true only when it ended up
+   * CLEAR; anything short of that is rolled back so the drop below deletes a
+   * prop from where its author put it rather than from somewhere this pass
+   * shoved it on the way to deleting it anyway.
+   *
+   * At most `PROP_ROAD_STEPS` measured steps, each of which must strictly
+   * improve on the last. That bound is the lesson `clearRoadSurface` records:
+   * where two branches of the spline run close in XZ — the volcano switchbacks,
+   * the neon flyover — pushing away from the nearer one moves the prop toward
+   * the other, `roadBoxIntrusion` flips to that branch, and an unbounded loop
+   * ping-pongs the anchor out to the limit. Requiring strict improvement makes
+   * the first ping-pong the last.
+   *
+   * Only anchors that are standing on the HEIGHTFIELD are moved, the same test
+   * `clearRoadSurface` makes: anything else has a `y` measured from a deck, a
+   * bore or the water plane, and re-seating it after a lateral step would trade
+   * one wrong answer for a worse one. An unmovable prop that is on the road is
+   * simply dropped, which is the whole point of the guard.
+   */
+  private pushOffCarriageway(a: Anchor, bb: THREE.Box3): boolean {
+    let over = this.roadBoxIntrusion(bb, this.anchorMatrix(a, _roadM), _roadDir);
+    if (over <= 0) return false;
+    let up = a.up;
+    if (up === undefined) {
+      if (Math.abs(a.y - this.field.heightAt(a.x, a.z)) > 0.25) return false;
+      up = 0;
+    }
+    const ox = a.x, oy = a.y, oz = a.z;
+    let moved = 0;
+    for (let it = 0; it < PROP_ROAD_STEPS && over > 0; it++) {
+      if (_roadDir.x === 0 && _roadDir.z === 0) break;
+      const step = Math.min(over + 0.4, AUTHORED_PUSH_LIMIT - moved);
+      if (step <= 0.01) break;
+      const x = a.x + _roadDir.x * step;
+      const z = a.z + _roadDir.z * step;
+      const y = this.field.heightAt(x, z) + up;
+      // A wet or sheer landing is refused rather than assumed away — the same two
+      // conditions `clearKerb` applies to its own re-seat.
+      if (y < this.ctx.waterLevel + 0.35) break;
+      if (this.field.slopeAt(x, z) > 0.62) break;
+      a.x = x; a.y = y; a.z = z;
+      moved += step;
+      const now = this.roadBoxIntrusion(bb, this.anchorMatrix(a, _roadM), _roadDir);
+      if (now >= over) break;   // no progress, or it flipped to another branch
+      over = now;
+    }
+    if (over > 0) { a.x = ox; a.y = oy; a.z = oz; return false; }
+    this.carriagewayWorst = Math.max(this.carriagewayWorst, moved);
+    return true;
+  }
+
+  /**
+   * True when this prop is still standing on the drivable road, so `emit()`
+   * should drop it. Memoised on the anchor — see `Anchor.onRoad`.
+   *
+   * `m` is the transform the instance will actually be drawn with.
+   */
+  private onCarriageway(a: Anchor, bb: THREE.Box3, m: THREE.Matrix4): boolean {
+    if (a.onRoad !== undefined) return a.onRoad;
+    const hit = this.roadBoxIntrusion(bb, m, _roadDir) > 0;
+    a.onRoad = hit;
+    return hit;
+  }
+
+  /**
+   * Cheap rejection: an anchor this far from the baked centreline field cannot
+   * touch any carriageway, whatever its orientation, so it never pays for the
+   * chord scan. `reach` is the instance's bounding-sphere radius.
+   */
+  private farFromRoad(a: Anchor, reach: number): boolean {
+    return this.field.roadDistanceAt(a.x, a.z)
+      > this.ctx.maxHalfWidth + reach + PROP_ROAD_SKIP_PAD;
+  }
 
   /**
    * True when this prop occupies a tunnel bore / shell, a bridge deck box or an

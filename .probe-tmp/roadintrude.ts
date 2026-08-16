@@ -36,8 +36,36 @@ import type { PathStation, WorldContext } from '@/world/WorldTextures';
 //  Tunables
 // --------------------------------------------------------------------------
 
-/** A corner this far (m) above/below a piece of road is not "in" that road. */
-const VERT_BAND = 6;
+/**
+ * Vertical band, relative to the road surface, in which a corner counts as
+ * being "in" that road: `[BAND_LO, BAND_HI]`.
+ *
+ * Asymmetric on purpose. Anything more than 2 m BELOW the tarmac is under a
+ * bridge deck or in a cutting and is not in the driver's way — volcano's
+ * `lavaFountain` is authored at `lat 0, up -26`, deliberately below the broken
+ * bridge, and its glow tops out 5.7 m under the deck. Anything up to 8 m above
+ * is in the way, unless it is a corridor prop (below).
+ */
+const BAND_LO = -2;
+const BAND_HI = 8;
+
+/**
+ * Props that BELONG over the carriageway: the start gantry arches across it,
+ * tunnel portals frame it, deck pylons hold it up. Mirrors `CORRIDOR_PROPS` in
+ * Props.ts — kept as a literal here so the probe cannot be silently widened by
+ * an edit to the file it is auditing.
+ */
+const CORRIDOR = new Set([
+  'startgantry', 'balloonarch', 'arch', 'tunnelportal', 'hoload',
+  'bridgepylon', 'spiralpylon', 'monorailpylon', 'agpylon', 'energypylon',
+  'bridgearch', 'overpassarch',
+]);
+
+/** `Prop:authored:startgantry:clothSign` -> `startgantry`. */
+function baseType(meshName: string): string {
+  const parts = meshName.replace(/^Prop:/, '').split(':');
+  return (parts[0] === 'authored' ? parts[1] ?? '' : parts[0]).toLowerCase();
+}
 /** Eye height above the road surface, metres (kart driver's eye). */
 const EYE_UP = 1.25;
 /** Road-ahead samples per station. */
@@ -62,6 +90,8 @@ interface Inst {
   local: THREE.Box3;
   /** world-space centre + radius, for broad-phase rejection */
   cx: number; cy: number; cz: number; radius: number;
+  /** belongs over the carriageway (gantry, portal, deck pylon) */
+  corridor: boolean;
 }
 
 interface Hit {
@@ -76,6 +106,15 @@ interface Hit {
   rollDeg: number;
   /** world XZ of the worst corner */
   wx: number; wz: number;
+  /** instance origin, and what the generators would have seen there */
+  ox: number; oz: number;
+  originLat: number;
+  originHalfWidth: number;
+  /** `TerrainField.roadDistanceAt` at the origin — what annulus/roadside test */
+  fieldDist: number;
+  /** distance to the nearest AUTHORED placement of any type, metres */
+  authoredGap: number;
+  authoredType: string;
 }
 
 // --------------------------------------------------------------------------
@@ -84,18 +123,40 @@ interface Hit {
 
 /**
  * Nearest piece of road to a world point, restricted to branches whose surface
- * is within `VERT_BAND` of the point. Returns null when no branch qualifies.
+ * sits in `[y - BAND_HI, y - BAND_LO]`. Returns null when no branch qualifies.
  *
  * Scans every chord rather than trusting a single nearest-station lookup: the
  * volcano helix and the caldera switchback both stack two carriageways over one
  * patch of ground, and a plan-only "nearest" answers for the wrong one.
+ *
+ * ---- THE TWO FRAMES, AND WHY THIS ONE IS THE ROAD'S -----------------------
+ * `PathStation.halfWidth` is the half-width of the asphalt measured **in the
+ * road's own plane**: `Track.getDecorationHints()` resolves a prop's `lat` with
+ * `position + binormal * lat` on the full 3-D BANKED binormal and then compares
+ * that same `lat` against `halfWidth + kerbW + shoulder`. But
+ * `PathStation.bx/bz` is that binormal *flattened and renormalised into XZ*, so
+ * anything that measures `Math.hypot(x - cx, z - cz)` and compares it with
+ * `halfWidth` — `roadVerge()` in WorldTextures, `roadClearance()` in Props — is
+ * comparing a HORIZONTAL distance against a ROAD-PLANE width.
+ *
+ * The two agree only on the flat. Volcano's caldera chute is rolled 34 deg,
+ * where an 11.0 m half-width road is 11.0*cos(34) = 9.1 m wide in plan and its
+ * edge stands 6.2 m above the centreline: the plan-frame test claims 1.9 m of
+ * road that is not there, and volcano's five authored `warningPost`s at
+ * `lat -12.5` are reported 0.9 m "inside" a road they in fact clear by 1.5 m.
+ *
+ * So this works in the road's plane, from the same two numbers the road mesh
+ * does: horizontal half-extent `halfWidth * cos(roll)`, and a surface that
+ * rises `tanBank` per metre of horizontal lateral offset.
  */
 function nearestRoad(
   st: readonly PathStation[], x: number, y: number, z: number,
-): { lat: number; halfWidth: number; roadY: number; arc: number; tanBank: number } | null {
+): { lat: number; inside: number; halfWidth: number; roadY: number; arc: number; tanBank: number } | null {
   const n = st.length;
   let bestLat = Infinity;
-  let out: { lat: number; halfWidth: number; roadY: number; arc: number; tanBank: number } | null = null;
+  let out: {
+    lat: number; inside: number; halfWidth: number; roadY: number; arc: number; tanBank: number;
+  } | null = null;
   for (let i = 0; i < n; i++) {
     const a = st[i], b = st[(i + 1) % n];
     const ex = b.px - a.px, ez = b.pz - a.pz;
@@ -106,16 +167,35 @@ function nearestRoad(
     const px = a.px + ex * t, pz = a.pz + ez * t;
     const lat = Math.hypot(x - px, z - pz);
     if (lat >= bestLat) continue;
-    const roadY = a.py + (b.py - a.py) * t;
-    if (Math.abs(y - roadY) > VERT_BAND) continue;
+    // Signed horizontal offset: MAGNITUDE from the perpendicular distance to the
+    // chord, SIGN from the station's (flattened) binormal, so the cross-fall is
+    // applied on the correct side.
+    //
+    // Using the raw binormal projection for the magnitude is wrong and was
+    // measured to be wrong: where the projection clamps to a chord END the offset
+    // vector is mostly ALONG the road, the binormal dot product collapses toward
+    // zero, and a catch-fence 134 m off the circuit was reported 10.9 m inside an
+    // 11.5 m road. For an interior projection the two agree by construction (the
+    // offset is perpendicular to the chord, and so is the binormal).
+    let bx = a.bx + (b.bx - a.bx) * t, bz = a.bz + (b.bz - a.bz) * t;
+    const bl = Math.hypot(bx, bz);
+    if (bl > 1e-6) { bx /= bl; bz /= bl; }
+    const h = ((x - px) * bx + (z - pz) * bz >= 0 ? lat : -lat);
+    const tanBank = a.tanBank + (b.tanBank - a.tanBank) * t;
+    const roadY = a.py + (b.py - a.py) * t + h * tanBank;
+    const rise = y - roadY;
+    if (rise < BAND_LO || rise > BAND_HI) continue;
     bestLat = lat;
     const ds = b.s - a.s;
+    const halfWidth = a.halfWidth + (b.halfWidth - a.halfWidth) * t;
     out = {
       lat,
-      halfWidth: a.halfWidth + (b.halfWidth - a.halfWidth) * t,
+      // Road-plane test: the asphalt only covers halfWidth*cos(roll) in plan.
+      inside: halfWidth / Math.sqrt(1 + tanBank * tanBank) - Math.abs(h),
+      halfWidth,
       roadY,
       arc: a.s + (ds > 0 ? ds : 0) * t,
-      tanBank: a.tanBank + (b.tanBank - a.tanBank) * t,
+      tanBank,
     };
   }
   return out;
@@ -146,6 +226,7 @@ function collect(root: THREE.Object3D): Inst[] {
       Math.hypot(bb.max.x, bb.max.y, bb.max.z),
       Math.hypot(bb.min.x, bb.min.y, bb.min.z),
     );
+    const corridor = CORRIDOR.has(baseType(im.name));
     for (let i = 0; i < im.count; i++) {
       im.getMatrixAt(i, _m);
       const e = _m.elements;
@@ -163,6 +244,7 @@ function collect(root: THREE.Object3D): Inst[] {
         local: bb,
         cx: c.x, cy: c.y, cz: c.z,
         radius: r0 * s + 0.01,
+        corridor,
       });
     }
   });
@@ -174,8 +256,14 @@ function collect(root: THREE.Object3D): Inst[] {
 // --------------------------------------------------------------------------
 
 const _c = new THREE.Vector3();
+const _org = new THREE.Vector3();
 
-function reachesInside(st: readonly PathStation[], inst: Inst): Hit | null {
+interface Authored { type: string; x: number; z: number }
+
+function reachesInside(
+  st: readonly PathStation[], inst: Inst,
+  fieldDistAt: (x: number, z: number) => number, authored: readonly Authored[],
+): Hit | null {
   const bb = inst.local;
   let best: Hit | null = null;
   for (let k = 0; k < 8; k++) {
@@ -186,8 +274,7 @@ function reachesInside(st: readonly PathStation[], inst: Inst): Hit | null {
     ).applyMatrix4(inst.matrix);
     const r = nearestRoad(st, _c.x, _c.y, _c.z);
     if (!r) continue;
-    const inside = r.halfWidth - r.lat;
-    if (inside <= 0) continue;
+    const inside = r.inside;
     if (best === null || inside > best.inside) {
       best = {
         inside,
@@ -196,7 +283,21 @@ function reachesInside(st: readonly PathStation[], inst: Inst): Hit | null {
         halfWidth: r.halfWidth,
         rollDeg: (Math.atan(r.tanBank) * 180) / Math.PI,
         wx: _c.x, wz: _c.z,
+        ox: 0, oz: 0, originLat: 0, originHalfWidth: 0, fieldDist: 0,
+        authoredGap: Infinity, authoredType: '-',
       };
+    }
+  }
+  if (best) {
+    _org.setFromMatrixPosition(inst.matrix);
+    best.ox = _org.x; best.oz = _org.z;
+    const ro = nearestRoad(st, _org.x, _org.y, _org.z);
+    best.originLat = ro ? ro.lat : -1;
+    best.originHalfWidth = ro ? ro.halfWidth : -1;
+    best.fieldDist = fieldDistAt(_org.x, _org.z);
+    for (const p of authored) {
+      const d = Math.hypot(p.x - _org.x, p.z - _org.z);
+      if (d < best.authoredGap) { best.authoredGap = d; best.authoredType = p.type; }
     }
   }
   return best;
@@ -268,13 +369,35 @@ async function audit(track: Track, env: Environment, id: string, verbose: boolea
   const st = ctx.stations;
   const root = env.props?.group;
   if (!root) throw new Error('no props group');
-  const insts = collect(root);
+  const all = collect(root);
+  // Corridor props are meant to be over the carriageway; they are neither an
+  // intrusion nor an occlusion defect. Everything else is fair game.
+  const insts = all.filter((i) => !i.corridor);
 
   // ---- A ------------------------------------------------------------------
+  const field = ctx.field as unknown as { roadDistanceAt(x: number, z: number): number };
+  const fieldDistAt = (x: number, z: number): number => field.roadDistanceAt(x, z);
+  const authored: Authored[] = (ctx.hints.props ?? []).map((p) => ({
+    type: p.type, x: p.position.x, z: p.position.z,
+  }));
   const byType = new Map<string, Hit[]>();
+  /** How close every prop gets to the asphalt edge — used to choose the slack. */
+  const bands = [0, 0.25, 0.5, 1, 2];
+  const nearCount = new Array<number>(bands.length).fill(0);
+  const nearNames: string[][] = bands.map(() => []);
   for (const inst of insts) {
-    const h = reachesInside(st, inst);
+    const h = reachesInside(st, inst, fieldDistAt, authored);
     if (!h) continue;
+    for (let bi = 0; bi < bands.length; bi++) {
+      // `inside > -band` == the box reaches to within `band` metres of the edge.
+      if (h.inside > -bands[bi]) {
+        nearCount[bi]++;
+        if (nearNames[bi].length < 8 && !nearNames[bi].includes(inst.name)) {
+          nearNames[bi].push(inst.name);
+        }
+      }
+    }
+    if (h.inside <= 0) continue;
     let l = byType.get(inst.name);
     if (!l) { l = []; byType.set(inst.name, l); }
     l.push(h);
@@ -297,15 +420,32 @@ async function audit(track: Track, env: Environment, id: string, verbose: boolea
         lines.push(`      d=${h.arc.toFixed(0)} t=${(h.arc / total).toFixed(3)}`
           + ` inside ${h.inside.toFixed(2)} rise ${h.rise.toFixed(1)}`
           + ` halfW ${h.halfWidth.toFixed(1)} roll ${h.rollDeg.toFixed(0)}`
-          + ` xz=(${h.wx.toFixed(1)}, ${h.wz.toFixed(1)})`);
+          + ` corner=(${h.wx.toFixed(1)}, ${h.wz.toFixed(1)})`);
+        lines.push(`         origin=(${h.ox.toFixed(1)}, ${h.oz.toFixed(1)})`
+          + ` originLat ${h.originLat.toFixed(1)} vs halfW ${h.originHalfWidth.toFixed(1)}`
+          + ` | field.roadDistanceAt ${h.fieldDist.toFixed(1)}`
+          + ` | nearest authored '${h.authoredType}' at ${h.authoredGap.toFixed(2)} m`
+          + `${h.authoredGap < 0.05 ? '  == THIS IS AN AUTHORED ANCHOR' : ''}`);
       }
     }
     if (w.inside > worstInside) { worstInside = w.inside; worstLine = `${name} ${w.inside.toFixed(1)} m`; }
+  }
+  lines.push(`  edge proximity (instances whose box reaches within N m of the asphalt edge):`);
+  for (let bi = 0; bi < bands.length; bi++) {
+    lines.push(`      within ${bands[bi].toFixed(2)} m: ${String(nearCount[bi]).padStart(3)}`
+      + `   ${nearNames[bi].join(' ')}`);
   }
 
   // ---- B ------------------------------------------------------------------
   let blocked = 0, worstHidden = 0, worstHiddenLine = '—';
   const n = st.length;
+  if (process.argv.includes('--noB')) {
+    return {
+      id, stations: n, props: all.length,
+      insideProps: byType.size, insideInstances, worstInside, worstLine,
+      blocked: -1, worstHidden: 0, worstHiddenLine: 'skipped', lines,
+    };
+  }
   const perStation = Math.max(1, total / n);
   const aheadStep = Math.max(1, Math.round(AHEAD_MIN / perStation));
   for (let i = 0; i < n; i++) {
@@ -333,7 +473,7 @@ async function audit(track: Track, env: Environment, id: string, verbose: boolea
   }
 
   return {
-    id, stations: n, props: insts.length,
+    id, stations: n, props: all.length,
     insideProps: byType.size, insideInstances, worstInside, worstLine,
     blocked, worstHidden, worstHiddenLine, lines,
   };
@@ -360,8 +500,9 @@ for (const id of ids) {
 
 console.log('');
 console.log('=== ROAD INTRUSION AUDIT ==========================================');
-console.log(`    vertical band ${VERT_BAND} m | sightline ${AHEAD_N} samples`
-  + ` ${AHEAD_MIN}-${AHEAD_MAX} m | blocked at >=${(BLOCK_FRAC * 100) | 0}%`);
+console.log(`    rise band [${BAND_LO}, ${BAND_HI}] m | sightline ${AHEAD_N} samples`
+  + ` ${AHEAD_MIN}-${AHEAD_MAX} m | blocked at >=${(BLOCK_FRAC * 100) | 0}%`
+  + ' | corridor props excluded');
 for (const r of rows) {
   console.log('');
   console.log(`${r.id}   (${r.stations} stations, ${r.props} prop instances)`);
