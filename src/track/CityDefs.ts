@@ -431,6 +431,225 @@ const TOKYO_NODES: SplineNodeSpec[] = [
   { p: [0.0, 0.04, 34.6], hw: 12.5, bank: 2, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
 ];
 
+// ===========================================================================
+//  7. HONG KONG HARBOUR  —  1.59 km, blue hour on the harbour
+// ===========================================================================
+//
+//  Anticlockwise, so the OUTSIDE of every corner — and the harbour with it — is
+//  on the driver's right for the whole lap. 273 m of Victoria Harbour promenade
+//  through the start/finish line, the towers of the far shore standing across
+//  the water on the right, then the hardest braking here (R58, 66 degrees) into
+//  the NEON CANYON: 17 m between shophouse faces with lit boxes cantilevered out
+//  over the street from both sides. Out of the canyon onto the TRAM STREET, past
+//  a block wrapped head to foot in bamboo scaffolding, and then the climb — a
+//  65 degree left, 24 m, and the ONE right-hander on the lap, an R46 switchback,
+//  taken 11 m higher than the one before it. Over the ridge at 16.5 m with the
+//  mountain on the skyline, down the R150 sweeper into Central, and a 124 m left
+//  under the supertall onto the harbour front and the run to the line.
+//
+//  Elevation: 0 m at the line, 16.5 m on the ridge. Max grade 4.14 %.
+//
+//  THERE IS NO GLOBAL WATER PLANE, for the reason measured on `bostonHarbor`
+//  below: the `city` terrain theme has no basin to fill. The harbour is a PROP —
+//  see `harbourWater` in `Props.ts` — seated on the heightfield with its own
+//  7 m apron, on the reflective metal material rather than painted blue.
+const HONG_KONG_NODES: SplineNodeSpec[] = [
+  // ---- H1 the Victoria Harbour promenade — the harbour is on the RIGHT
+  //      for the whole lap (an anticlockwise circuit puts the outside there).
+  { p: [0.0, 0.00, 0.0], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', flags: TF.Grid, tag: 'S/F line' },
+  { p: [0.0, -0.05, -29.5], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', flags: TF.Grid },
+  { p: [0.0, -0.01, -59.0], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', flags: TF.Grid },
+  { p: [0.0, 0.07, -88.5], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', flags: TF.Grid },
+  { p: [0.0, 0.18, -118.1], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [0.0, 0.31, -147.6], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [0.0, 0.49, -177.1], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [0.0, 0.72, -206.6], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  // ---- H2 Turn 1 — the hardest braking on the lap, R58
+  { p: [-1.5, 0.82, -219.8], hw: 9.5, bank: -8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'TURN 1' },
+  { p: [-6.0, 0.93, -232.3], hw: 9.5, bank: -8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-13.2, 1.03, -243.4], hw: 9.5, bank: -8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-22.7, 1.14, -252.6], hw: 9.5, bank: -8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- H3 the neon canyon — narrowest road here, signs overhead
+  { p: [-34.1, 1.24, -259.4], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building', tag: 'NEON CANYON' },
+  { p: [-57.4, 1.44, -270.0], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-80.7, 1.66, -280.6], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-104.1, 1.90, -291.2], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-127.4, 2.17, -301.8], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-142.6, 2.36, -307.1], hw: 9, bank: -6, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building', tag: 'canyon kink' },
+  { p: [-158.6, 2.57, -309.7], hw: 9, bank: -6, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-174.7, 2.83, -309.5], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-206.8, 3.47, -306.2], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [-238.9, 4.27, -303.0], hw: 8.5, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  // ---- H4 the tram street, and the scaffolded building
+  { p: [-252.6, 4.64, -300.3], hw: 9.5, bank: -7, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete', tag: 'tram street' },
+  { p: [-265.4, 5.03, -295.1], hw: 9.5, bank: -7, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [-277.1, 5.45, -287.5], hw: 9.5, bank: -7, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [-287.2, 5.90, -278.0], hw: 10, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [-300.8, 6.63, -262.4], hw: 10, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  // ---- H5 the ladder-street switchbacks: a 65 deg left, 24 m, then
+  //      the only right-hander on the lap. The road climbs 11 m through them.
+  { p: [-314.3, 7.45, -246.9], hw: 9.5, bank: -9, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'building', tag: 'LADDER STREET' },
+  { p: [-321.0, 7.93, -237.2], hw: 9.5, bank: -9, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'building' },
+  { p: [-325.3, 8.42, -226.3], hw: 9.5, bank: -9, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'building' },
+  { p: [-327.1, 8.90, -214.7], hw: 9.5, bank: -9, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'building' },
+  { p: [-326.2, 9.37, -203.0], hw: 9.5, bank: -9, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'building' },
+  { p: [-322.7, 9.82, -191.8], hw: 9.5, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-313.2, 10.72, -170.1], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail', tag: 'THE RIGHT' },
+  { p: [-310.3, 11.08, -161.0], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-309.3, 11.45, -151.6], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-310.3, 11.82, -142.2], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-313.2, 12.19, -133.1], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-317.9, 12.57, -124.9], hw: 10, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-324.1, 12.94, -117.7], hw: 10.5, bank: 2, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete', tag: 'mid-levels climb' },
+  { p: [-342.4, 13.88, -100.9], hw: 10.5, bank: 2, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete' },
+  { p: [-360.8, 14.70, -84.0], hw: 10.5, bank: 2, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete' },
+  { p: [-379.1, 15.37, -67.1], hw: 10.5, bank: 2, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete' },
+  { p: [-388.5, 15.69, -56.2], hw: 9.5, bank: -8, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail', tag: 'ridge left' },
+  { p: [-395.1, 15.96, -43.4], hw: 9.5, bank: -8, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-398.5, 16.19, -29.4], hw: 9.5, bank: -8, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  { p: [-398.7, 16.36, -15.0], hw: 9.5, bank: -8, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'guardrail' },
+  // ---- H6 the ridge — the high point, 17 m, with Lion Rock beyond
+  { p: [-396.0, 16.48, 10.7], hw: 11, shL: 4.5, shR: 4.5, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete', tag: 'THE RIDGE' },
+  { p: [-393.2, 16.34, 36.4], hw: 11, shL: 4.5, shR: 4.5, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete' },
+  { p: [-390.5, 15.96, 62.0], hw: 11, shL: 4.5, shR: 4.5, shoulderSurface: S.Grass, wallL: 'guardrail', wallR: 'concrete' },
+  // ---- H7 the R150 descending sweeper into Central, 82 m of corner
+  { p: [-385.1, 15.36, 88.9], hw: 12, bank: -10, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'guardrail', tag: 'CENTRAL DESCENT' },
+  { p: [-374.9, 14.59, 114.3], hw: 12, bank: -10, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'guardrail' },
+  { p: [-360.3, 13.65, 137.5], hw: 11.5, bank: -2, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'descent' },
+  { p: [-344.8, 12.66, 157.6], hw: 11.5, bank: -2, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-329.3, 11.64, 177.8], hw: 11.5, bank: -2, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-313.8, 10.67, 198.0], hw: 11.5, bank: -2, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-303.8, 10.14, 208.7], hw: 10.5, bank: -8, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'central left' },
+  { p: [-291.9, 9.62, 217.5], hw: 10.5, bank: -8, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-278.6, 9.10, 223.8], hw: 10.5, bank: -8, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-256.5, 8.26, 231.8], hw: 11, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-234.4, 7.42, 239.8], hw: 11, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- H8 the long left under the supertall, 124 m of corner
+  { p: [-212.3, 6.63, 247.9], hw: 11.5, bank: -10, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'SUPERTALL SWEEP' },
+  { p: [-188.2, 5.89, 253.5], hw: 11.5, bank: -10, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-163.5, 5.24, 253.3], hw: 11.5, bank: -10, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-139.5, 4.64, 247.2], hw: 11.5, bank: -10, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [-117.6, 4.05, 235.7], hw: 11.5, bank: -10, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- H9 back onto the harbour front — the overtaking spot
+  { p: [-99.1, 3.50, 219.3], hw: 12, shL: 5, shR: 6, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', tag: 'harbour entry' },
+  { p: [-81.3, 2.95, 199.3], hw: 12, shL: 5, shR: 6, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [-63.5, 2.46, 179.3], hw: 12, shL: 5, shR: 6, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [-45.7, 1.98, 159.3], hw: 12, shL: 5, shR: 6, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [-27.8, 1.54, 139.3], hw: 11.5, bank: -9, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', tag: 'final sweeper' },
+  { p: [-12.7, 1.14, 117.4], hw: 11.5, bank: -9, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [-3.2, 0.79, 92.5], hw: 11.5, bank: -9, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [0.0, 0.49, 66.1], hw: 11.5, bank: -9, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [0.0, 0.19, 33.1], hw: 12.5, bank: -2, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', tag: 'run to the line' },
+];
+
+// ===========================================================================
+//  8. NEW YORK CIRCUIT  —  1.58 km, clear midday
+// ===========================================================================
+//
+//  Clockwise, and deliberately the BRIGHT one: the series now reads Boston day,
+//  Taipei sunset, Tokyo night, Hong Kong blue hour, New York midday.
+//
+//  288 m of avenue canyon through the line — towers both sides, cabs at the
+//  kerb, steam off a manhole — into the latest braking on the lap (R50, 66
+//  degrees) and a hard right onto the cross street: 18 m between brownstone
+//  stoops and tenement fire escapes. Right again into the park, which is the
+//  INFIELD, so the tree line and the boating lake read across the inside of
+//  three corners; the R44 around the lake is the tightest thing here. Then the
+//  only left on the circuit, out of the park and up the ramp onto the EAST RIVER
+//  CROSSING — 210 m of deck 9 m in the air, carried on two granite towers with
+//  pointed arches and a cable web. Down the off-ramp into the downtown canyon,
+//  a banked R86 under the stepped steel crown, and the run to the line.
+//
+//  Elevation: -1.0 m at the cross street, 8.7 m on the bridge deck. Max grade
+//  3.92 %. No gaps and no anti-gravity — see the note at the top of this file.
+const NEW_YORK_NODES: SplineNodeSpec[] = [
+  // ---- N1 the avenue — 288 m of canyon through the line, towers both sides
+  { p: [0.0, 0.00, 0.0], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', flags: TF.Grid, tag: 'S/F line' },
+  { p: [0.0, -0.00, -30.1], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', flags: TF.Grid },
+  { p: [0.0, 0.03, -60.2], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', flags: TF.Grid },
+  { p: [0.0, 0.06, -90.2], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', flags: TF.Grid },
+  { p: [0.0, 0.03, -120.3], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [0.0, -0.11, -150.4], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [0.0, -0.37, -180.5], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [0.0, -0.66, -210.6], hw: 12.5, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- N2 Turn 1 — R50, the latest braking on the lap
+  { p: [1.3, -0.76, -222.0], hw: 9.5, bank: 8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'TURN 1' },
+  { p: [5.2, -0.84, -232.8], hw: 9.5, bank: 8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [11.5, -0.89, -242.4], hw: 9.5, bank: 8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [19.7, -0.93, -250.4], hw: 9.5, bank: 8, shL: 2.5, shR: 2.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- N3 the cross street: brownstone stoops both sides, 18 m wide
+  { p: [29.6, -0.95, -256.2], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building', tag: 'BROWNSTONES' },
+  { p: [59.5, -0.91, -269.6], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [89.4, -0.79, -282.9], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [119.3, -0.63, -296.3], hw: 9.5, bank: 6, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building', tag: 'brownstone kink' },
+  { p: [139.8, -0.47, -302.8], hw: 9.5, bank: 6, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [161.3, -0.23, -304.6], hw: 9.5, bank: 6, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [182.6, 0.09, -301.5], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [205.1, 0.50, -295.7], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [227.6, 0.90, -289.8], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  { p: [250.1, 1.26, -284.0], hw: 9, shL: 2, shR: 2, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'building' },
+  // ---- N4 into the park. The park is the INFIELD, on the driver's right,
+  //      so the tree line and the lake read across the inside of three corners.
+  { p: [262.3, 1.45, -279.4], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence', tag: 'park entry' },
+  { p: [273.3, 1.64, -272.4], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [282.5, 1.83, -263.2], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'fence' },
+  { p: [289.7, 2.03, -252.3], hw: 11, shL: 5, shR: 5, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence', tag: 'THE PARK' },
+  { p: [302.3, 2.48, -227.7], hw: 11, shL: 5, shR: 5, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [314.8, 2.91, -203.2], hw: 11, shL: 5, shR: 5, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [327.4, 3.25, -178.7], hw: 11, shL: 5, shR: 5, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  // ---- N5 R44 around the lake, the tightest corner on the circuit
+  { p: [331.1, 3.36, -168.7], hw: 9.5, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence', tag: 'LAKE RIGHT' },
+  { p: [332.2, 3.45, -158.1], hw: 9.5, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [330.8, 3.54, -147.5], hw: 9.5, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [326.9, 3.63, -137.6], hw: 9.5, bank: 9, shL: 3, shR: 3, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [316.3, 3.83, -118.1], hw: 10, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  { p: [305.7, 4.10, -98.6], hw: 10, shL: 4, shR: 4, shoulderSurface: S.Grass, wallL: 'concrete', wallR: 'fence' },
+  // ---- N6 the one left-hander, out of the park onto the river road
+  { p: [301.8, 4.26, -89.0], hw: 9.5, bank: -9, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'THE LEFT' },
+  { p: [300.2, 4.45, -78.7], hw: 9.5, bank: -9, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [300.9, 4.67, -68.4], hw: 9.5, bank: -9, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [303.9, 4.90, -58.4], hw: 9.5, bank: -9, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [309.0, 5.16, -49.4], hw: 9.5, bank: -9, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- N7 the East River crossing — 210 m of deck, 9 m up, on two masonry
+  //      towers. Shoulders cut back to a kerb and a barrier.
+  { p: [316.1, 5.44, -41.8], hw: 11, bank: 3, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', tag: 'bridge ramp' },
+  { p: [331.8, 6.01, -28.3], hw: 11, bank: 3, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [347.4, 6.62, -14.8], hw: 11, bank: 3, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [365.2, 7.39, 4.6], hw: 11, bank: 5, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge, tag: 'THE BRIDGE' },
+  { p: [377.9, 8.07, 27.6], hw: 11, bank: 5, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [385.0, 8.52, 52.9], hw: 11, bank: 5, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [385.9, 8.66, 79.2], hw: 11, bank: 5, shL: 1.2, shR: 1.2, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [380.7, 8.46, 105.0], hw: 10.5, bank: 2, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge, tag: 'off the deck' },
+  { p: [375.0, 8.12, 122.2], hw: 10.5, bank: 2, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete', flags: TF.Bridge },
+  { p: [369.4, 7.64, 139.4], hw: 10.5, bank: 2, shL: 1.5, shR: 1.5, shoulderSurface: S.Metal, wallL: 'concrete', wallR: 'concrete' },
+  { p: [361.4, 6.98, 156.9], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'off-ramp right' },
+  { p: [349.6, 6.24, 172.2], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [334.8, 5.49, 184.5], hw: 10, bank: 8, shL: 3, shR: 3, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- N8 the downtown canyon under the steel crown
+  { p: [312.1, 4.55, 199.4], hw: 10.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete', tag: 'DOWNTOWN' },
+  { p: [289.4, 3.78, 214.2], hw: 10.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [266.7, 3.16, 229.1], hw: 11, bank: 5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete', tag: 'downtown kink' },
+  { p: [249.3, 2.79, 238.5], hw: 11, bank: 5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [230.7, 2.50, 244.8], hw: 11, bank: 5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'building', wallR: 'concrete' },
+  { p: [204.0, 2.19, 251.5], hw: 11, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [177.3, 1.94, 258.2], hw: 11, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  // ---- N9 the banked right under the stepped crown, 100 m of corner
+  { p: [157.4, 1.78, 260.7], hw: 10.5, bank: 9, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'CROWN SWEEP' },
+  { p: [137.4, 1.64, 258.6], hw: 10.5, bank: 9, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [118.5, 1.51, 251.9], hw: 10.5, bank: 9, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [101.6, 1.41, 241.0], hw: 10.5, bank: 9, shL: 3.5, shR: 3.5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [87.7, 1.30, 226.5], hw: 11.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'spire straight' },
+  { p: [70.7, 1.16, 203.9], hw: 11.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [53.7, 1.01, 181.3], hw: 11.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [36.7, 0.85, 158.8], hw: 11.5, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [19.7, 0.69, 136.2], hw: 11.5, bank: 8, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'final sweeper' },
+  { p: [8.9, 0.55, 118.1], hw: 11.5, bank: 8, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [2.3, 0.40, 98.1], hw: 11.5, bank: 8, shL: 4, shR: 4, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [0.0, 0.27, 77.2], hw: 12.5, bank: 2, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete', tag: 'run to the line' },
+  { p: [0.0, 0.13, 51.5], hw: 12.5, bank: 2, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+  { p: [0.0, 0.05, 25.7], hw: 12.5, bank: 2, shL: 5, shR: 5, shoulderSurface: S.OffRoad, wallL: 'concrete', wallR: 'concrete' },
+];
+
 // ---------------------------------------------------------------------------
 //  Track definitions
 // ---------------------------------------------------------------------------
@@ -967,9 +1186,357 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { kind: 'slider', t: 0.70, lat: 8, span: 9, speed: 3 },
     ],
   },
+
+  hongKongHarbour: {
+    id: 'hongKongHarbour',
+    name: 'Hong Kong Harbour',
+    subtitle: 'A neon canyon, a bamboo cage and the ladder streets',
+    theme: 'city',
+    // ---- WHY `night` AND NOT SOMETHING CALLED "BLUE HOUR" ------------------
+    // There are exactly five presets and `SkyPresetName` is a closed union:
+    // day, sunset, night, storm, volcanic (`src/world/Sky.ts:22`). Nothing in
+    // the game is authored for the hour between them, so the choice is between
+    // `sunset` — sunElevation +4.5, haze #ff9a5e, i.e. golden hour — and
+    // `night`, whose haze is #121b30 and whose `cityGlow` is 1.0. Blue hour is
+    // a deep blue sky with the city's own lights carrying the frame, so this is
+    // `night`, and the separation from Tokyo Neon is made where it can actually
+    // be made: dry road (`asphalt: 'clean'` against Tokyo's near-mirror `wet`),
+    // a cooler kerb, a water surface in frame, and a completely different
+    // district kit (`districtPodium` — see `CITY_KITS.hongkong`).
+    skyPreset: 'night',
+    // Explicit, because `theme: 'city'` defaults to RAIN. None of the city
+    // series races in the wet; see the note on `bostonHarbor.weather`.
+    weather: 'clear',
+    laps: 3,
+    terrainSeed: 52807,
+    // See the section header: the harbour is a prop, not a plane.
+    waterLevel: null,
+    // NOT dead, whatever a grep for `getAtmosphere` suggests: `Catalogue.ts`
+    // reads `def.fogColor` as `themeB`, the second stop of the course card's
+    // gradient, so this value is on screen in the menu even though nothing
+    // pushes it into `scene.fog`. Matched to the live `night` preset's own
+    // #141d33 so the card and the circuit agree.
+    fogColor: 0x141d33,
+    fogDensity: 0.0026,
+    road: {
+      // Dry. Tokyo owns the wet-mirror look on this series and a second circuit
+      // doing it would be the "indistinguishable from Neon Metropolis" finding
+      // all over again. `clean` asphalt with a cool tint keeps the road reading
+      // as a surface while the harbour does the reflecting.
+      asphalt: 'clean',
+      tint: 0xdae0e8,
+      kerbA: 0xc4302a,
+      kerbB: 0xf2efe6,
+      line: 0xf0eee2,
+      verge: 0x585d63,
+      rail: 0x9aa4ad,
+      energy: 0x46d6ff,
+      racingLine: 0.72,
+      ao: 1.0,
+    },
+    defaults: { wallL: 'concrete', wallR: 'concrete', shoulderSurface: S.OffRoad },
+    nodes: HONG_KONG_NODES,
+    props: [
+      // ---- WHICH CITY THIS IS ---------------------------------------------
+      // See the note on Boston's `districtBrick`. `districtPodium` selects the
+      // podium-and-tower type — a banded retail/car-park podium out to the lot
+      // line with a much slimmer residential shaft on top — plus stacked
+      // shophouse signage and red taxis. No ring neon and no trams: the
+      // cantilevered boxes and the double-deck trams here are authored recipes,
+      // so they land where the art direction wants them rather than scattered.
+      { type: 'districtPodium', t: 0.0, lat: 0 },
+      // ---- start / finish, on the promenade -------------------------------
+      // Everything with seating goes on the LEFT. On an anticlockwise lap the
+      // driver's right is the outside of every corner, and here that is the
+      // water.
+      { type: 'startGantry', t: 0.0, lat: 0 },
+      { type: 'grandstand', t: 0.007, lat: -29, scale: 1.15 },
+      { type: 'crowdStand', t: 0.026, lat: -27 },
+      // The flag row, three-part scheme: see the long note in Boston's props.
+      { type: 'flagHK', t: 0.006, lat: 21, step: 0.009, end: 0.060, mirror: true },
+      { type: 'balloonArch', t: 0.050, lat: 0, up: 0 },
+      { type: 'skyscraper', t: 0.012, lat: -92, step: 0.021, end: 0.118, scale: 1.5 },
+      { type: 'towerBlock', t: 0.016, lat: -45, step: 0.015, end: 0.120 },
+      { type: 'streetLamp', t: 0.020, lat: 17, step: 0.017, end: 0.120, mirror: true },
+      // ---- THE HARBOUR ------------------------------------------------------
+      // The water plate is 300 x 210 m and its across-road half-extent is 105 m,
+      // so at lat 132 its near edge sits at lat 27 — 8 m outside the 19.05 m
+      // corridor, i.e. just beyond the sea wall — and its far edge at lat 237.
+      // `up: -1.0` biases it BELOW the local ground on purpose: where the bank
+      // rises the terrain covers the seam, and where it falls the plate's own
+      // 7 m apron does. Measured in the report.
+      { type: 'harbourWater', t: 0.020, lat: 132, up: -1.0 },
+      { type: 'seaWall', t: 0.010, lat: 20, step: 0.008, end: 0.112 },
+      { type: 'flagPole', t: 0.018, lat: 22, step: 0.013, end: 0.072 },
+      // A junk under sail, moored off the promenade. It stands on the water
+      // plate: both are seated on the same heightfield sample, so the hull is on
+      // the surface by construction rather than by a hand-tuned `up`.
+      { type: 'junk', t: 0.048, lat: 64, yaw: 0.4 },
+      { type: 'junk', t: 0.088, lat: 112, yaw: -0.9, scale: 0.85 },
+      // ---- THE TWO LANDMARKS, ACROSS THE WATER ------------------------------
+      // Read the Taipei supertall note before moving either. A tower needs
+      // roughly (its height / tan(half the vertical FOV above the eyeline)) of
+      // distance before its top is in frame at all: 248 m wants ~290 m and
+      // 188 m wants ~220 m. Both are therefore on the FAR SHORE, beyond the
+      // water plate's own far edge at lat 237, where they read down the length
+      // of the promenade and again from the ridge. Re-measured in the report.
+      { type: 'harbourSupertall', t: 0.052, lat: 330 },
+      { type: 'bankOfChina', t: 0.086, lat: 258 },
+      { type: 'brakeBoard', t: 0.118, lat: 15 },
+      { type: 'tyreStack', t: 0.128, lat: -12.5, step: 0.005, end: 0.156 },
+      { type: 'signChevron', t: 0.130, lat: 14.5, step: 0.006, end: 0.164 },
+      // ---- the neon canyon --------------------------------------------------
+      // `neonCantilever`'s across-road half-extent is 5.0 m — it is authored to
+      // project TOWARD the road, which is the whole point of it — against a
+      // corridor of hw 8.5 + kerb 1.55 + shoulder 2 = 12.05 m. lat 20 leaves the
+      // outer edge of the hanging blade 3.0 m clear of the shoulder, so the sign
+      // leans over the pavement and not over the tarmac.
+      { type: 'neonCantilever', t: 0.176, lat: 20, step: 0.0072, end: 0.302, mirror: true },
+      { type: 'marketStall', t: 0.182, lat: 19, step: 0.010, end: 0.296 },
+      { type: 'trafficLight', t: 0.174, lat: -14 },
+      { type: 'holoAd', t: 0.200, lat: 0, up: 11, step: 0.030, end: 0.286 },
+      { type: 'signChevron', t: 0.300, lat: -14, step: 0.006, end: 0.330 },
+      // ---- the tram street and the scaffolded block -------------------------
+      // `bambooScaffold` reaches 10.2 m toward the road (the nylon canopy is what
+      // sets that, and the recipe caps it deliberately). Against a corridor of
+      // hw 10 + 1.55 + 3 = 14.55 m, lat 28 leaves 3.25 m of clear verge.
+      { type: 'bambooScaffold', t: 0.352, lat: 28 },
+      { type: 'tramHK', t: 0.340, lat: -15 },
+      { type: 'tramHK', t: 0.372, lat: 15 },
+      { type: 'streetLamp', t: 0.310, lat: 16, step: 0.020, end: 0.400 },
+      { type: 'planter', t: 0.316, lat: -14, step: 0.016, end: 0.398 },
+      { type: 'neonCantilever', t: 0.318, lat: -20, step: 0.010, end: 0.352 },
+      // ---- the ladder streets ------------------------------------------------
+      { type: 'brakeBoard', t: 0.360, lat: 15 },
+      { type: 'signChevron', t: 0.372, lat: -14, step: 0.006, end: 0.404 },
+      { type: 'tyreStack', t: 0.410, lat: 13, step: 0.005, end: 0.438 },
+      { type: 'signChevron', t: 0.424, lat: 14, step: 0.006, end: 0.452 },
+      { type: 'towerBlock', t: 0.430, lat: 44, step: 0.016, end: 0.552, mirror: true },
+      // 13 m tall and 4 m across: kept back on the bank, which is where a
+      // hillside tree belongs and where it cannot hide the road through a
+      // switchback. Same lesson as Taipei's pines.
+      { type: 'pine', t: 0.462, lat: 27, step: 0.014, end: 0.548 },
+      { type: 'pine', t: 0.470, lat: -28, step: 0.016, end: 0.545 },
+      // ---- the ridge ---------------------------------------------------------
+      // NOT a cone. `lionRock` is three layered swept ridgelines with a blocky
+      // crag on the near one; the owner's complaint about Taipei was "strange
+      // pyramid structures in the background", and a low-poly cone at 400 m is
+      // exactly that. Authored at lat 640 on the ONE unbanked band on this half
+      // of the lap, because a lateral offset that size on a banked binormal buys
+      // spurious altitude — 640 x sin(10 deg) would be 111 m of it.
+      { type: 'lionRock', t: 0.560, lat: 640 },
+      { type: 'crowdStand', t: 0.552, lat: -26 },
+      { type: 'flagHK', t: 0.546, lat: 22 },
+      { type: 'signChevron', t: 0.594, lat: -15, step: 0.006, end: 0.626 },
+      // ---- Central ------------------------------------------------------------
+      { type: 'skyscraper', t: 0.600, lat: 90, step: 0.022, end: 0.730, mirror: true, scale: 1.45 },
+      { type: 'towerBlock', t: 0.604, lat: 43, step: 0.014, end: 0.720, mirror: true },
+      { type: 'streetLamp', t: 0.606, lat: 17, step: 0.018, end: 0.745, mirror: true },
+      { type: 'neonCantilever', t: 0.652, lat: 20, step: 0.008, end: 0.716, mirror: true },
+      { type: 'trafficLight', t: 0.700, lat: 15 },
+      { type: 'brakeBoard', t: 0.752, lat: -14 },
+      { type: 'signChevron', t: 0.764, lat: 14, step: 0.006, end: 0.798 },
+      // ---- the supertall sweep and the harbour-front plaza --------------------
+      { type: 'billboard', t: 0.788, lat: -24, scale: 1.25 },
+      { type: 'flagHK', t: 0.798, lat: -15, scale: 1.7 },
+      { type: 'flagHK', t: 0.810, lat: -15 },
+      { type: 'crowdStand', t: 0.802, lat: -26 },
+      { type: 'tramHK', t: 0.824, lat: 17 },
+      { type: 'planter', t: 0.790, lat: 15, step: 0.012, end: 0.832 },
+      // ---- the harbour front and the run to the line --------------------------
+      { type: 'seaWall', t: 0.852, lat: 20, step: 0.008, end: 0.908 },
+      { type: 'flagPole', t: 0.858, lat: -19, step: 0.013, end: 0.904 },
+      { type: 'streetLamp', t: 0.920, lat: 17, step: 0.016, end: 0.995, mirror: true },
+      { type: 'skyscraper', t: 0.900, lat: -94, step: 0.024, end: 0.990, scale: 1.4 },
+      { type: 'crowdStand', t: 0.968, lat: -27 },
+    ],
+    boostPads: [
+      // On straights and corner exits only — the volcano lesson: a pad 23 m
+      // before a tight corner is what made the AI spear the inside rail.
+      { t: 0.198, lat: -4, width: 7, length: 16 },
+      { t: 0.198, lat: 4, width: 7, length: 16 },
+      { t: 0.500, lat: 0, width: 9, length: 15 },
+      { t: 0.870, lat: 0, width: 10, length: 16 },
+      { t: 0.960, lat: 0, width: 9, length: 16 },
+    ],
+    // Three rows a lap, before the overtaking spots. See Boston's note.
+    itemRows: [
+      { t: 0.226, count: 3, spread: 10 },
+      { t: 0.560, count: 5 },
+      { t: 0.885, count: 5 },
+    ],
+    // Off the racing line, and no oil: see the note on Boston's hazards.
+    hazards: [
+      { kind: 'slider', t: 0.640, lat: -9, span: 9, speed: 3 },
+    ],
+  },
+
+  newYorkCircuit: {
+    id: 'newYorkCircuit',
+    name: 'New York Circuit',
+    subtitle: 'An avenue canyon, the park and the river crossing',
+    theme: 'city',
+    // The bright one, on purpose. With Boston already `day` the two are
+    // separated by everything else: masonry ziggurats against brick commercial
+    // blocks, a park with a lake against a harbour quay, and a suspension
+    // crossing against a cable-stayed one.
+    skyPreset: 'day',
+    weather: 'clear',
+    laps: 3,
+    terrainSeed: 27418,
+    // Same measurement as Boston: no basin, so no plane. The boating lake is a
+    // prop (`parkLake`) with its own coping and a 4 m apron.
+    waterLevel: null,
+    // Read by `Catalogue.toMenuTrack` as the course card's second gradient
+    // stop — see the note on `hongKongHarbour.fogColor`. Matched to the live
+    // `day` preset's #5c80b0.
+    fogColor: 0x5c80b0,
+    fogDensity: 0.0014,
+    road: {
+      // Midday, cool sky, stone city. `worn` is the lightest recipe and carries
+      // the crack field a real avenue has; the tint is held a touch warm-grey so
+      // the limestone and the yellow cabs have something to sit against.
+      asphalt: 'worn',
+      tint: 0xe6e4dd,
+      kerbA: 0x2f4f8c,
+      kerbB: 0xf4f1e8,
+      line: 0xf6f2e4,
+      verge: 0x8d8a83,
+      rail: 0xb4bcc4,
+      energy: 0x53d8ff,
+      racingLine: 0.8,
+      ao: 0.95,
+    },
+    defaults: { wallL: 'concrete', wallR: 'concrete', shoulderSurface: S.OffRoad },
+    nodes: NEW_YORK_NODES,
+    props: [
+      // ---- WHICH CITY THIS IS ---------------------------------------------
+      // See the note on Boston's `districtBrick`. `districtZiggurat` selects the
+      // 1916 zoning envelope: a masonry ziggurat that steps back four times off
+      // the lot line, with a water tank on the first setback, plus a substantial
+      // minority of post-war glass slabs. No neon of any kind, no trams — the
+      // signage on this circuit is a sponsor billboard and nothing else.
+      { type: 'districtZiggurat', t: 0.0, lat: 0 },
+      // ---- start / finish, on the avenue ----------------------------------
+      { type: 'startGantry', t: 0.0, lat: 0 },
+      { type: 'grandstand', t: 0.007, lat: -29, scale: 1.15 },
+      { type: 'crowdStand', t: 0.026, lat: 27 },
+      { type: 'flagUSA', t: 0.006, lat: 21, step: 0.009, end: 0.060, mirror: true },
+      { type: 'balloonArch', t: 0.050, lat: 0, up: 0 },
+      { type: 'skyscraper', t: 0.012, lat: 94, step: 0.021, end: 0.120, mirror: true, scale: 1.55 },
+      { type: 'towerBlock', t: 0.016, lat: 45, step: 0.015, end: 0.122, mirror: true },
+      { type: 'streetLamp', t: 0.020, lat: 17, step: 0.017, end: 0.122, mirror: true },
+      // Cabs at the kerb. 2.4 m long and 1.0 m across the road, yawed 90 degrees
+      // by the recipe's own placement convention, so lat 15.5 against a 19.05 m
+      // corridor leaves them on the pavement edge where a rank belongs.
+      { type: 'yellowCab', t: 0.030, lat: 15.5, step: 0.011, end: 0.116, mirror: true },
+      // Steam off the street, one each side, on the kerb line rather than the
+      // racing line: the plume starts AT the road surface, so there is nothing
+      // suspended in the air about it.
+      { type: 'steamVent', t: 0.042, lat: -13.5 },
+      { type: 'steamVent', t: 0.086, lat: 13.5 },
+      { type: 'brakeBoard', t: 0.120, lat: -15 },
+      { type: 'tyreStack', t: 0.136, lat: 12.5, step: 0.005, end: 0.164 },
+      { type: 'signChevron', t: 0.138, lat: -14.5, step: 0.006, end: 0.170 },
+      // ---- THE TWO SKYLINE LANDMARKS ---------------------------------------
+      // Both placed the way the Taipei supertall had to be: far enough back that
+      // the whole thing fits the frustum. 190 m + 36 m of mast wants ~260 m and
+      // 176 m wants ~215 m; the eye looks at the horizon, so only the upper half
+      // of the vertical FOV is available above it. Re-measured in the report.
+      { type: 'empireSpire', t: 0.104, lat: -262 },
+      { type: 'chryslerCrown', t: 0.836, lat: 224 },
+      // ---- the cross street --------------------------------------------------
+      // `brownstoneRow`'s across-road half-extent is 6.3 m and `waterTankRow`'s
+      // is 6.6 m (the fire escape), against a corridor of hw 9 + 1.55 + 2 =
+      // 12.55 m. lat 22 and 24 leave 3.2 m and 4.9 m of clear verge, and the
+      // steps match the recipes' own lengths (23.4 m and 15.6 m) so each run is
+      // a continuous street wall rather than a row of detached blocks.
+      { type: 'brownstoneRow', t: 0.180, lat: 22, step: 0.0148, end: 0.268, mirror: true },
+      { type: 'waterTankRow', t: 0.276, lat: 24, step: 0.0099, end: 0.316, mirror: true },
+      { type: 'streetLamp', t: 0.190, lat: 16, step: 0.026, end: 0.310 },
+      { type: 'yellowCab', t: 0.200, lat: -14, step: 0.019, end: 0.300 },
+      { type: 'planter', t: 0.196, lat: 14, step: 0.016, end: 0.296 },
+      { type: 'trafficLight', t: 0.312, lat: 14 },
+      { type: 'signChevron', t: 0.320, lat: -14, step: 0.006, end: 0.348 },
+      // ---- the park ----------------------------------------------------------
+      // The park is the INFIELD (a clockwise lap puts the inside on the driver's
+      // right), so the tree line and the lake read across the inside of three
+      // corners instead of past one hedge. `parkTree` is 3.4 m across at the
+      // canopy against a corridor of hw 11 + 1.55 + 5 = 17.55 m, so lat 22 is
+      // the minimum that keeps a canopy off the shoulder.
+      { type: 'parkTree', t: 0.352, lat: 22, step: 0.0062, end: 0.452 },
+      { type: 'parkTree', t: 0.356, lat: 34, step: 0.0090, end: 0.462 },
+      { type: 'parkTree', t: 0.362, lat: -24, step: 0.0110, end: 0.448 },
+      // The lake's across-road half-extent is 34 m (an irregular 17-sided rim),
+      // so lat 78 puts its near coping 44 m in from the road: a lawn, then the
+      // water, which is what you actually see from the park drive.
+      { type: 'parkLake', t: 0.402, lat: 78 },
+      { type: 'parkTree', t: 0.392, lat: 132, step: 0.014, end: 0.470 },
+      { type: 'signChevron', t: 0.396, lat: -15, step: 0.006, end: 0.426 },
+      { type: 'brakeBoard', t: 0.412, lat: -14 },
+      { type: 'crowdStand', t: 0.372, lat: -27 },
+      { type: 'tyreStack', t: 0.432, lat: 12, step: 0.005, end: 0.458 },
+      { type: 'brakeBoard', t: 0.464, lat: 14 },
+      // ---- THE EAST RIVER CROSSING -------------------------------------------
+      // Two granite towers straddling their own deck at lat 0. `brooklyntower`
+      // is in `CORRIDOR_PROPS`, so nothing pushes them aside and they keep the
+      // deck's own height — which is the datum their cable web is solved
+      // against, per stay, at that stay's own arc length.
+      //
+      // 95 m apart, and `BROOKLYN.reach` is 48 m each way, so the two cable webs
+      // meet in the middle of the span exactly as a continuous main cable does.
+      // No `bridgePylon` run underneath: the terrain bake follows an isolated
+      // elevated deck, so a pier under it measures 100 % underground — that was
+      // measured on Boston and on Tokyo and the answer has not changed.
+      { type: 'brooklynTower', t: 0.534, lat: 0 },
+      { type: 'brooklynTower', t: 0.594, lat: 0 },
+      { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.660 },
+      { type: 'brakeBoard', t: 0.624, lat: -14 },
+      // ---- downtown -----------------------------------------------------------
+      { type: 'waterTankRow', t: 0.670, lat: 24, step: 0.0102, end: 0.712, mirror: true },
+      { type: 'towerBlock', t: 0.668, lat: 43, step: 0.014, end: 0.782, mirror: true },
+      { type: 'skyscraper', t: 0.660, lat: 88, step: 0.022, end: 0.800, mirror: true, scale: 1.4 },
+      { type: 'streetLamp', t: 0.678, lat: 17, step: 0.017, end: 0.790, mirror: true },
+      { type: 'steamVent', t: 0.704, lat: -13.5 },
+      { type: 'yellowCab', t: 0.700, lat: 15.5, step: 0.013, end: 0.772 },
+      { type: 'billboard', t: 0.742, lat: -24, scale: 1.25 },
+      { type: 'trafficLight', t: 0.726, lat: 15 },
+      { type: 'brakeBoard', t: 0.764, lat: 15 },
+      { type: 'signChevron', t: 0.772, lat: -15, step: 0.006, end: 0.804 },
+      // ---- the crown sweep and the civic plaza --------------------------------
+      // The ceremonial pair, on the plaza under the crown. See the flag scheme
+      // note in Boston's props list.
+      { type: 'flagUSA', t: 0.792, lat: -15, scale: 1.7 },
+      { type: 'flagUSA', t: 0.804, lat: -15 },
+      { type: 'flagUSA', t: 0.828, lat: 22 },
+      { type: 'crowdStand', t: 0.820, lat: 26, step: 0.018, end: 0.856 },
+      { type: 'planter', t: 0.788, lat: 16, step: 0.012, end: 0.830 },
+      // ---- the run to the line -------------------------------------------------
+      { type: 'streetLamp', t: 0.924, lat: 17, step: 0.016, end: 0.995, mirror: true },
+      { type: 'yellowCab', t: 0.930, lat: 15.5, step: 0.012, end: 0.992 },
+      { type: 'skyscraper', t: 0.898, lat: 92, step: 0.024, end: 0.988, scale: 1.45 },
+      { type: 'crowdStand', t: 0.970, lat: -27 },
+    ],
+    boostPads: [
+      { t: 0.208, lat: -4, width: 7, length: 16 },
+      { t: 0.208, lat: 4, width: 7, length: 16 },
+      { t: 0.560, lat: 0, width: 10, length: 16 },
+      { t: 0.880, lat: 0, width: 9, length: 16 },
+      { t: 0.958, lat: 0, width: 9, length: 16 },
+    ],
+    itemRows: [
+      { t: 0.238, count: 3, spread: 10 },
+      { t: 0.500, count: 5 },
+      { t: 0.900, count: 5 },
+    ],
+    hazards: [
+      { kind: 'snapper', t: 0.372, lat: 13 },
+      { kind: 'slider', t: 0.700, lat: -9, span: 9, speed: 3 },
+    ],
+  },
 };
 
 /** Menu / cup order for the city series, appended after the original three. */
 export const CITY_TRACK_ORDER: readonly string[] = [
-  'bostonHarbor', 'taipeiCircuit', 'tokyoNeon',
+  'bostonHarbor', 'taipeiCircuit', 'tokyoNeon', 'hongKongHarbour', 'newYorkCircuit',
 ];

@@ -8423,18 +8423,25 @@ export class Props implements ISubsystem {
         }
         // The nylon canopy over the pavement, on its own bamboo legs so it has
         // something under it. Red / white / blue, in that order, always.
+        //
+        // It reaches 4.0 m past the cage and NO FURTHER, and that number is what
+        // sets the recipe's across-road half-extent at 10.2 m — the figure
+        // `CityDefs` prices its `lat` against. A deeper awning is prettier and
+        // costs a metre of verge on an 11 m half-width street.
+        const CANOPY = 4.0;
         const stripes = [0xc4302a, 0xe8e6df, 0x24478c];
         for (let i = 0; i < 6; i++) {
           b.quad(
             -HX + i * (HX * 2 / 6), 4.3, HZ + 0.9,
             -HX + (i + 1) * (HX * 2 / 6), 4.3, HZ + 0.9,
-            -HX + (i + 1) * (HX * 2 / 6), 3.55, HZ + 6.2,
-            -HX + i * (HX * 2 / 6), 3.55, HZ + 6.2,
+            -HX + (i + 1) * (HX * 2 / 6), 3.62, HZ + CANOPY,
+            -HX + i * (HX * 2 / 6), 3.62, HZ + CANOPY,
             stripes[i % 3], 1.14,
           );
         }
         for (const sx of [-1, 1]) {
-          b.prism(sx * (HX - 0.6), 0, HZ + 6.0, 0.075, 3.6, 5, bamb, { capBottom: true });
+          b.prism(sx * (HX - 0.6), 0, HZ + CANOPY - 0.2, 0.075, 3.66, 5, bamb,
+            { capBottom: true });
         }
         const glow = this.builder();
         const litChance = 0.14 + 0.5 * this.night;
