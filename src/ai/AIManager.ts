@@ -181,6 +181,8 @@ export class AIManager implements ISubsystem {
   private physicsSource: object | null = null;
 
   private line: RacingLine | null = null;
+  /** Circuit fingerprint the current `line` was baked for. See `syncLineToTrack`. */
+  private lineTag = '';
   private readonly options: AIManagerOptions;
 
   private readonly drivers = new Map<number, AIDriver>();
@@ -264,7 +266,13 @@ export class AIManager implements ISubsystem {
   //  Lifecycle
   // -------------------------------------------------------------------------
 
-  init(): void {
+  /**
+   * Bake the racing line for whatever circuit is loaded RIGHT NOW, and record
+   * which circuit that was.
+   *
+   * Split out of `init()` because it is not a one-off: see `syncLineToTrack`.
+   */
+  private buildLine(): void {
     const t0 =
       typeof performance !== 'undefined' && typeof performance.now === 'function'
         ? performance.now()
@@ -277,6 +285,7 @@ export class AIManager implements ISubsystem {
     this.line.build();
     this.world.line = this.line;
     this.world.lapLength = this.line.lapLength;
+    this.lineTag = this.trackFingerprint();
     const t1 =
       typeof performance !== 'undefined' && typeof performance.now === 'function'
         ? performance.now()
@@ -290,7 +299,82 @@ export class AIManager implements ISubsystem {
           `${s.minBarrierClearance.toFixed(2)} m, built in ${(t1 - t0).toFixed(1)} ms`,
       );
     }
+  }
 
+  /**
+   * Which circuit is under us. Cheap, allocation-light, and deterministic for a
+   * given spline, so it can be compared every half second without ever
+   * false-positiving into a rebuild.
+   *
+   * `trackId` is not on `ITrackService` — `Track` exposes it as a getter and this
+   * file is duck-typed against its collaborators by design, so it is read
+   * structurally with a geometry fallback for any track service that lacks it.
+   * The fallback matters: lap length alone does not separate every circuit
+   * (volcanoRush and tokyoNeon are both ~1536 m).
+   */
+  private trackFingerprint(): string {
+    const t = this.track;
+    const L = Number.isFinite(t.lapLength) ? t.lapLength : 0;
+    const idRaw = (t as unknown as { trackId?: unknown }).trackId;
+    if (typeof idRaw === 'string' && idRaw.length > 0) return `${idRaw}|${L.toFixed(1)}`;
+    let g = '';
+    for (let i = 0; i < 3; i++) {
+      const s = t.sampleAtDistance(L * (0.13 + i * 0.29));
+      g += `${s.position.x.toFixed(1)},${s.position.z.toFixed(1)};`;
+    }
+    return `${L.toFixed(1)}|${g}`;
+  }
+
+  /**
+   * ⚠️ THE RACING LINE WAS BAKED ONCE AND NEVER REBUILT.
+   *
+   * `RacingLine` is a snapshot: `build()` bakes 600 stations of geometry, corner
+   * curvature, barrier clearance and a speed profile, and `lapLength` is
+   * `readonly`, captured in its constructor. `init()` built it and nothing ever
+   * built it again.
+   *
+   * `RaceDirector.beginRace()` does this, in this order:
+   *
+   *     callOpt(this.track, 'loadTrack', opts.trackId);   // swaps the spline
+   *     ...
+   *     callOpt(this.ai, 'setDifficulty', this.cc);
+   *     callOpt(this.ai, 'resetRace');                    // did NOT rebuild
+   *
+   * So the first race of a session was driven on the right line and EVERY LATER
+   * RACE ON A DIFFERENT CIRCUIT was driven on the previous circuit's line — the
+   * AI aiming at corners that are not there, at speeds set by a different set of
+   * corners, on a road whose barriers are somewhere else. That is the owner's
+   * report exactly: NPCs repeatedly hitting walls and failing to follow the
+   * course, on multiple circuits, in normal races.
+   *
+   * It was invisible to every probe in `.probe-tmp` because all of them load the
+   * circuit first and construct `AIManager` afterwards, which is the one order
+   * the game never uses. Measured with the shipping order
+   * (`.probe-tmp/loopdet.ts`, `staleLineFrom`), volcanoRush entered from the
+   * previous circuit: 8653 barrier-contact episodes, 807 s of contact, 226 pins,
+   * a 33 s off-road excursion, and 0 of 11 AI karts finishing three laps inside
+   * 400 s. On the same seed with the line rebuilt: 7 episodes, 0.7 s.
+   *
+   * Checked on the existing half-second `resolveStates` cadence rather than only
+   * in `resetRace()`, so it also covers a swap made by any other path and the
+   * case where `init()` ran before the track was ready.
+   */
+  private syncLineToTrack(): boolean {
+    const L = this.track.lapLength;
+    if (!Number.isFinite(L) || L <= 1) return false;
+    const tag = this.trackFingerprint();
+    if (this.line && tag === this.lineTag) return false;
+    this.buildLine();
+    // Every driver holds line-relative state — `hintStation` indexes the OLD
+    // station array, the arc ring holds the old circuit's distances, the chosen
+    // variant belongs to the old line. Reusing any of it on new geometry is how
+    // a rebuilt line would still drive like a stale one.
+    for (const d of this.drivers.values()) d.reset();
+    return true;
+  }
+
+  init(): void {
+    this.buildLine();
     this.resolveItems();
     this.resolveStates(true);
 
@@ -569,6 +653,11 @@ export class AIManager implements ISubsystem {
   }
 
   resetRace(): void {
+    // FIRST: `RaceDirector.beginRace()` calls `track.loadTrack()` a few lines
+    // above this, and `Track.loadTrack` is synchronous up to `ready = true` (its
+    // only `await` is a bare `Promise.resolve()` for the loading bar), so the new
+    // circuit is already under us here. See `syncLineToTrack`.
+    this.syncLineToTrack();
     this.rubberband.reset();
     this.elapsed = 0;
     for (const d of this.drivers.values()) d.reset();
@@ -580,16 +669,20 @@ export class AIManager implements ISubsystem {
   // -------------------------------------------------------------------------
 
   fixedUpdate(ctx: FrameContext): void {
-    const line = this.line;
-    if (!line) return;
     const dt = ctx.fixedDt > 0 ? ctx.fixedDt : 1 / 120;
     this.elapsed += dt;
 
     this.resolveCooldown -= dt;
     if (this.resolveCooldown <= 0) {
       this.resolveCooldown = 0.5;
+      // Before the states: a circuit swap invalidates the line, and driving one
+      // more tick on a stale line is a tick of driving at a corner that is not
+      // there. See `syncLineToTrack`.
+      this.syncLineToTrack();
       this.resolveStates(false);
     }
+    const line = this.line;
+    if (!line) return;
     if (this.states.length === 0) return;
 
     // --- world context ----------------------------------------------------
