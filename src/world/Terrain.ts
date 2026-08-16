@@ -69,7 +69,15 @@ const THEME_SURFACE: Record<WorldTheme, ThemeSurface> = {
   },
   city: {
     tile: 7.5, rough: new THREE.Vector4(0.88, 0.92, 0.76, 0.92),
-    bias: new THREE.Vector4(0.48, 0.34, 0.0, -0.8),
+    // ---- DIRT 0.34 -> 0.20 ON THE CITY GROUND ------------------------------
+    // Owner on Taipei: *"care must be taken to avoid a desert-like feeling."*
+    // The dirt layer is the warmest thing in the splat (#5f4230, h 22 deg) and
+    // it was carrying 41 % of the bias weight on all three city circuits — a
+    // third of the verge is bare warm earth, which under a low warm key is a
+    // dune. Boston, Taipei and Tokyo are all humid basins with grass to the
+    // kerb; grass takes the weight. Measured before/after in
+    // `.probe-tmp/palette.ts`.
+    bias: new THREE.Vector4(0.60, 0.20, 0.0, -0.8),
     normalScale: new THREE.Vector4(1.0, 0.55, 1.0, 0.5),
     sandTop: -1e5, sandFade: 6, detailScale: 4,
   },
@@ -613,7 +621,16 @@ float terrainSun = fieldShadowLod(
       case 'volcano': baseA.setHex(0x2a1a18); baseB.setHex(0x120b0c); break;
       case 'desert': baseA.setHex(0x9a6f45); baseB.setHex(0x6d4a30); break;
       case 'snow': baseA.setHex(0x7d8ba0); baseB.setHex(0xdfe9f5); break;
-      case 'city': baseA.setHex(0x4a5560); baseB.setHex(0x2e3742); break;
+      // ---- THE CITY RING IS FORESTED, NOT BARE -----------------------------
+      // Was #4a5560 -> #2e3742: a near-neutral blue-grey at 13 % saturation. A
+      // low-chroma ridge has nothing to resist a key light with, so under
+      // sunset's #ffa055 at intensity 3.7 it lands on the KEY's hue and reads as
+      // a dune — which is what the owner saw on Taipei. All three city circuits
+      // (Boston, Taipei, Tokyo) sit in humid basins ringed by wooded hills, so
+      // the low ground goes green with real chroma and the tops keep the
+      // blue-grey, which is aerial perspective doing the job the flat grey was
+      // pretending to do. `t` is height-driven, so this IS a green-to-haze ramp.
+      case 'city': baseA.setHex(0x44604a); baseB.setHex(0x3b4c5e); break;
       default: baseA.setHex(0x51684a); baseB.setHex(0x3a4a56); break;
     }
     const c = new THREE.Color();
@@ -684,7 +701,16 @@ float terrainSun = fieldShadowLod(
     // procedural rock surface instead of a texture: the ring sits 700–2300 m out,
     // where a tiled map would be far past its last mip, but analytic noise has no
     // mip chain and 20–90 m features are exactly what reads at that range.
-    const snowy = this.theme !== 'volcano' && this.theme !== 'desert';
+    // NO SNOWCAPS ON A CITY RING. `uSnowBand` starts at `snowLine * 0.86` =
+    // 150.5 m, and the fragment shader offsets the test height by
+    // `(mA - 0.5) * 95 + (mB - 0.5) * 30`, i.e. up to +62.5 m of noise. The city
+    // rings top out at 117 m (Taipei), 129 m (Boston) and 142 m (Tokyo), so the
+    // noisy half of every ridge crest was clearing the band and taking up to a
+    // 23 % wash of #dce6f6. Nothing in Boston Harbor, subtropical Taipei or
+    // downtown Tokyo has an alpine snowcap, and a pale desaturating wash on the
+    // horizon is the other half of the look the owner is calling out.
+    const snowy = this.theme !== 'volcano' && this.theme !== 'desert'
+      && this.theme !== 'city';
     const mtnU: Record<string, THREE.IUniform> = {
       uSnowBand: { value: new THREE.Vector2(snowLine * 0.86, snowLine + 90) },
       uSnowAmt: { value: snowy ? (this.theme === 'snow' ? 0.72 : 0.5) : 0.0 },
