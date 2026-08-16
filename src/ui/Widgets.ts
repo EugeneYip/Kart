@@ -1100,7 +1100,13 @@ function drawHeadwear(
   // function used the paint and five of ten helmets vanished into their own
   // background. `clothAlt` headwear (beret, bucket hat, flight cap) takes
   // `suitAlt`, exactly as the rig does.
-  const shell = spec.head === 'beret' || spec.head === 'bucketHat' || spec.head === 'flightCap'
+  // `coneStraw` joins the `clothAlt` list because that is the material the rig
+  // builds it with (`b.add('head', 'clothAlt', …)` in `Driver.ts`) — the card
+  // and the model have to agree about which of the driver's two colours the hat
+  // takes, or the fallback reads as a different character.
+  const kind = spec.hatVariant ?? spec.head;
+  const shell = kind === 'beret' || kind === 'bucketHat' || kind === 'flightCap'
+    || kind === 'coneStraw'
     ? spec.suitAlt : spec.suit;
   const lit = bustMix(shell, '#ffffff', 0.34);
   const dim = bustShade(shell, 0.58);
@@ -1131,7 +1137,69 @@ function drawHeadwear(
     c.restore();
   };
 
-  switch (spec.head) {
+  // `hatVariant` wins over `head` — see the field's note on `BustSpec`. Skid and
+  // Quill declare a nearest-family `head` so the rest of this file's predicates
+  // still resolve, and the real shape here.
+  switch (kind) {
+    case 'coneStraw': {
+      // Skid's wide straw cone. The rig's whole argument for it is that it is
+      // NOT curved — a true straight-sided cone in section, so at card size the
+      // head is a filled triangle and nothing else on the roster is. Straight
+      // lines only; a quadratic here would throw away the one thing it is for.
+      c.beginPath();
+      c.moveTo(hx, hy - r * 1.46);
+      c.lineTo(hx + r * 1.62, hy + r * 0.10);
+      c.lineTo(hx - r * 1.62, hy + r * 0.10);
+      c.closePath();
+      c.fillStyle = grad(hx - r, hy - r * 1.3, hx + r * 0.9, hy + r * 0.1);
+      c.fill();
+      // Hard rim, drawn as a shallow lens rather than a stroke so the brim
+      // reads as having thickness against the face beneath it.
+      c.beginPath();
+      c.moveTo(hx - r * 1.62, hy + r * 0.10);
+      c.quadraticCurveTo(hx, hy + r * 0.34, hx + r * 1.62, hy + r * 0.10);
+      c.quadraticCurveTo(hx, hy + r * 0.20, hx - r * 1.62, hy + r * 0.10);
+      c.closePath();
+      c.fillStyle = dim;
+      c.fill();
+      // Straw grain: a few radial ribs, fading out toward the rim.
+      c.save();
+      c.globalAlpha = 0.30;
+      c.strokeStyle = bustShade(shell, 0.42);
+      c.lineWidth = r * 0.045;
+      for (let i = -2; i <= 2; i++) {
+        c.beginPath();
+        c.moveTo(hx, hy - r * 1.40);
+        c.lineTo(hx + r * 0.62 * i, hy + r * 0.08);
+        c.stroke();
+      }
+      c.restore();
+      break;
+    }
+    case 'towerBand': {
+      // Quill's banded tower: a tall narrow stack, the opposite read to the
+      // cone. Three tapering tiers with a hard step between each, so the
+      // silhouette is a staircase rather than a dome.
+      const tiers = [
+        { w: 0.86, y0: 0.02, y1: -0.46 },
+        { w: 0.70, y0: -0.46, y1: -0.94 },
+        { w: 0.54, y0: -0.94, y1: -1.44 },
+      ];
+      for (let i = 0; i < tiers.length; i++) {
+        const t = tiers[i];
+        c.beginPath();
+        c.rect(hx - r * t.w, hy + r * t.y1, r * t.w * 2, r * (t.y0 - t.y1));
+        c.fillStyle = i % 2 ? bustShade(shell, 0.80) : grad(hx - r, hy + r * t.y1, hx + r * 0.7, hy + r * t.y0);
+        c.fill();
+        // The step: a bright lip on top of each tier is what makes the stack
+        // legible at 48 px, where the tier faces themselves merge.
+        c.beginPath();
+        c.rect(hx - r * t.w, hy + r * t.y1, r * t.w * 2, r * 0.09);
+        c.fillStyle = lit;
+        c.fill();
+      }
+      break;
+    }
     case 'cap': {
       // Backwards baseball cap: crown over the skull, brim pointing away.
       c.beginPath();

@@ -68,6 +68,25 @@ export interface BustSpec {
   name: string;
   /** Headwear silhouette — the real `HeadKind`, so a new hat is a type error. */
   head: HeadKind;
+  /**
+   * Set when the rig wears a hat that has no `HeadKind` of its own.
+   *
+   * `Driver.ts` documents `hatVariant` as "a workaround for an ownership
+   * boundary… it should not survive integration": the character agent could not
+   * edit `src/ui/*`, so Skid and Quill declare the nearest existing family in
+   * `head` (`trucker`, `aero`) and put the real shape here. Without this field
+   * the 2-D fallback card drew a trucker cap on the racer wearing a wide straw
+   * cone — two of twelve cards wrong.
+   *
+   * This is the narrow half of the fix. `drawHeadwear` now resolves
+   * `hatVariant ?? head`, so the card is correct. The fuller fix `Driver.ts`
+   * asks for — fold both variants into `HeadKind` and delete this field — also
+   * means retyping the 3-D switch and the `covered` / `shell` predicates that
+   * branch on `head`, and that is a change to just-landed character work for a
+   * card that only appears when the offscreen portrait render comes back empty.
+   * Deliberately not taken now; the field is the honest record of the debt.
+   */
+  hatVariant?: DriverDef['hatVariant'];
   /** `'fox' | 'capy'`, or `null` for the eight humanoids. */
   species: Species | null;
   /** Suit / trim, from the driver's own two-colour blocking. */
@@ -461,6 +480,7 @@ function toBust(d: DriverDef): BustSpec {
   return {
     name: d.name,
     head: d.head,
+    hatVariant: d.hatVariant,
     species: d.species ?? null,
     suit: cssColor(d.suit),
     suitAlt: cssColor(d.suitAlt),
