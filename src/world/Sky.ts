@@ -202,10 +202,39 @@ export const SKY_PRESETS: Record<SkyPresetName, SkyPreset> = {
     haze: 0xff9a5e, hazeStrength: 0.68, hazeLum: 0.95,
     night: 0, cityGlow: 0.1, embers: 0, lightning: 0,
     keyColor: 0xffa055, keyIntensity: 3.7,
-    skyAmbient: 0x6f8fd4, groundAmbient: 0x483630, ambientIntensity: 0.42,
+    // ---- THE DOWNWARD FILL WAS A DESERT FLOOR ------------------------------
+    // `groundAmbient` was #483630, h 15 deg at 20 % saturation, and it is mixed
+    // 30 % toward `bounceColor` (#a35f38, h 22 deg at 49 %) before it becomes the
+    // hemisphere's lower lobe. The product was h 20 deg at 33 % — a saturated
+    // sand bounce painted onto every downward-facing and shaded surface on both
+    // sunset circuits. Owner on Taipei: *"care must be taken to avoid a
+    // desert-like feeling."* Neutralised to h 18 deg at 22 %; the bounce itself
+    // is untouched, so a beach still throws warm light, it just no longer does
+    // it from the dark side of the hemisphere as well.
+    skyAmbient: 0x6f8fd4, groundAmbient: 0x3f3a3c, ambientIntensity: 0.42,
     bounceColor: 0xa35f38, bounceIntensity: 0.5,
     rimColor: 0x8fb4ff, rimIntensity: 0.36,
-    fogColor: 0x8a5a4a, fogSunColor: 0xffbe80, fogDensity: 0.00105, fogHeight: 2, fogFalloff: 0.017,
+    // ---- AERIAL PERSPECTIVE, NOT A SAND HAZE -------------------------------
+    // `fogColor` was #8a5a4a: h 15 deg, s 30 %, i.e. brick. Everything past a few
+    // hundred metres converged on it — measured on `.probe-tmp/palette.ts`, the
+    // city ground albedo left h 82 deg at 300 m and arrived at h 24 deg by
+    // 1200 m, and the mountain ring, which stands 600-2300 m out, was 33-100 %
+    // fog and therefore simply WAS this colour. A warm haze is how a city turns
+    // into dunes, and it is the single biggest lever on the owner's complaint.
+    //
+    // Now h 213 deg at s 14 %, which is what aerial perspective actually is:
+    // Rayleigh scattering is blue at every hour of the day. Rec709 luminance is
+    // held (102 against the old 99) so nothing gets darker or hazier — only the
+    // hue moves.
+    //
+    // THE SUNSET IS NOT LOST. `fogSunColor` #ffbe80 is unchanged and
+    // `applyWorldFog` blends toward it by `pow(sunAmt, 5) * 0.85`, so the cone
+    // around the sun stays the warm apricot the owner asked to keep; away from
+    // it the distance now goes grey-blue, which is exactly the postcard sunset
+    // — warm sky, cool land. Shared with `sunsetCoastline`; both are re-measured
+    // in the report, and a blue sea horizon at dusk is more right than a brown
+    // one (`Water.ts` takes `uFogColor` as its `uHorizon`).
+    fogColor: 0x5b6878, fogSunColor: 0xffbe80, fogDensity: 0.00105, fogHeight: 2, fogFalloff: 0.017,
     envIntensity: 0.45,
     groundBounceColor: 0xb0703c, groundBounceLum: 0.34,
     // See the note on `day.shadowIntensity` — same reasoning, and a low sun

@@ -414,7 +414,16 @@ type LayerFn = (u: number, v: number) => { r: number; g: number; b: number; h: n
 const THEME_TINT: Record<WorldTheme, [number, number, number]> = {
   meadow: [1.0, 1.0, 1.0],
   coastal: [1.02, 1.03, 0.95],
-  city: [0.92, 0.94, 0.96],
+  // City was [0.92, 0.94, 0.96] — a 4 % cool cast, which is barely a tint at
+  // all. Owner on Taipei: *"care must be taken to avoid a desert-like feeling."*
+  // A near-neutral albedo takes a warm key's hue whole; the fix is CHROMA in the
+  // material, and the same reasoning is already recorded for Taipei's kerbs in
+  // `CityDefs.ts` ("warmth in the albedo compounds with a warm key and a warm
+  // env into gold"). Red down, green held, blue held: the ground gains green
+  // saturation it can resist a #ffa055 key with, and stays plausible for
+  // Boston's midday harbour and Tokyo's night. Measured on all three city
+  // circuits in `.probe-tmp/palette.ts`.
+  city: [0.82, 0.97, 0.90],
   volcano: [0.72, 0.55, 0.5],
   desert: [1.12, 1.0, 0.78],
   snow: [0.95, 0.98, 1.06],

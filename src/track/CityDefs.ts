@@ -672,8 +672,27 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     laps: 3,
     terrainSeed: 41102,
     waterLevel: null,
-    fogColor: 0xf0a878,
-    fogDensity: 0.0022,
+    // ---- THIS FIELD IS INERT, AND THAT IS THE POINT ------------------------
+    // `fogColor` / `fogDensity` on a `TrackDef` reach exactly one reader,
+    // `Track.getAtmosphere()`, and `.probe-tmp/palette.ts` greps the whole of
+    // `src/` for that name: ONE occurrence, the definition. Nothing calls it.
+    // The fog a frame actually renders is `SKY_PRESETS[skyPreset]`, pushed by
+    // `Lighting.setPreset` into `scene.fog` and `worldFogUniforms`.
+    //
+    // So the old value here — #f0a878, h 24 deg at 80 % saturation, a pure sand
+    // apricot — was the obvious suspect for the owner's *"desert-like feeling"*
+    // and was never on screen at all. The real culprit was `sunset`'s own
+    // `fogColor` #8a5a4a (h 15 deg), which is where the fix went.
+    //
+    // Left authored rather than deleted, because the field is on the shared
+    // `TrackDef` contract and a circuit that omits it would not compile. It now
+    // MATCHES the live sunset preset, so if anyone ever wires `getAtmosphere()`
+    // up, Taipei does not silently snap back to a sand haze. Density is the one
+    // number that is deliberately not the preset's: 0.0016 against 0.00105 is
+    // the extra humidity of a subtropical basin, and it is what this circuit
+    // would ask for if the field were live.
+    fogColor: 0x5b6878,
+    fogDensity: 0.0016,
     road: {
       // Dusk key light, so the same rule as the coastal circuit applies: warmth
       // in the albedo compounds with a warm key and a warm env into gold. Tint
