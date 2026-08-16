@@ -70,6 +70,45 @@ export type { PortraitFraming } from './Portrait';
  */
 const ROSTER_REPEAT_SUFFIX = ['', 'II', 'III', 'IV'] as const;
 
+/**
+ * The grid-filling rule, as a free function so a probe can call THE REAL ONE.
+ *
+ * It lived inside `KartManager` as a private method, which meant
+ * `.probe-tmp/roster.ts` — the regression guard for the two-Capys-two-Novas
+ * defect — could not reach it. That probe's own header claimed "this
+ * reimplements nothing" and then hand-transcribed this loop, so it was grading a
+ * copy: faithful on the day it was written, and structurally unable to notice
+ * this file changing underneath it. The adversarial critic caught it.
+ *
+ * The roster is the supply and `count` is the demand. Distinct-first: `rest` is
+ * walked in order, so every character appears once before any repeats. A repeat
+ * past that point is RELABELLED — `createVisual` already hue-shifts the kart by
+ * `variant`, but the name did not change, so a twelve-kart grid off a
+ * ten-character roster put two racers called CAPY and two called NOVA on the
+ * leaderboard, the results board and the rival readout.
+ *
+ * The clone keeps `id`, deliberately: `makeTuning(id)`, `CHARACTER_BY_ID`, the
+ * `"<id>#N"` paint keys and `portraitSubject`'s canonical-livery lookup all key
+ * off it, and a repeat is the same character in a second car, not a new one.
+ */
+export function buildRosterFrom(
+  table: readonly CharacterDef[],
+  byId: Readonly<Record<string, CharacterDef>>,
+  playerId: string,
+  count: number,
+): CharacterDef[] {
+  const player = byId[playerId] ?? table[0];
+  const rest = table.filter((c) => c.id !== player.id);
+  const out: CharacterDef[] = [player];
+  for (let i = 0; out.length < count; i++) {
+    const base = rest[i % rest.length];
+    const lap = Math.floor(i / rest.length);
+    out.push(lap === 0 ? base
+      : { ...base, name: `${base.name} ${ROSTER_REPEAT_SUFFIX[lap] ?? String(lap + 1)}` });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Loose dependency shapes — these subsystems are authored in parallel, so we
 // depend on the *shape* of what we need and feature-detect everything.
@@ -328,16 +367,7 @@ export class KartManager implements ISubsystem {
    * off it, and a repeat is the same character in a second car, not a new one.
    */
   private buildRoster(count: number): CharacterDef[] {
-    const player = CHARACTER_BY_ID[this.playerCharacterId] ?? CHARACTERS[0];
-    const rest = CHARACTERS.filter((c) => c.id !== player.id);
-    const out: CharacterDef[] = [player];
-    for (let i = 0; out.length < count; i++) {
-      const base = rest[i % rest.length];
-      const lap = Math.floor(i / rest.length);
-      out.push(lap === 0 ? base
-        : { ...base, name: `${base.name} ${ROSTER_REPEAT_SUFFIX[lap] ?? String(lap + 1)}` });
-    }
-    return out;
+    return buildRosterFrom(CHARACTERS, CHARACTER_BY_ID, this.playerCharacterId, count);
   }
 
   private makeState(id: number, isPlayer: boolean): KartState {

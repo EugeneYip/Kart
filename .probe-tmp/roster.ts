@@ -18,28 +18,22 @@
  * and this project has shipped at least nine of those.
  */
 import { CHARACTERS, CHARACTER_BY_ID, type CharacterDef } from '@/karts/Characters';
+import { buildRosterFrom as buildRoster } from '@/karts/KartManager';
 import { CHARACTER_STATS } from '@/physics/Tuning';
 
 const GRID = 12;
 
-/** The shipping implementation, byte-for-byte, so the probe cannot drift from it. */
-function buildRoster(
-  table: readonly CharacterDef[],
-  byId: Readonly<Record<string, CharacterDef>>,
-  playerId: string,
-  count: number,
-): CharacterDef[] {
-  const player = byId[playerId] ?? table[0];
-  const rest = table.filter((c) => c.id !== player.id);
-  const out: CharacterDef[] = [player];
-  for (let i = 0; out.length < count; i++) {
-    const base = rest[i % rest.length];
-    const lap = Math.floor(i / rest.length);
-    out.push(lap === 0 ? base : { ...base, name: `${base.name} ${ROMAN[lap] ?? String(lap + 1)}` });
-  }
-  return out;
-}
-const ROMAN = ['', 'II', 'III', 'IV'];
+// ---- THIS PROBE USED TO GRADE A COPY OF THE CODE IT GUARDS ------------------
+// The header above once said "this reimplements nothing… calls the real function
+// through a structural clone", and twenty lines later hand-transcribed
+// `KartManager.buildRoster`. It never imported `KartManager` at all. The
+// transcription was faithful on the day it was written, so the verdict it gave
+// was correct — but it could not see the file it guards change, which is the
+// entire job. An adversarial critic pass caught it.
+//
+// `buildRoster` was private, so the fix was to lift the rule out of the class as
+// `buildRosterFrom` and have the method delegate to it. This now imports the
+// shipping function. If that loop changes, this probe changes with it.
 
 let fail = 0;
 const check = (ok: boolean, label: string, detail: string): void => {

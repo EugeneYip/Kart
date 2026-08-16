@@ -64,6 +64,7 @@ import { TerrainField, type PathStation } from '@/world/WorldTextures';
 import { fakeRenderer, loadTrack, TRACK_IDS } from '@/dev/headless';
 import { QUALITY_PRESETS } from '@/core/Config';
 import { TF, makeAttribs } from '@/track/TrackSpline';
+import { getTrackDef } from '@/track/TrackDefs';
 import { CROSS, kerbSuppressed } from '@/track/TrackBuilder';
 
 const ARGS = process.argv.slice(3);
@@ -383,8 +384,54 @@ for (const id of IDS) {
     }
     check(published === st.length, 'A. every station publishes a shoulder',
       `${published}/${st.length} published; authored range ${f2(shMin)}..${f2(shMax)} m`);
-    check(published > 0 && worst <= SH_TOL, 'A. ...and it is the authored one',
-      published === 0 ? 'nothing published' : `worst |Δ| ${f3(worst)} m at station ${worstAt}`);
+
+    // ---- A2 WAS `x === x`, AND THIS IS THE REPLACEMENT ----------------------
+    // The check that used to sit here compared `s.shoulderL` against
+    // `attribs.shoulderL` under a header claiming "ground truth is the SPLINE,
+    // which is a different code path from the resampler under test". It is the
+    // same code path. `sampleAtDistance` and `attribsAtDistance` both do
+    // `const ch = this.scalars4(s)` and both assign `ch[2]` / `ch[3]`, and
+    // `stationFrom` copies the value across with no arithmetic. Three functions,
+    // one number, compared against itself — it recorded `worst |Δ| 0.000 m` on
+    // 8/8 circuits and could not have recorded anything else. An adversarial
+    // critic pass caught it.
+    //
+    // The independent source of truth is the AUTHORING: `shL` / `shR` on the
+    // `SplineNodeSpec` list in the track def, which is upstream of every spline
+    // accessor. The channels are smoothed, so a station between two nodes of
+    // different width legitimately lands between them — the honest assertion is
+    // therefore that every published shoulder lies inside the authored envelope,
+    // and that the envelope is actually exercised rather than collapsed to a
+    // constant the test would pass trivially.
+    {
+      const authored: number[] = [];
+      const def = getTrackDef(id);
+      for (const n of def.nodes) {
+        if (typeof n.shL === 'number') authored.push(n.shL);
+        if (typeof n.shR === 'number') authored.push(n.shR);
+      }
+      const aLo = Math.min(...authored);
+      const aHi = Math.max(...authored);
+      let outside = 0, worstOut = 0, worstOutAt = -1;
+      for (let i = 0; i < st.length; i++) {
+        const s = st[i];
+        if (s.shoulderL === undefined || s.shoulderR === undefined) continue;
+        for (const v of [s.shoulderL, s.shoulderR]) {
+          const over = Math.max(aLo - v, v - aHi);
+          if (over > SH_TOL) { outside++; if (over > worstOut) { worstOut = over; worstOutAt = i; } }
+        }
+      }
+      check(authored.length > 0, 'A2. the track def authors shoulders at all',
+        authored.length ? `${authored.length} values across ${def.nodes.length} nodes` : 'NONE — A2 is vacuous');
+      check(outside === 0, 'A2. every published shoulder is inside the authored envelope',
+        outside === 0 ? `all within ${f2(aLo)}..${f2(aHi)} m`
+          : `${outside} outside, worst ${f3(worstOut)} m over at station ${worstOutAt}`);
+      // Without this the envelope test passes trivially on a circuit whose
+      // shoulders are one constant, which is most of them at a glance.
+      check(aHi - aLo > 0.5 || shMax - shMin > 0.5,
+        'A2. ...and the envelope is not a single value',
+        `authored spread ${f2(aHi - aLo)} m, sampled spread ${f2(shMax - shMin)} m`);
+    }
   }
 
   // ---- B. the assumed corridor is the drawn corridor -----------------------
