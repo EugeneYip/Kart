@@ -455,18 +455,38 @@ export const DRIFT = {
    * as mini-turbos — bostonHarbor's overtakes 12.3 -> 6.3, sunsetCoastline's
    * 16.7 -> 12.3.
    *
-   * The reason to abandon a slide is that it is heading into something, and the
-   * thing it heads into is a barrier, not grass. `RacingLine` measures the
-   * barrier face per station with `collideWalls`, and the gap between the
-   * drivable edge and that face is exactly the quantity that separates the
-   * circuits: median barrier-minus-halfWidth is 6.67 m on sunsetCoastline and
-   * 4.83 m on bostonHarbor against 3.07 m on volcanoRush's spiral, whose worst
-   * station anywhere is 0.14 m. So a shoulder-aware allowance gives the wide
-   * circuits their slides back and gives volcanoRush's spiral almost nothing.
+   * The idea: the reason to abandon a slide is that it is heading into
+   * something, and the thing it heads into is a barrier, not grass. `RacingLine`
+   * measures the barrier face per station with `collideWalls`, and the gap
+   * between drivable edge and barrier is what separates these circuits —
+   * median 6.67 m on sunsetCoastline and 4.83 m on bostonHarbor against 3.07 m
+   * on volcanoRush's spiral, whose tightest station anywhere is 0.14 m. So a
+   * shoulder-aware allowance should hand the wide circuits their slides back and
+   * hand volcanoRush's spiral almost nothing.
    *
-   * Set to 0 to get the flat-road-edge version back.
+   * ⚠️ MEASURED, AND IT IS NOT WORTH IT. SHIPS AT 0. Eight circuits, 3 seeds x
+   * 200 s, mean per race:
+   *
+   *     shoulderAllow  barrierPad | contacts  volcano  volcano worst  offTrack  overtakes
+   *       (pre-fix)               |     27.0     77.0           17.0      22.4       20.1
+   *              3.0         1.2  |      7.8     24.0           11.5      15.5       23.0
+   *              3.0         2.5  |      4.2      9.7            7.0      11.1       18.1
+   *              0.0          --  |      2.0*     6.0            2.5       6.3*      20.8*
+   *                                        * six-circuit figures
+   *
+   * The allowance buys overtakes (23.0 against 20.1) and gives back most of the
+   * wall fix: volcanoRush's WORST kart only comes down 17.0 -> 11.5 contacts per
+   * lap, and an NPC hitting the barrier eleven times a lap is the complaint, not
+   * a fix for it. Off-track time tells you why — 15.5 s against 6.3 s. A slide
+   * allowed to run onto the shoulder gets there, loses grip, and has the
+   * excursion anyway; the shoulder is not a runoff the AI can use.
+   *
+   * Kept, at 0, with the numbers, so the next reader does not re-derive it. The
+   * `barrierHalf` term stays live and does bind where a barrier is closer than
+   * `barrierPad` to the tarmac — volcanoRush is the only circuit of the eight
+   * where that happens (min gap 0.14 m).
    */
-  shoulderAllow: 3.0,
+  shoulderAllow: 0,
   /** Clearance kept from the barrier face by the projected slide, metres. */
   barrierPad: 1.2,
 } as const;
