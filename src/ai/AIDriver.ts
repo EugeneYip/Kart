@@ -440,6 +440,17 @@ export const DRIFT = {
    * The threshold is set from `.probe-tmp/driftroom.ts`, which counts what share
    * of every drift on every circuit each candidate would cut short — a rule that
    * fires as often on taipei as on volcano is a nerf, not a fix.
+   *
+   * Eight circuits, 3 seeds x 200 s, config A, against the `bailproj` ablation
+   * (which zeroes this, `shoulderAllow` and `barrierPad` together and so reverts
+   * the gate exactly). Mean wall contacts per race 24.8 -> 2.2, worst single kart
+   * 14.5 -> 3.0 per lap, off-track 22.2 s -> 6.0 s, median AI kart 0.21 -> 0.00
+   * contacts per lap. volcanoRush 64.7 -> 4.3, from 2.5x the next worst circuit
+   * to 1.16x. Overtakes 20.3 -> 19.6; see `shoulderAllow` for the two circuits
+   * that pay for that and the variant that buys them back.
+   *
+   * 0.30 was tried: volcanoRush 23.3 against 0.7-7.0 for the rest, i.e. out of
+   * band again on the only number that started this.
    */
   projectSeconds: 0.45,
   /** Low-pass factor per tick on the road-crossing rate, 0..1. */
