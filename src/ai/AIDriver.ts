@@ -444,6 +444,31 @@ export const DRIFT = {
   projectSeconds: 0.45,
   /** Low-pass factor per tick on the road-crossing rate, 0..1. */
   rateSmooth: 0.25,
+  /**
+   * How far past the DRIVABLE edge a projected slide is still allowed to reach,
+   * metres — capped by `barrierPad` below, so this is "onto the shoulder, but
+   * not into the rail".
+   *
+   * The projected bail with a flat road edge (this at 0) cut drifts on every
+   * circuit, not only the one with the problem: it fires on 67–79 % of the
+   * pre-fix drifts everywhere (`.probe-tmp/driftroom.ts`), and the bill came in
+   * as mini-turbos — bostonHarbor's overtakes 12.3 -> 6.3, sunsetCoastline's
+   * 16.7 -> 12.3.
+   *
+   * The reason to abandon a slide is that it is heading into something, and the
+   * thing it heads into is a barrier, not grass. `RacingLine` measures the
+   * barrier face per station with `collideWalls`, and the gap between the
+   * drivable edge and that face is exactly the quantity that separates the
+   * circuits: median barrier-minus-halfWidth is 6.67 m on sunsetCoastline and
+   * 4.83 m on bostonHarbor against 3.07 m on volcanoRush's spiral, whose worst
+   * station anywhere is 0.14 m. So a shoulder-aware allowance gives the wide
+   * circuits their slides back and gives volcanoRush's spiral almost nothing.
+   *
+   * Set to 0 to get the flat-road-edge version back.
+   */
+  shoulderAllow: 3.0,
+  /** Clearance kept from the barrier face by the projected slide, metres. */
+  barrierPad: 1.2,
 } as const;
 
 export const AVOID = {
@@ -2050,7 +2075,14 @@ export class AIDriver {
     // this is the number `roomLeft` was always supposed to be about, and a
     // forward speed cannot stand in for it.
     const projected = latC + this.latRateSmooth * DRIFT.projectSeconds;
-    const roomAhead = this.near.halfWidth - Math.abs(projected);
+    // A slide may run onto the shoulder; it may not run into the rail. See
+    // DRIFT.shoulderAllow. `barrierHalf` is Infinity where there is no barrier,
+    // in which case the shoulder allowance is the whole constraint.
+    const slideEdge = Math.min(
+      this.near.halfWidth + DRIFT.shoulderAllow,
+      this.near.barrierHalf - DRIFT.barrierPad,
+    );
+    const roomAhead = Math.max(0, slideEdge) - Math.abs(projected);
     // A slide needs road to slide into, and how much depends on how fast we are
     // going. See DRIFT.bailMargin.
     const bailRoom = DRIFT.bailMargin + absSpeed * DRIFT.bailLead;
