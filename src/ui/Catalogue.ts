@@ -641,6 +641,14 @@ const TRACK_EDITORIAL: Partial<Record<string, { difficulty: number; tag: string 
   bostonHarbor: { difficulty: 2, tag: 'HARBOUR' },
   taipeiCircuit: { difficulty: 2, tag: 'SKYLINE' },
   tokyoNeon: { difficulty: 3, tag: 'DOWNTOWN' },
+  // The two newest circuits arrived without entries and both fell through to
+  // `THEME_TAG.city`, which put "CITY SERIES" back on two cards — the exact
+  // repetition the note above was written about. `HARBOUR` is taken by Boston,
+  // so Hong Kong is named for the thing that actually distinguishes it in frame.
+  // Difficulty is set from the measured minimum corner radius rather than
+  // guessed: 37.8 m and 33.3 m sit between Boston/Taipei and volcano.
+  hongKongHarbour: { difficulty: 2, tag: 'BLUE HOUR' },
+  newYorkCircuit: { difficulty: 3, tag: 'AVENUE' },
 };
 
 /**
