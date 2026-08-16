@@ -668,20 +668,27 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
     weather: 'clear',
     laps: 3,
     terrainSeed: 16301,
-    // ---- NO WATER PLANE, and that was measured, not assumed ----------------
-    // A harbour wants water, so this started at -2.2. `.probe-tmp/citywater.ts`
-    // says it cannot work here: the `city` terrain theme scales the base field by
-    // 0.42, so natural ground on this circuit bottoms out at -1.20 m beyond 260 m
-    // and -1.44 m beyond 60 m, while the road-corridor SINK reaches -2.72 m
-    // within 30 m of the asphalt. There is no natural basin to fill — at -2.2 the
-    // plane covered 0.1 % of the map and its nearest edge was 6.1 m off the
-    // tarmac, i.e. a puddle on the verge rather than a harbour, and any level high
-    // enough to read would flood the road's own shoulder first.
+    // ---- NO WATER PLANE, RE-MEASURED AT THE SHIPPING TIER ------------------
+    // A harbour wants water, so this started at -2.2, and the previous note here
+    // rejected it on numbers taken at `QUALITY_PRESETS.low`. The game ships
+    // `ultra`, and the tier changes the heightfield's metres-per-texel and hence
+    // its sampled extremes, so `.probe-tmp/harbour.ts` re-ran the whole question
+    // at ultra. The answer did not change but the reason is sharper, and it is
+    // NOT the 0.42 terrain scale the old note blamed:
     //
-    // So the harbour front is read from the QUAY instead: the `seaWall` run, the
-    // catch fence on the outside, the mast line along the rail, and the bridge.
-    // A real basin needs the terrain to be carved for it, which is
-    // `Terrain.ts` / `WorldTextures.ts` work and not this file's to do.
+    //   * the lowest point of the DRAWN road surface on this lap is -4.55 m, at
+    //     t=0.917 lat 15.5 — a banked corner's outer shoulder, 20.5 m of lever
+    //     arm on ~5 degrees of superelevation. The asphalt itself only reaches
+    //     -2.82 m. A global plane has to clear the shoulder too;
+    //   * at -4.50 m the plane wets 0 m2 of the map. The first level that wets a
+    //     connected body worth the name is -1.00 m (35 900 m2), and by then the
+    //     road is 3.55 m under water.
+    //
+    // Sweeping every level from -4.50 to +3.75 in 0.25 m steps: no level is both
+    // visible and dry. That is a property of a GLOBAL plane, not of water, and
+    // the fix is that the harbour is a PROP — see the `harbourWater` entry in the
+    // props list below, which only has to clear the road BESIDE ITSELF. Hong Kong
+    // and New York already did it this way; this circuit is now the third.
     waterLevel: null,
     fogColor: 0xbcd0e0,
     fogDensity: 0.0019,
@@ -802,6 +809,36 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // ---- harbour front --------------------------------------------------
       { type: 'signChevron', t: 0.408, lat: -15, step: 0.006, end: 0.436 },
       { type: 'seaWall', t: 0.446, lat: 20, step: 0.008, end: 0.508 },
+      // ---- THE HARBOUR, AND WHY IT IS 56 m OFF THE ASPHALT -----------------
+      // Boston Harbor had no harbour. The note on `waterLevel` above explains
+      // why there is no global plane; this is the plate that goes in its place,
+      // and every number in it was searched for rather than chosen
+      // (`.probe-tmp/basinfit.ts`, ultra, 6960 candidates over t 0.40-0.70 on
+      // this side alone).
+      //
+      // The binding constraint is that the ground beside this straight is
+      // barely below the road. At t=0.470 the drawn corridor's outer edge is at
+      // 0.07 m and the ground from lat 50 outward sits at -0.04 to -1.08 m
+      // (`.probe-tmp/shoreprofile.ts`) — a metre of headroom, on a plain whose
+      // relief is 0.1-0.5 m over 150 m. So the water is shallow (0.70 m at its
+      // deepest) and it cannot start at the sea wall: inside lat 68 the ground
+      // is above any level that stays under the road, and a plate there would
+      // be a puddle the terrain pokes through.
+      //
+      // scale 0.60 makes it 180 x 84 m, spanning lat 68-152 and about 180 m of
+      // the lap. Measured on the built world: 14 490 m2 of open water, 15 % of
+      // the footprint crossed by ground (that crossing IS the shoreline — the
+      // two surfaces meet at about 2.5 degrees, so it reads as an irregular
+      // waterline, not a seam), 0.50 m below the nearest drawn road, and the
+      // ground immediately outside its road-facing edge is AT the waterline, so
+      // there is no lip on the side you see it from.
+      { type: 'harbourWater', t: 0.500, lat: 110, scale: 0.60, up: 0.16 },
+      // The bulkhead at the water's edge. The `seaWall` run above is the street
+      // railing at lat 20; this is the same recipe standing where the water
+      // actually starts, so the 48 m of quay between them reads as a working
+      // apron rather than as a wall in a field. It is the same authored type, so
+      // it shares that type's InstancedMesh and costs no additional draw call.
+      { type: 'seaWall', t: 0.452, lat: 64, step: 0.010, end: 0.552 },
       // The existing plain-cloth mast run along the harbour rail. The NATIONAL
       // flag is a different type and stands alone on the State House terrace.
       { type: 'flagPole', t: 0.452, lat: -19, step: 0.013, end: 0.506 },
@@ -994,6 +1031,38 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'neonSign', t: 0.175, lat: 16, step: 0.014, end: 0.26 },
       { type: 'signChevron', t: 0.268, lat: 14, step: 0.006, end: 0.296 },
       // ---- riverside and the sweeper -------------------------------------
+      // ---- THE RIVER ------------------------------------------------------
+      // T5 is tagged `riverside`, the section header says the road runs "out
+      // along the river", and `pagodaTower` is authored at lat 340 with the
+      // words "across the river on the OUTSIDE of the riverside straight". All
+      // three were true of the intent and none of them was true of the world:
+      // there was no water on this circuit at all, so the riverside straight ran
+      // beside a field and the supertall stood across nothing.
+      //
+      // Searched, not chosen (`.probe-tmp/basinfit.ts`, ultra, 8352 candidates
+      // over t 0.26-0.44). This is the best water on any of the five city
+      // circuits, because Taipei is the one whose outfield on the harbour side
+      // FALLS: the ground from lat 65 to 155 here runs 1.4 m below the road
+      // while the road itself climbs through the sweeper, which is the headroom
+      // Hong Kong's promenade does not have.
+      //
+      // scale 0.90 makes it 270 x 126 m, spanning lat 47-173 and roughly t
+      // 0.30-0.47 — so it runs the length of the riverside straight and on
+      // through the tower sweeper, and the pagoda at lat 340 now stands on the
+      // far bank of it. Measured on the built world: 33 245 m2 of open water,
+      // 1.57 m at its deepest, 10 % of the footprint crossed by ground, and
+      // 0.50 m below the nearest drawn road.
+      // `up: 0.36`, not the 0.72 the fitter proposed. At 0.72 the built plate
+      // measured 32 802 m2 of open water and put TWO drawn road samples 0.32 m
+      // under the surface — the fitter searches a footprint aligned to the
+      // horizontal tangent while the instance is yawed by the prop placer, and
+      // a couple of degrees of difference is enough at 135 m of reach. Dropping
+      // it 0.36 m clears both with margin and costs about a tenth of the area.
+      { type: 'harbourWater', t: 0.390, lat: 110, scale: 0.90, up: 0.36 },
+      // The embankment along the near bank, at the waterline rather than at the
+      // kerb: same recipe as Boston's and Hong Kong's quays, same InstancedMesh,
+      // no extra draw call.
+      { type: 'seaWall', t: 0.300, lat: 44, step: 0.010, end: 0.400 },
       { type: 'streetLamp', t: 0.305, lat: 17, step: 0.017, end: 0.44, mirror: true },
       { type: 'billboard', t: 0.32, lat: 24, scale: 1.25 },
       { type: 'towerBlock', t: 0.31, lat: 46, step: 0.018, end: 0.50, mirror: true },
@@ -1266,15 +1335,49 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // lat 25 to 165: the near edge is 6 m outside the 19.05 m corridor and
       // just beyond the sea wall, and the far edge is about 4 m under the
       // natural bank, so the bank reads as the far shore rather than as a seam.
-      // `up: -0.6` biases the whole plate below local ground for the same reason.
-      { type: 'harbourWater', t: 0.020, lat: 95, up: -0.6 },
+      //
+      // ---- `up` WAS -0.6 AND THE HARBOUR STOOD ABOVE THE PROMENADE ----------
+      // Measured on the built world at ultra (`.probe-tmp/plate.ts`): the plate
+      // sat at y = 0.75 while the promenade centreline runs -0.05 to 0.72, so
+      // 1389 drawn road samples within 45 m of the plate were UNDER the water,
+      // the worst by 4.23 m. For 273 m of every lap the sea was above the street.
+      //
+      // This circuit is the hard one and the trade is real. Its outfield is the
+      // only one of the five that rises straight off the kerb — profiled at
+      // t=0.05, the ground goes -0.68 m at lat 20, 0.02 at 40, 0.51 at 60, 1.48
+      // at 100, 7.90 at 200 — so every metre of level buys open water and costs
+      // correctness. The whole curve, from the same probe's `--sweep`:
+      //
+      //     level   open water   burial   road samples under it (worst)
+      //     +0.75     10 126 m2   77.2 %   1389  (4.23 m)   <- was here
+      //     +0.25      4 828 m2   89.1 %   1079  (3.73 m)
+      //      0.00      3 176 m2   92.8 %    723  (3.48 m)   <- is here
+      //     -0.50          0 m2  100.0 %     91  (2.73 m)
+      //
+      // 0.00 is the promenade's own datum: the water is never above the asphalt
+      // you race on, and it sits below the sea wall's coping so the wall reads as
+      // a wall. The 723 that remain are almost all the banked approach to the
+      // line at t=0.96, whose inner shoulder is 38 m away across the road and
+      // 3.5 m down — a different place, not this water's edge. The cost is a
+      // harbour that is a 15 m ribbon behind the quay instead of a 60 m one, and
+      // the honest fix for that is a carved basin in `WorldTextures.naturalHeightAt`'s
+      // `city` branch, which is not this file's to write.
+      { type: 'harbourWater', t: 0.020, lat: 95, up: -1.35 },
       { type: 'seaWall', t: 0.010, lat: 20, step: 0.008, end: 0.112 },
       { type: 'flagPole', t: 0.018, lat: 22, step: 0.013, end: 0.072 },
-      // A junk under sail, moored off the promenade. It stands on the water
-      // plate: both are seated on the same heightfield sample, so the hull is on
-      // the surface by construction rather than by a hand-tuned `up`.
-      { type: 'junk', t: 0.048, lat: 58, yaw: 0.4 },
-      { type: 'junk', t: 0.086, lat: 96, yaw: -0.9, scale: 0.85 },
+      // A junk under sail, moored off the promenade.
+      //
+      // BOTH MOVED INBOARD, from lat 58 and 96 to 30 and 34. The old comment
+      // claimed the hull was "on the surface by construction, because both are
+      // seated on the same heightfield sample" — which was true of the arithmetic
+      // and false of the world, because they are seated on the heightfield at
+      // THEIR OWN (x, z), not the plate's, and the ground under lat 58 is 0.35 m
+      // while the ground under lat 95 is 1.48 m. With the plate now at y = 0.00
+      // the waterline is between lat 25 and lat 40 (profiled: -0.68 m at lat 20,
+      // -0.18 at 30, +0.02 at 40), so that is where a moored boat goes. `up`
+      // lifts each hull the rest of the way onto the surface from its own ground.
+      { type: 'junk', t: 0.048, lat: 30, yaw: 0.4, up: 0.35 },
+      { type: 'junk', t: 0.086, lat: 34, yaw: -0.9, scale: 0.85, up: 0.2 },
       // ---- THE TWO LANDMARKS, ACROSS THE WATER ------------------------------
       // Read the Taipei supertall note before moving either. A tower needs
       // roughly (its height / tan(half the vertical FOV above the eyeline)) of
@@ -1544,10 +1647,29 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       //
       // Natural ground resumes fast: -0.78 m at lat 45 and -0.77 to +1.72 all
       // the way out to lat 190, with 1.7-2.3 m of relief. So the water goes
-      // ALONGSIDE, centred at lat -105 and spanning lat -35 to -175, where it
-      // sits 9 m below the deck and reads as the river the crossing is over.
-      // A plate straddling lat 0 would be a flat sheet through the carriageway.
-      { type: 'harbourWater', t: 0.560, lat: -105, up: -0.6 },
+      // ALONGSIDE, where it reads as the river the crossing is over. A plate
+      // straddling lat 0 would be a flat sheet through the carriageway.
+      //
+      // ---- THE PLATE WAS 96.3 % UNDERGROUND ---------------------------------
+      // Authored at `t 0.560, lat -105, up: -0.6`, and measured on the built
+      // world at ultra (`.probe-tmp/plate.ts`): 96.3 % of its 231 x 331 m
+      // footprint had terrain ABOVE it. 2816 m2 of a 76 000 m2 river was
+      // showing — a 53 m puddle beside a 210 m suspension bridge, which is what
+      // "a Brooklyn Bridge over dry ground" actually looked like.
+      //
+      // The cause is `up: -0.6`. A flat plate is seated on ONE heightfield
+      // sample, at its own anchor, and then pushed 0.6 m further down; ground
+      // with 1.7-2.3 m of relief across the footprint wins that fight almost
+      // everywhere. The bias was there to bury the near seam, and the apron
+      // already does that job — it walks down 5.5 m all the way round.
+      //
+      // Re-fitted by search (`.probe-tmp/basinfit.ts`, ultra, 4640 candidates
+      // over t 0.46-0.66 on this side): the level now comes from the road (0.50 m
+      // under the nearest drawn point) instead of from one ground sample, and the
+      // footprint is sized to fit under it. 23 428 m2 of open water against
+      // 2816 — 8.3x — at 10 % burial, 1.81 m deep, its near edge 30.5 m off the
+      // asphalt and its far edge under the natural bank.
+      { type: 'harbourWater', t: 0.550, lat: -94, scale: 0.75, up: 1.38 },
       { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.660 },
       { type: 'brakeBoard', t: 0.624, lat: -14 },
       // ---- downtown -----------------------------------------------------------
