@@ -202,7 +202,7 @@ interface DeckFrame {
 
 const _deck: DeckFrame = {
   p: new THREE.Vector3(), b: new THREE.Vector3(1, 0, 0), n: new THREE.Vector3(0, 1, 0),
-  hw: 11, shL: 1.2, shR: 1.2, ok: false,
+  hw: 11, shL: 3, shR: 3, ok: false,
 };
 
 /**
@@ -210,6 +210,13 @@ const _deck: DeckFrame = {
  * and same reasoning as `WorldTextures.SH_FALLBACK`: guessing too WIDE puts a
  * prop on ground that is not there, too NARROW puts it slightly inboard where
  * there is certainly surface, so err narrow.
+ *
+ * This is now genuinely a fallback. It used to be the ONLY path: no producer
+ * published a shoulder, so every station on every circuit resolved to 3 m —
+ * which is how a bridge girder ended up 1.5 m outboard of the deck it stands
+ * on. `Environment.stationFrom()` publishes the authored value now, and the
+ * only producer that still lands here is `demoCircuit()`, the invented circuit
+ * used when a track cannot answer at all.
  */
 const SH_FALLBACK = 3;
 
@@ -2454,27 +2461,30 @@ const BROOKLYN = {
   /** Height of the deck edge girder above the shoulder it stands on. */
   anchorH: 1.85,
   /**
-   * Width of the drawn shoulder on the bridge sections, metres.
+   * ---- THERE IS NO `shoulder` CONSTANT HERE ANY MORE ------------------------
+   * There used to be: `shoulder: 1.2`, with a note explaining that
+   * `deckFrameAt().shL/shR` could not be trusted because `PathStation` carried
+   * the fields and `Environment.stationFrom()` never wrote them, so every
+   * station on every circuit reported `SH_FALLBACK` (3 m) against an authored
+   * 1.2 m. A girder placed at `hw + kerbW + 3 - inset` stood 1.3 m past the
+   * deck edge and, on a superelevated deck, well below it.
    *
-   * ---- WHY THIS IS A CONSTANT AND NOT `deckFrameAt().shR` -------------------
-   * MEASURED: `PathStation` has `shoulderL` / `shoulderR` fields and
-   * `Environment.stationFrom()` never writes them — `readSample()` returns
-   * position, tangent, normal, binormal, halfWidth and bank, and nothing else.
-   * So `deckFrameAt()` falls back to `SH_FALLBACK` (3 m) at every station on
-   * every circuit, and a girder placed at `hw + kerbW + 3 - inset` stands
-   * outboard of a deck whose authored shoulder is 1.2 m.
+   * That was a workaround for one circuit, and it worked — but it also meant
+   * this bridge could not follow a shoulder that CHANGES, and it left Boston's
+   * `bridgeFan` (same field, same fallback) reading 3 m and floating.
    *
-   * Measured on this circuit before the fix (`.probe-tmp/cabledbg.ts`): the
-   * drawn ribbon reaches |lat| 13.87 at the tower and the girder was solved to
-   * |lat| 15.2 — 1.3 m past the edge and, because the deck is superelevated,
-   * 1.5-2.3 m below it. That is the owner's floating-cable report exactly, and
-   * it arrived through the ONE term in the solve that was not solved.
+   * The field is now plumbed: `TrackSpline.SplineSample` publishes channels 2
+   * and 3, `readSample()` carries them and `stationFrom()` writes them, so
+   * `deckFrameAt()` returns the authored shoulder at the station's own arc.
+   * `shoulderAt()` below reads `frame.shL / frame.shR` like `bridgeFan` does,
+   * and the constant is gone rather than left as a second source of truth.
    *
-   * `bridgeFan` (Boston) reads the same field and therefore has the same
-   * offset; that is reported rather than changed here, because it is an
-   * existing circuit's geometry.
+   * Measured, `.probe-tmp/shoulderfix.ts` claim C, this circuit: the worst of
+   * 54 girder anchor bands had +0.03 m of air with the constant and +0.05 m
+   * with the derived value, against a drawn deck edge it stays 0.52 m inboard
+   * of either way. Deriving it reproduces the hand-tuned number to within half
+   * a centimetre and now follows a shoulder that changes.
    */
-  shoulder: 1.2,
   /** Metres inboard of the drawn shoulder's outer edge the girder stands. */
   inset: 0.65,
 } as const;
@@ -9733,7 +9743,7 @@ export class Props implements ISubsystem {
     const n = st.length;
     if (n < 2) {
       out.p.set(0, 0, 0); out.b.set(1, 0, 0); out.n.set(0, 1, 0);
-      out.hw = 11; out.shL = 1.2; out.shR = 1.2; out.ok = false;
+      out.hw = 11; out.shL = SH_FALLBACK; out.shR = SH_FALLBACK; out.ok = false;
       return out;
     }
     const L = this.ctx.lapLength || (st[n - 1].s + 1);
@@ -9925,7 +9935,7 @@ export class Props implements ISubsystem {
     met.uvScale = 0.8;
     const {
       top, shoulderY, cableX, reach, suspenders, stays,
-      mainR, hangR, stayR, anchorH, inset, shoulder,
+      mainR, hangR, stayR, anchorH, inset,
     } = BROOKLYN;
     const arc0 = this.arcNearest(a.x, a.z);
     const ca = Math.cos(a.yaw), sa = Math.sin(a.yaw);
@@ -9943,10 +9953,12 @@ export class Props implements ISubsystem {
     /** The shoulder point at `along` metres of arc, in the tower's local frame. */
     const shoulderAt = (along: number, side: number, out: THREE.Vector3): THREE.Vector3 => {
       const frame = this.deckFrameAt(arc0 + along, _deck);
-      // `shoulder`, NOT `frame.shL/shR` — see the note on BROOKLYN.shoulder.
-      const edge = frame.hw + CROSS.kerbW + shoulder;
+      // The station's own shoulder, not a constant — see the note where
+      // `BROOKLYN.shoulder` used to be. Identical to `bridgeFan.shoulderAt`.
+      const sh = side < 0 ? frame.shL : frame.shR;
+      const edge = frame.hw + CROSS.kerbW + sh;
       const lat = side * (edge - inset);
-      const base = this.roadCross(lat, frame.hw, shoulder);
+      const base = this.roadCross(lat, frame.hw, sh);
       _v.copy(frame.p).addScaledVector(frame.b, lat).addScaledVector(frame.n, base);
       return toLocal(_v, out);
     };
