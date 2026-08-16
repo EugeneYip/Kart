@@ -839,6 +839,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // apron rather than as a wall in a field. It is the same authored type, so
       // it shares that type's InstancedMesh and costs no additional draw call.
       { type: 'seaWall', t: 0.452, lat: 64, step: 0.010, end: 0.552 },
+      // ---- WHAT MAKES IT READ AS WATER RATHER THAN AS A GREY FLOOR ---------
+      // The plate is a static surface on the reflective `metal` material: it
+      // takes the sky, and nothing on it moves. Moored hulls fix both halves of
+      // that — they give the surface a scale reference, and `sailboat`'s two
+      // sails are `mastCloth`, so they are the one thing in the basin that is
+      // actually animated.
+      //
+      // Every `up` below is measured, not nudged. `.probe-tmp/shoreprofile.ts`
+      // walks the ground under this basin: -0.64 m at (t 0.470, lat 110), -0.47
+      // at (0.500, 130), about -0.32 along the lat-86 line. The plate is at
+      // -0.22, so the raw seating would give these hulls 0.10-0.42 m of draught;
+      // `up` takes each to roughly 0.4 m, which is what a 5 m sloop draws.
+      { type: 'sailboat', t: 0.468, lat: 108, yaw: 0.5 },
+      { type: 'sailboat', t: 0.500, lat: 128, yaw: -0.7, scale: 0.9, up: -0.15 },
+      // The channel, marked. Four buoys on one InstancedMesh pair.
+      { type: 'buoy', t: 0.446, lat: 86, step: 0.018, end: 0.500, up: -0.18 },
       // The existing plain-cloth mast run along the harbour rail. The NATIONAL
       // flag is a different type and stands alone on the State House terrace.
       { type: 'flagPole', t: 0.452, lat: -19, step: 0.013, end: 0.506 },
