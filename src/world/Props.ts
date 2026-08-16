@@ -1552,21 +1552,46 @@ function makeFlagAtlas(): THREE.CanvasTexture {
       ctx.fillRect(x, y, cw, ch);
       ctx.fillStyle = '#000095';
       ctx.fillRect(x, y, cw * 0.5, ch * 0.5);
-      const sx = x + cw * 0.25, sy = y + ch * 0.25, sr = ch * 0.19;
+      // ---- THE WHITE SUN, AND WHY IT WAS A DOUGHNUT ------------------------
+      // Screenshotted on Taipei's memorial plaza (the `scale: 1.7` mast at
+      // t 0.578) at 25 m: the sun read as a RING with a blue hole punched
+      // through the middle. The order below used to be rays, white disc, then
+      // `arc(sr * 0.33)` in `#000095` — a blue centre dot over the disc, which
+      // is not a feature of this flag at all. The Republic of China's sun is a
+      // SOLID white disc; the only blue inside the sun is a thin ring between
+      // the disc and the twelve ray bases.
+      //
+      // Proportions follow the flag's own construction (sun radius r, ray tips
+      // on a circle of 2r, blue ring 1/15 of r) with two deliberate departures
+      // for a texture that has to read at 25-60 m rather than on a pole:
+      //   * the ring is 0.075r rather than 0.067r, because 1.6 px of blue in a
+      //     384 x 256 cell disappears into the first mip and takes the disc
+      //     with it — at 3.6 px it survives and the disc still reads as separate
+      //     from the rays;
+      //   * ray bases subtend 0.20 rad rather than 0.13, so adjacent rays nearly
+      //     meet and the sun is serrated the way the real one is. At 0.13 the
+      //     rays were thin spokes with more blue than white between them, which
+      //     is what made the whole thing read as a cog.
+      // The sun is 0.64 of the canton's height against the official 0.5, for the
+      // same distance reason; the canton itself is the correct quarter-flag.
+      const sx = x + cw * 0.25, sy = y + ch * 0.25, sr = ch * 0.16;
       ctx.fillStyle = '#ffffff';
-      // Twelve rays, then the disc, then the blue centre.
       for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * Math.PI * 2;
+        const a = (i / 12) * Math.PI * 2 - Math.PI * 0.5;
         ctx.beginPath();
         ctx.moveTo(sx + Math.cos(a) * sr, sy + Math.sin(a) * sr);
-        ctx.lineTo(sx + Math.cos(a - 0.13) * sr * 0.44, sy + Math.sin(a - 0.13) * sr * 0.44);
-        ctx.lineTo(sx + Math.cos(a + 0.13) * sr * 0.44, sy + Math.sin(a + 0.13) * sr * 0.44);
+        ctx.lineTo(sx + Math.cos(a - 0.20) * sr * 0.50, sy + Math.sin(a - 0.20) * sr * 0.50);
+        ctx.lineTo(sx + Math.cos(a + 0.20) * sr * 0.50, sy + Math.sin(a + 0.20) * sr * 0.50);
         ctx.closePath();
         ctx.fill();
       }
-      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.5, 0, Math.PI * 2); ctx.fill();
+      // The blue separation ring, laid over the ray bases...
       ctx.fillStyle = '#000095';
-      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.33, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.5375, 0, Math.PI * 2); ctx.fill();
+      // ...and the solid white disc inside it. Nothing is drawn after this, so
+      // the centre of the sun is white, which is the whole point.
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.5, 0, Math.PI * 2); ctx.fill();
       cloth(x, y);
     }
 
@@ -8784,14 +8809,27 @@ export class Props implements ISubsystem {
         const deep = 0x14303e, shallow = 0x1c4657;
         const wy = (x: number, z: number): number =>
           0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
+        // WINDING. See the long note on `box()`: `quad()` derives its normal from
+        // the corner order, and the order below decides whether the surface faces
+        // the sky or the seabed. It used to run (z0, z0, z1, z1), which gives
+        // ny = -dx*dz — every one of these 200 quads pointed STRAIGHT DOWN, and
+        // `this.metal` is FrontSide, so the entire water surface was back-face
+        // culled from any camera above it. Measured in the browser at ultra: from
+        // 25 m directly over Boston's plate the frame was dirt and scrub with a
+        // sailboat aground on it; the only part of the prop that ever rasterised
+        // was the four apron quads, which face sideways, and they read as a 4 m
+        // grey ribbon beside the sea wall. Every probe that measured this plate
+        // measured heights and footprints and never asked whether a fragment
+        // survived, which is why four circuits shipped with invisible water.
+        // Reversed to (z1, z1, z0, z0): ny = +dx*dz, and the surface is there.
         for (let i = 0; i < NX; i++) {
           for (let j = 0; j < NZ; j++) {
             const x0 = -SX + (i / NX) * SX * 2, x1 = -SX + ((i + 1) / NX) * SX * 2;
             const z0 = -SZ + (j / NZ) * SZ * 2, z1 = -SZ + ((j + 1) / NZ) * SZ * 2;
             const hex = (i + j) % 3 === 0 ? shallow : deep;
             b.quad(
-              x0, wy(x0, z0), z0, x1, wy(x1, z0), z0,
-              x1, wy(x1, z1), z1, x0, wy(x0, z1), z1,
+              x0, wy(x0, z1), z1, x1, wy(x1, z1), z1,
+              x1, wy(x1, z0), z0, x0, wy(x0, z0), z0,
               hex, 1.0 + 0.06 * Math.sin(i * 1.7 + j * 2.3),
             );
           }
