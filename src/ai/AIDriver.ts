@@ -423,6 +423,27 @@ export const DRIFT = {
    * to finish its slide; that case is bounded by the corner instead.
    */
   maxHoldSeconds: 1.6,
+  /**
+   * ⚠️ THE BAIL TEST WAS NOT LOOKING WHERE THE KART WAS GOING.
+   *
+   * `bailMargin + speed · bailLead` is metres of road that must remain beside the
+   * kart, and `speed` there is FORWARD speed. A drifting kart does not leave the
+   * road forwards. On volcanoRush's spiral a slide crosses the road at 10–13 m/s
+   * while `bailRoom` asks for 3.0 m of margin against a forward speed of 27 —
+   * so the test clears with 3.7 m in hand on the tick before the kart is 9 m
+   * off its line, and the slide runs to the 1.6 s cap every time.
+   *
+   * The replacement projects the kart's own road-crossing rate `projectSeconds`
+   * into the future and bails if THAT is off the road. Same margin, same intent,
+   * measured against the velocity that actually spends it.
+   *
+   * The threshold is set from `.probe-tmp/driftroom.ts`, which counts what share
+   * of every drift on every circuit each candidate would cut short — a rule that
+   * fires as often on taipei as on volcano is a nerf, not a fix.
+   */
+  projectSeconds: 0.45,
+  /** Low-pass factor per tick on the road-crossing rate, 0..1. */
+  rateSmooth: 0.25,
 } as const;
 
 export const AVOID = {
@@ -832,6 +853,17 @@ export class AIDriver {
   private steerSmooth = 0;
   private lateralPrev = 0;
   private hintStation = -1;
+  /**
+   * Signed lateral offset from the CENTRELINE last tick, and its smoothed rate
+   * of change — how fast the kart is crossing the road, m/s, + = right.
+   *
+   * Deliberately measured from the centreline rather than from the line: the
+   * line's own lateral moves under the kart through a corner, so a rate taken
+   * against it would report road-crossing that is not happening. `NaN` until the
+   * first tick so a fresh driver cannot invent a rate out of its initial state.
+   */
+  private prevLatFromCentre = NaN;
+  private latRateSmooth = 0;
 
   // ---- speed state -------------------------------------------------------
   private speedIntegral = 0;
@@ -1206,10 +1238,24 @@ export class AIDriver {
   get lineCurvature(): number {
     return this.hereSample.curvature;
   }
+  /** Signed lateral offset from the CENTRELINE, metres, + = right. */
+  get latFromCentre(): number {
+    return this.near.lateralFromCentre;
+  }
+  /** Drivable half-width under the kart, metres. */
+  get nearHalfWidth(): number {
+    return this.near.halfWidth;
+  }
+  /** Smoothed rate at which the kart is crossing the road, m/s, + = right. */
+  get latRate(): number {
+    return this.latRateSmooth;
+  }
 
   reset(): void {
     this.steerSmooth = 0;
     this.speedIntegral = 0;
+    this.prevLatFromCentre = NaN;
+    this.latRateSmooth = 0;
     this.avoidBias = 0;
     this.wallBias = 0;
     this.wallSpeedScale = 1;
@@ -1296,6 +1342,18 @@ export class AIDriver {
     line.nearest(st.position, this.near, this.variant, this.hintStation);
     this.hintStation = this.near.station;
     line.sample(this.near.t, this.hereSample, this.variant);
+
+    // Road-crossing rate. Smoothed over ~0.06 s — the raw per-tick difference on
+    // a 60 Hz sim is noisy enough that a predictive test built on it would fire
+    // on quantisation rather than on a slide.
+    {
+      const latC = this.near.lateralFromCentre;
+      const raw = Number.isNaN(this.prevLatFromCentre)
+        ? 0
+        : (latC - this.prevLatFromCentre) / Math.max(1e-4, dt);
+      this.prevLatFromCentre = latC;
+      this.latRateSmooth += (raw - this.latRateSmooth) * DRIFT.rateSmooth;
+    }
 
     const speed = st.speed;
     const absSpeed = Math.abs(speed);
@@ -1980,7 +2038,14 @@ export class AIDriver {
 
     const far = this.farWindow.signed;
     const nearInt = this.nearWindow.signed;
-    const roomLeft = this.near.halfWidth - Math.abs(this.near.lateralFromCentre);
+    const latC = this.near.lateralFromCentre;
+    const roomLeft = this.near.halfWidth - Math.abs(latC);
+    // Where the kart will be across the road in `projectSeconds`, if it keeps
+    // crossing it at the rate it is crossing it now. See DRIFT.projectSeconds:
+    // this is the number `roomLeft` was always supposed to be about, and a
+    // forward speed cannot stand in for it.
+    const projected = latC + this.latRateSmooth * DRIFT.projectSeconds;
+    const roomAhead = this.near.halfWidth - Math.abs(projected);
     // A slide needs road to slide into, and how much depends on how fast we are
     // going. See DRIFT.bailMargin.
     const bailRoom = DRIFT.bailMargin + absSpeed * DRIFT.bailLead;
@@ -1990,7 +2055,8 @@ export class AIDriver {
       absSpeed > DRIFT.minSpeed &&
       !st.stunned &&
       this.mode === 'race' &&
-      roomLeft > entryRoom;
+      roomLeft > entryRoom &&
+      roomAhead > entryRoom;
 
     switch (this.driftPhase) {
       case 'none': {
@@ -2041,7 +2107,10 @@ export class AIDriver {
           this.endDrift(st, false);
           break;
         }
-        if (roomLeft < bailRoom || st.stunned || this.mode !== 'race') {
+        // `roomAhead` is the one that fires on a slide; `roomLeft` still has to
+        // stay, because a kart already past the edge has a rate of ~0 relative
+        // to the road once it is sliding along it.
+        if (roomLeft < bailRoom || roomAhead < bailRoom || st.stunned || this.mode !== 'race') {
           this.endDrift(st, haveMin);
           break;
         }
