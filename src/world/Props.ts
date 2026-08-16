@@ -5984,25 +5984,89 @@ export class Props implements ISubsystem {
       // ---- race infrastructure -------------------------------------------
       case 'startgantry': {
         const b = this.builder();
-        const H = 9.4, halfSpan = 13.5;
+        const H = 9.4;
+        // ---- `halfSpan = 13.5` STOOD THE LEGS ON THE TARMAC ------------------
+        // Same class of error as `balloonarch` below — a constant where a
+        // road-derived value belongs — and it landed on the one prop the player
+        // is looking at while the lights go out. The plinth is 1.5 m half-deep
+        // about the leg, so its INNER FACE sat at 13.5 - 1.5 = 12.0 m, against a
+        // drawn half-width of 12.00 m (neon, volcano) to 12.50 m (the other six):
+        // both knee-high plinths stood 0.01-0.50 m inside the drivable edge on
+        // ALL EIGHT circuits (`.probe-tmp/propfoot.ts`, ultra, real triangles
+        // against the drawn ribbon — 24 flagged vertices per gantry, 0.85-0.90 m
+        // up). `startgantry` is in `CORRIDOR_PROPS`, so no clearance guard was
+        // ever going to catch it: a corridor prop is trusted to know its own
+        // width, and this one did not.
+        //
+        // Props carry no collision — `Track.collideWalls` derives the wall face
+        // analytically and never reads prop geometry — so nothing could ever hit
+        // this. It is a purely visual defect, and the visual is a gantry with its
+        // feet on the racing surface.
+        //
+        // One geometry serves every instance of a type, so it takes the WIDEST
+        // site it will stand on, exactly as `balloonarch` does. The leg wants to
+        // stand ON THE VERGE: inner face `PROP_KERB_VERGE` clear of the kerb (the
+        // same 0.6 m `clearKerb` walks every roadside anchor out to), outer face
+        // inboard of the barrier. The verge needs 2 * 1.5 + 0.6 = 3.6 m to hold
+        // both; the tightest shipping circuit gives 5.00 m, so the ROAD side is
+        // what binds everywhere today. Where it could not, the road side still
+        // wins — standing a leg slightly proud of the barrier is a smaller loss
+        // than putting it back on the asphalt, which is the defect being fixed.
+        const LEG_HX = 1.5;
+        const sites = this.authored.get('startgantry') ?? [];
+        let widest = 0, verge = Infinity;
+        for (const a of sites) {
+          const f = this.deckFrameAt(a.arc, _deck);
+          widest = Math.max(widest, f.hw);
+          verge = Math.min(verge, f.shL, f.shR);
+        }
+        // No authored placement (a theme can still emit the type) — fall back to
+        // the widest station on the circuit rather than to a constant.
+        if (widest <= 0) {
+          for (const st of this.ctx.stations) widest = Math.max(widest, st.halfWidth);
+          verge = SH_FALLBACK;
+        }
+        const kerbEdge = widest + CROSS.kerbW;
+        const halfSpan = Math.max(
+          kerbEdge + LEG_HX,
+          Math.min(kerbEdge + PROP_KERB_VERGE + LEG_HX, kerbEdge + verge - LEG_HX),
+        );
         for (const sx of [-1, 1]) {
           // Tapered A-frame legs with a base plinth and a diagonal brace.
-          b.box(sx * halfSpan, 0.35, 0, 1.5, 0.35, 1.5, 0x3a3f47, { shade: { top: 1.12 } });
+          //
+          // The plinth is sunk to -0.55 rather than sitting on the y = 0 plane.
+          // Local y = 0 is the CROWN, and the ground falls away from it going
+          // outboard — `CROSS.crown` (0.16 m) to the asphalt edge and then
+          // `CROSS.shoulderDrop` (0.34 m) across the shoulder, which is exactly
+          // the 0.50 m `WALL_FOOT_DROP` is derived from and is therefore a hard
+          // bound out to the barrier. On the old span the plinth straddled the
+          // kerb and the gap hid; out on the verge a plinth resting at y = 0
+          // would visibly float. 0.55 buries it on every station of every
+          // circuit, with the top left where it was.
+          b.box(sx * halfSpan, 0.075, 0, LEG_HX, 0.625, LEG_HX, 0x3a3f47,
+            { shade: { top: 1.12 }, noBottom: true });
           b.prism(sx * halfSpan, 0.7, 0, 0.85, H - 0.7, 6, 0xd8dade, { taper: 0.62 });
           b.tube(sx * halfSpan, H * 0.42, 0, sx * (halfSpan - 2.6), H, 0, 0.16, 5, 0xb8bcc4);
         }
         // Deep box truss with visible diagonals — reads as steel, not a plank.
         b.box(0, H + 0.55, 0, halfSpan, 0.22, 0.55, 0xe6e8ec);
         b.box(0, H + 1.85, 0, halfSpan, 0.22, 0.55, 0xe6e8ec);
-        for (let i = -6; i <= 6; i++) {
-          const x = (i / 6) * (halfSpan - 0.6);
+        // Bay and lamp COUNTS follow the span, so widening the gantry repeats the
+        // pattern instead of stretching it: a 2.15 m truss bay and a 3.03 m lamp
+        // pitch, both of which reproduce the authored 6 bays and 9 lamps exactly
+        // at the old 13.5 m span. Everything else here was already written as a
+        // fraction of `halfSpan` and scales on its own.
+        const bays = Math.max(1, Math.round((halfSpan - 0.6) / 2.15));
+        for (let i = -bays; i <= bays; i++) {
+          const x = (i / bays) * (halfSpan - 0.6);
           b.tube(x, H + 0.7, 0, x + (i % 2 ? 1.8 : -1.8), H + 1.75, 0, 0.075, 4, 0xc9cdd4);
         }
         b.box(0, H + 2.6, 0, halfSpan * 0.72, 0.6, 0.3, 0x1d222b, { shade: { top: 1.2 } });
         const glow = this.builder();
         // Signal lights along the underside, plus the lit start board.
-        for (let i = -4; i <= 4; i++) {
-          glow.sphere((i / 4) * (halfSpan - 1.4), H + 0.2, 0.2, 0.19, 6, 4,
+        const lamps = Math.max(1, Math.round((halfSpan - 1.4) / 3.025));
+        for (let i = -lamps; i <= lamps; i++) {
+          glow.sphere((i / lamps) * (halfSpan - 1.4), H + 0.2, 0.2, 0.19, 6, 4,
             i === 0 ? 0xffe9a8 : 0xff3b2e);
         }
         // ---- THE OWNER'S "SECOND DARK PANEL FLOATING BEHIND IT". -------------
@@ -6048,15 +6112,27 @@ export class Props implements ISubsystem {
         // `.probe-tmp/mirror.ts`.
         const cloth = this.builder();
         cloth.flap = 1;
+        // ---- THE BANNERS HANG OVER THE ROAD, NOT OFF THE LEGS ----------------
+        // `halfSpan - 4.4` was written when the legs stood ON the asphalt, so it
+        // happened to place each cloth's outer edge 1.7 m inboard of the drawn
+        // edge. Carried over to legs that now stand out on the verge it would
+        // swing both banners off the carriageway and hang them over the kerb —
+        // the widening turning a leg offset into a road offset by accident. So
+        // measure it from the road it hangs over: the outer edge sits half a
+        // banner width inside the asphalt edge, which is the 1.7 m it already
+        // had. On the six 12.50 m circuits the cloths do not move at all.
+        const bannerW = 3.4;
+        const bannerX = widest - bannerW;
         for (const [i, sx] of [-1, 1].entries()) {
-          cloth.banner(sx * (halfSpan - 4.4), H - 0.1, 0.4, 3.4, 4.4, 0, 0xf4f2ec, 6,
+          cloth.banner(sx * bannerX, H - 0.1, 0.4, bannerW, 4.4, 0, 0xf4f2ec, 6,
             atlasRect(i === 0 ? 0 : 7), { double: true, wave: 0.26 });
         }
         // A valance above them, in the truss colour, so the cloths read as hung
-        // from the gantry rather than floating under it.
+        // from the gantry rather than floating under it. 0.1 m proud of the cloth
+        // at each end, as it has always been.
         const trim = this.builder();
         for (const sx of [-1, 1]) {
-          trim.box(sx * (halfSpan - 4.4), H + 0.12, 0.4, 1.8, 0.1, 0.14, 0xb8bcc4);
+          trim.box(sx * bannerX, H + 0.12, 0.4, bannerW * 0.5 + 0.1, 0.1, 0.14, 0xb8bcc4);
         }
         return { geo: b.build('startGantry'), glow: glow.build('startGantryGlow'),
           clothSign: cloth.build('startGantryBanner'),
@@ -8081,23 +8157,80 @@ export class Props implements ISubsystem {
         // lat audit measures across-road extent from the recipe's own `hz` — so a
         // yawed gate would be 6 m wider than any probe could see. Facing the road
         // keeps the measurement honest: ACROSS-ROAD half-extent 0.72 m, 6.1 along.
+        // ---- WHAT WAS WRONG WITH IT, LOOKED AT RATHER THAN COUNTED ----------
+        // Screenshotted on the shrine straight at night. The parts were all
+        // present and the overall proportions were right — 12.2 m of kasagi over
+        // a 6.4 m span at 8.4 m tall is Meiji Jingu's 17.1 / 9.1 / 12 to within
+        // 2 % — but the SILHOUETTE was a plank. The upturn at each end was two
+        // stacked boxes, so at 30 m the top beam read as a staircase, and at the
+        // oblique angle you actually pass it at, the whole run read as red
+        // scaffolding. The kasagi was also NARROWER (4.2) than the dark shimagi
+        // under it (4.7), so the top beam looked stepped in rather than
+        // overhanging.
+        //
+        // The fix is the curve. `kasagi` below sweeps a beam along a
+        // y = base + rise * |x/half|^2.6 profile — flat over the middle third,
+        // lifting into a real upturn at the tips — and the shimagi follows the
+        // same curve half a metre under it, so the two read as one crowning
+        // member. The pillars get a 1.3 degree inward batter, built as three
+        // stacked segments rather than one prism.
+        //
+        // COST: about 434 triangles a gate against 218. The run in
+        // `tokyoNeon` goes from 15 gates to 5 at the same time, so the circuit
+        // carries ~2.2 k triangles of torii where it used to carry ~3.3 k, on
+        // the same single InstancedMesh and the same draw call.
         const b = this.builder();
         b.uvScale = 0.9;
         const red = 0xd6402f, dark = 0x2b2320;
         const HW = 3.2, H = 6.4;
+        /**
+         * A beam swept along the kasagi curve. `half` is its half-length, `y0`
+         * the height at the centre, `rise` how far the tips lift, `ty`/`tz` the
+         * half-thickness and half-depth. Winding is explicit on every face —
+         * see the note on `box()`, and the one on `harbourwater` for what
+         * getting it wrong costs.
+         */
+        const sweptBeam = (
+          half: number, y0: number, rise: number, ty: number, tz: number,
+          hex: number, seg = 10,
+        ): void => {
+          const yAt = (x: number): number =>
+            y0 + rise * Math.pow(Math.abs(x) / half, 2.6);
+          const zAt = (x: number): number => tz * (1 - 0.28 * Math.pow(Math.abs(x) / half, 2));
+          for (let i = 0; i < seg; i++) {
+            const x0 = -half + (i / seg) * half * 2, x1 = -half + ((i + 1) / seg) * half * 2;
+            const c0 = yAt(x0), c1 = yAt(x1);
+            const z0 = zAt(x0), z1 = zAt(x1);
+            // top (+y), bottom (-y), front (+z), back (-z)
+            b.quad(x0, c0 + ty, z0, x1, c1 + ty, z1, x1, c1 + ty, -z1, x0, c0 + ty, -z0, hex, 1.18);
+            b.quad(x0, c0 - ty, -z0, x1, c1 - ty, -z1, x1, c1 - ty, z1, x0, c0 - ty, z0, hex, 0.58);
+            b.quad(x0, c0 - ty, z0, x1, c1 - ty, z1, x1, c1 + ty, z1, x0, c0 + ty, z0, hex, 1.0);
+            b.quad(x0, c0 + ty, -z0, x1, c1 + ty, -z1, x1, c1 - ty, -z1, x0, c0 - ty, -z0, hex, 0.86);
+          }
+          const yE = yAt(half), zE = zAt(half);
+          b.quad(half, yE - ty, zE, half, yE - ty, -zE, half, yE + ty, -zE, half, yE + ty, zE, hex, 1.06);
+          b.quad(-half, yE - ty, -zE, -half, yE - ty, zE, -half, yE + ty, zE, -half, yE + ty, -zE, hex, 1.06);
+        };
+        // Pillars: stone footing, then three segments with a slight inward lean.
         for (const sx of [-1, 1]) {
           b.box(sx * HW, 0.3, 0, 0.72, 0.3, 0.72, dark, { shade: { top: 1.12 } });
-          b.prism(sx * HW, 0.6, 0, 0.44, H, 10, red, { taper: 0.86 });
+          const segH = H / 3, taper = 0.951;
+          let r = 0.44;
+          for (let k = 0; k < 3; k++) {
+            // 0.15 m of batter over 6.4 m of column.
+            b.prism(sx * (HW - 0.05 * k), 0.6 + segH * k, 0, r, segH + 0.02, 10, red,
+              { taper, capBottom: k === 0 });
+            r *= taper;
+          }
         }
-        b.box(0, H + 0.2, 0, HW + 0.5, 0.26, 0.34, red, { shade: { top: 1.14 } });
-        b.box(0, H + 1.28, 0, HW + 1.5, 0.3, 0.44, dark, { shade: { top: 1.16 } });
-        b.box(0, H + 1.75, 0, HW + 1.0, 0.3, 0.56, red, { shade: { top: 1.2 } });
-        for (const sx of [-1, 1]) {
-          b.box(sx * (HW + 1.55), H + 1.9, 0, 0.75, 0.28, 0.52, red, { shade: { top: 1.2 } });
-          b.box(sx * (HW + 2.28), H + 2.16, 0, 0.62, 0.26, 0.48, red, { shade: { top: 1.22 } });
-        }
-        b.box(0, H + 0.74, 0, 0.3, 0.28, 0.3, red);
-        b.plate(0, H + 0.74, 0.3, 1.5, 0.72, 0, 0xe8e4d8, { single: true });
+        // The nuki: straight, and it protrudes past the columns on both sides.
+        b.box(0, H + 0.2, 0, HW + 0.62, 0.24, 0.32, red, { shade: { top: 1.14 } });
+        // Shimagi under kasagi, both on the same curve; the kasagi OVERHANGS.
+        sweptBeam(HW + 2.05, H + 1.28, 0.44, 0.15, 0.42, dark);
+        sweptBeam(HW + 2.90, H + 1.72, 0.62, 0.19, 0.52, red);
+        // Gakuzuka, and the shrine's name board hung on it.
+        b.box(0, H + 0.74, 0, 0.26, 0.30, 0.26, red);
+        b.plate(0, H + 0.74, 0.34, 1.5, 0.72, 0, 0xe8e4d8, { single: true });
         return { geo: b.build('torii'), cull: 340 };
       }
 
@@ -8856,7 +8989,20 @@ export class Props implements ISubsystem {
         b.uvScale = 0.06;
         b.jitter = 0.06;
         const SX = 150, SZ = 70, NX = 20, NZ = 10;
-        const deep = 0x14303e, shallow = 0x1c4657;
+        // ---- THE SURFACE WAS A CHEQUERBOARD ---------------------------------
+        // Only visible once the winding fix above put the surface on screen at
+        // all. `(i + j) % 3 === 0` over a 20 x 10 grid tiles 15 x 14 m cells in
+        // a strict diagonal, and #14303e against #1c4657 is a 1.4x step in
+        // luminance — from 45 m over New York's river the frame read as a blue
+        // draughts board, which is AGENTS.md section 3's "tiling so obvious you
+        // can count the repeats" exactly. Two changes, both about contrast
+        // rather than resolution (the grid stays at 200 quads):
+        //   * the two tones are 1.15x apart instead of 1.4x, so a facet reads as
+        //     a change of angle rather than a change of material;
+        //   * which tone a quad takes comes from a product of two sines at
+        //     incommensurate frequencies, so the patches are irregular and
+        //     several cells across instead of a diagonal stripe.
+        const deep = 0x14303e, shallow = 0x18374a;
         const wy = (x: number, z: number): number =>
           0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
         // WINDING. See the long note on `box()`: `quad()` derives its normal from
@@ -8876,7 +9022,8 @@ export class Props implements ISubsystem {
           for (let j = 0; j < NZ; j++) {
             const x0 = -SX + (i / NX) * SX * 2, x1 = -SX + ((i + 1) / NX) * SX * 2;
             const z0 = -SZ + (j / NZ) * SZ * 2, z1 = -SZ + ((j + 1) / NZ) * SZ * 2;
-            const hex = (i + j) % 3 === 0 ? shallow : deep;
+            const patch = Math.sin(i * 0.55 + j * 0.31) * Math.sin(i * 0.19 - j * 0.47);
+            const hex = patch > 0.12 ? shallow : deep;
             b.quad(
               x0, wy(x0, z1), z1, x1, wy(x1, z1), z1,
               x1, wy(x1, z0), z0, x0, wy(x0, z0), z0,

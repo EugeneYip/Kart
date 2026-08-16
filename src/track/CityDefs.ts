@@ -1087,8 +1087,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // no extra draw call.
       { type: 'seaWall', t: 0.300, lat: 44, step: 0.010, end: 0.400 },
       { type: 'streetLamp', t: 0.305, lat: 17, step: 0.017, end: 0.44, mirror: true },
-      { type: 'billboard', t: 0.32, lat: 24, scale: 1.25 },
-      { type: 'towerBlock', t: 0.31, lat: 46, step: 0.018, end: 0.50, mirror: true },
+      // ---- NOTHING TALL ON THE RIVER SIDE OF THE RIVERSIDE STRAIGHT --------
+      // Both of these used to stand between the road and the water. The
+      // `towerBlock` run carried `mirror: true`, which put eleven 15-18 m
+      // apartment slabs at lat +46 — and the plate above starts at lat 47, so
+      // the near bank of the largest body of water in the City Series had a
+      // wall of flats built along it and four of them standing IN it. Looked at
+      // from the real chase pose at t 0.315, 0.36 and 0.385, the river was not
+      // visible at all; hiding the `towerblock` InstancedMesh in the live page
+      // brought it back into frame immediately. The billboard at lat 24 was a
+      // 12 m unlit black rectangle doing the same job lower down.
+      //
+      // Both now sit on the INLAND side. The river side keeps the sea wall at
+      // lat 44 and the lamp row at 17, which is what an embankment road has.
+      // Same instance counts, so no change to draw calls or triangles.
+      { type: 'billboard', t: 0.32, lat: -24, scale: 1.25 },
+      { type: 'towerBlock', t: 0.31, lat: -46, step: 0.018, end: 0.50 },
       { type: 'brakeBoard', t: 0.508, lat: 15 },
       // ---- the memorial plaza --------------------------------------------
       // Across-road half-extent 24.4 m against an hw of 11, so lat 46 leaves
@@ -1256,12 +1270,35 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // ---- the shrine district -------------------------------------------
       // The torii face the road (yaw 0), so their 12.1 m width runs ALONG it and
       // the across-road half-extent is 0.72 m. At lat 18 that is 7.8 m of clear
-      // verge, and the 13.8 m step spaces the gates instead of overlapping them.
-      { type: 'torii', t: 0.682, lat: 18, step: 0.009, end: 0.772 },
-      // The far-side row is kept to the STRAIGHT part of the approach and pushed
-      // to -25: on the inside of the R42 left a 12 m gate at -20 was hiding a
-      // quarter of the road ahead (`.probe-tmp/sightline.ts`, t=0.715).
-      { type: 'torii', t: 0.686, lat: -25, step: 0.012, end: 0.722 },
+      // verge.
+      //
+      // ---- 15 GATES BECAME 5, AND THE ARRANGEMENT IS THE FIX ---------------
+      // This used to be `step: 0.009, end: 0.772` on the outside (11 gates at
+      // 13.8 m) plus `step: 0.012, end: 0.722` on the inside (4 more). Looked at
+      // rather than counted, that is not a shrine: no shrine in Japan lines a
+      // road with fifteen identical evenly-spaced gates side-on to the traffic.
+      // Screenshotted at the real chase pose on the shrine straight, the run
+      // read as red scaffolding along the verge — you see every gate obliquely
+      // and never through one.
+      //
+      // What a sandō actually is, is a line of gates you look ALONG. So the
+      // frontage now carries ONE larger main gate with two more receding behind
+      // it into the shrine grounds at lat 33 and 45 — all still yaw 0, so as you
+      // come level with t 0.694 the three line up and you look straight through
+      // the approach — and a single smaller gate further on at t 0.742 keeps the
+      // far end of the district from going bare. The inside row is gone
+      // entirely; it was the one `.probe-tmp/sightline.ts` had already caught
+      // hiding a quarter of the road ahead at t=0.715, and thinning is the
+      // honest answer to that rather than pushing it to -25.
+      //
+      // Fewer, larger and deeper reads as a shrine; more and evenly spaced reads
+      // as a fence. Triangles go DOWN despite the richer recipe: ~2.2 k against
+      // ~3.3 k, same InstancedMesh, same draw call.
+      { type: 'torii', t: 0.694, lat: 19, scale: 1.35 },
+      { type: 'torii', t: 0.694, lat: 33 },
+      { type: 'torii', t: 0.694, lat: 45, scale: 0.88 },
+      { type: 'torii', t: 0.742, lat: 19 },
+      { type: 'torii', t: 0.742, lat: 31, scale: 0.88 },
       { type: 'streetLamp', t: 0.68, lat: 16, step: 0.02, end: 0.77 },
       { type: 'planter', t: 0.695, lat: -15, step: 0.013, end: 0.755 },
       // ---- the lattice tower ---------------------------------------------
