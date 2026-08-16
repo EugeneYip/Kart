@@ -117,9 +117,20 @@ export interface PathStation {
    * road — asphalt + kerb + shoulder — and the shoulder is the widest and most
    * variable part of it (0-9 m authored, with four 24 m nodes). Without them the
    * seam is right to within about 0.2 m instead of exactly right; see
-   * `roadSurfaceOffset`. `Track` already has the numbers: they are
-   * `SplineAttribs.shoulderL / shoulderR`, which `Environment.stationFrom()`
-   * receives on its sample and currently drops on the floor.
+   * `roadSurfaceOffset`.
+   *
+   * `Environment.stationFrom()` now publishes them for any track whose sample
+   * carries them, which is every real circuit: `TrackSpline.SplineSample` fills
+   * them from smooth channels 2 and 3. They stayed optional because
+   * `demoCircuit()` — the invented fallback used when a track cannot answer —
+   * has no shoulders to publish, and "unknown" has to keep meaning
+   * `SH_FALLBACK` rather than 0.
+   *
+   * WHAT THE ABSENCE COST, measured against the DRAWN ribbon before it was
+   * fixed (`.probe-tmp/shoulderfix.ts`): the corridor every consumer assumed was
+   * out by a mean of 1.20-3.80 m per circuit and by 19.45 m at volcano's 24 m
+   * nodes, and Boston's 48 bridge stays hung off a girder standing 1.50 m
+   * outboard of the deck and 2.06 m above it.
    */
   shoulderL?: number;
   shoulderR?: number;

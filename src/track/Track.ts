@@ -47,7 +47,7 @@ import {
   makeSample,
   resolveNodes,
 } from './TrackSpline';
-import type { SplineAttribs, WallStyle } from './TrackSpline';
+import type { SplineAttribs, SplineSample, WallStyle } from './TrackSpline';
 import { DEFAULT_TRACK, TRACKS, TRACK_ORDER, getTrackDef } from './TrackDefs';
 import type { PropSpec, TrackDef } from './TrackDefs';
 import { createRoadMaterials } from './RoadMaterial';
@@ -71,10 +71,10 @@ import { Checkpoints } from './Checkpoints';
 
 /** A small ring of samples: callers routinely hold one result across a call. */
 const RING = 12;
-const _ring: TrackSample[] = [];
+const _ring: SplineSample[] = [];
 for (let i = 0; i < RING; i++) _ring.push(makeSample());
 let _ringNext = 0;
-const nextSample = (): TrackSample => {
+const nextSample = (): SplineSample => {
   const s = _ring[_ringNext];
   _ringNext = (_ringNext + 1) % RING;
   return s;
@@ -350,15 +350,21 @@ export class Track implements ITrackService, ISubsystem {
   //  ITrackService — sampling
   // =========================================================================
 
-  sampleAt(t: number): TrackSample {
+  /**
+   * `ITrackService.sampleAt`, widened to `SplineSample` — the same object, with
+   * the two authored shoulder widths that `TrackSample` has no field for. The
+   * world dresser resamples the centreline through here and needs them to know
+   * where the DRAWN road ends; see `SplineSample`.
+   */
+  sampleAt(t: number): SplineSample {
     return this.spline.sampleAt(wrap(t, 1), nextSample());
   }
 
-  sampleAtDistance(d: number): TrackSample {
+  sampleAtDistance(d: number): SplineSample {
     return this.spline.sampleAtDistance(d, nextSample());
   }
 
-  project(position: THREE.Vector3): TrackSample {
+  project(position: THREE.Vector3): SplineSample {
     const d = this.projectDistance(position);
     return this.spline.sampleAtDistance(d, nextSample());
   }

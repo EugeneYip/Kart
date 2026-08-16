@@ -122,6 +122,35 @@ export interface SplineNode {
   tag: string;
 }
 
+/**
+ * A `TrackSample` plus the two smooth channels that were being computed and
+ * thrown away.
+ *
+ * `TrackSample` (in `core/Types.ts`, the cross-subsystem contract) carries
+ * `halfWidth` — channel 0 — and stops there. Channels 2 and 3, the authored
+ * off-road shoulder widths, are the other half of "how wide is the road here":
+ * the DRAWN carriageway is `halfWidth + kerbW + shoulder`, and the shoulder is
+ * the widest and most variable term of the three (0-9 m authored, with four
+ * 24 m nodes, against a fixed 1.55 m kerb).
+ *
+ * Every consumer outside `src/track` that needed them therefore had to guess.
+ * `WorldTextures.PathStation` documents a `SH_FALLBACK` of 3 m for exactly that
+ * reason, and until this interface existed *every* station on *every* circuit
+ * took it — which put Boston's bridge girder, and with it 48 stay cables, 1.5 m
+ * outboard of the deck it is supposed to stand on and 2.1 m above its surface
+ * (`.probe-tmp/shoulderfix.ts`, claim C). Publishing the numbers costs two
+ * cubic evaluations on a parameter `sampleAtDistance` has already solved for.
+ *
+ * Structurally a superset of `TrackSample`, so anything typed against the
+ * contract keeps working unchanged and nothing in `core` had to move.
+ */
+export interface SplineSample extends TrackSample {
+  /** Authored off-road shoulder width outside the kerb, driver's LEFT, metres. */
+  shoulderL: number;
+  /** ...and driver's RIGHT. */
+  shoulderR: number;
+}
+
 /** Discrete + smooth attributes at an arc length. */
 export interface SplineAttribs {
   halfWidth: number;
@@ -742,7 +771,7 @@ export class TrackSpline {
    * Fill `out` with the full frame at arc length `d`. `out` is written in
    * place; nothing allocates.
    */
-  sampleAtDistance(d: number, out: TrackSample): TrackSample {
+  sampleAtDistance(d: number, out: SplineSample): SplineSample {
     const dw = this.wrapDistance(d);
     const s = this.paramAtDistance(dw);
 
@@ -768,6 +797,11 @@ export class TrackSpline {
     out.bank = bank;
     out.distance = dw;
     out.t = dw / this.length;
+    // Channels 2 and 3 on the parameter that is already solved: two cubics, no
+    // second LUT search. See `SplineSample` for what used to happen without
+    // them — every consumer outside `src/track` guessed 3 m.
+    out.shoulderL = this.scalarAtParam(s, 2);
+    out.shoulderR = this.scalarAtParam(s, 3);
 
     // Signed curvature about the road up: k = (r'' . right) / |r'|^2
     this.deriv2Param(s, _d2);
@@ -776,7 +810,7 @@ export class TrackSpline {
   }
 
   /** Sample by normalised lap progress. */
-  sampleAt(t: number, out: TrackSample): TrackSample {
+  sampleAt(t: number, out: SplineSample): SplineSample {
     return this.sampleAtDistance(t * this.length, out);
   }
 
@@ -868,7 +902,7 @@ export class TrackSpline {
   }
 
   /** Nearest centreline sample to a world position. */
-  project(point: THREE.Vector3, out: TrackSample): TrackSample {
+  project(point: THREE.Vector3, out: SplineSample): SplineSample {
     return this.sampleAtDistance(this.nearestDistance(point), out);
   }
 
@@ -912,8 +946,8 @@ export class TrackSpline {
   }
 }
 
-/** Allocate an empty TrackSample. */
-export function makeSample(): TrackSample {
+/** Allocate an empty SplineSample. */
+export function makeSample(): SplineSample {
   return {
     position: new THREE.Vector3(),
     tangent: new THREE.Vector3(0, 0, -1),
@@ -924,6 +958,8 @@ export function makeSample(): TrackSample {
     distance: 0,
     curvature: 0,
     bank: 0,
+    shoulderL: 5,
+    shoulderR: 5,
   };
 }
 
@@ -942,7 +978,7 @@ export function makeAttribs(): SplineAttribs {
   };
 }
 
-export function copySample(src: TrackSample, dst: TrackSample): TrackSample {
+export function copySample(src: SplineSample, dst: SplineSample): SplineSample {
   dst.position.copy(src.position);
   dst.tangent.copy(src.tangent);
   dst.normal.copy(src.normal);
@@ -952,5 +988,7 @@ export function copySample(src: TrackSample, dst: TrackSample): TrackSample {
   dst.distance = src.distance;
   dst.curvature = src.curvature;
   dst.bank = src.bank;
+  dst.shoulderL = src.shoulderL;
+  dst.shoulderR = src.shoulderR;
   return dst;
 }

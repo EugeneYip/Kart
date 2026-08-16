@@ -51,6 +51,13 @@ interface SampleLike {
   binormal?: THREE.Vector3;
   halfWidth?: number;
   bank?: number;
+  /**
+   * Authored off-road shoulder widths. `TrackSpline.SplineSample` publishes
+   * these; a track that does not is not an error, it just gets the bake's
+   * `SH_FALLBACK`. See `stationFrom`.
+   */
+  shoulderL?: number;
+  shoulderR?: number;
   distance?: number;
   t?: number;
 }
@@ -899,10 +906,19 @@ function readSurfaceHint(raw: unknown): PropSurfaceHint | undefined {
   };
 }
 
+/**
+ * The widest thing a shoulder is allowed to be, metres. Authored values run
+ * 0-9 m with four 24 m nodes on the volcano; 40 m is a garbage filter, not a
+ * design limit, and it exists so a track that publishes junk cannot stamp a
+ * 400 m plateau into the heightfield.
+ */
+const MAX_SHOULDER = 40;
+
 /** Validate a TrackSample-ish object into something we can trust. */
 function readSample(raw: unknown): {
   position: THREE.Vector3; tangent: THREE.Vector3; normal: THREE.Vector3;
   binormal: THREE.Vector3; halfWidth: number; bank: number;
+  shoulderL: number | null; shoulderR: number | null;
 } | null {
   if (!raw || typeof raw !== 'object') return null;
   const s = raw as SampleLike;
@@ -928,11 +944,22 @@ function readSample(raw: unknown): {
   const halfWidth = Number.isFinite(s.halfWidth) ? clamp(s.halfWidth as number, 4, 40) : 11;
   const bank = Number.isFinite(s.bank) ? clamp(s.bank as number, -1.2, 1.2) : 0;
 
-  return { position: p.clone(), tangent, normal, binormal, halfWidth, bank };
+  // `null`, not a default: "this track does not publish shoulders" and "this
+  // track publishes a 0 m shoulder" are different facts and the bake treats
+  // them differently. A default here would silently turn the first into the
+  // second on every circuit that has one.
+  const shoulderL = Number.isFinite(s.shoulderL) ? clamp(s.shoulderL as number, 0, MAX_SHOULDER) : null;
+  const shoulderR = Number.isFinite(s.shoulderR) ? clamp(s.shoulderR as number, 0, MAX_SHOULDER) : null;
+
+  return { position: p.clone(), tangent, normal, binormal, halfWidth, bank, shoulderL, shoulderR };
 }
 
 function stationFrom(
-  s: { position: THREE.Vector3; tangent: THREE.Vector3; binormal: THREE.Vector3; halfWidth: number; bank: number },
+  s: {
+    position: THREE.Vector3; tangent: THREE.Vector3; binormal: THREE.Vector3;
+    halfWidth: number; bank: number;
+    shoulderL: number | null; shoulderR: number | null;
+  },
   arc: number,
 ): PathStation {
   // Flatten tangent/binormal into XZ: the field is a heightfield, so all the
@@ -947,7 +974,7 @@ function stationFrom(
   if (bl < 1e-5) { bx = -tz; bz = tx; bl = 1; }
   bx /= bl; bz /= bl;
 
-  return {
+  const out: PathStation = {
     px: s.position.x, py: s.position.y, pz: s.position.z,
     tx, tz, bx, bz,
     halfWidth: s.halfWidth,
@@ -976,6 +1003,33 @@ function stationFrom(
     tanBank: clamp(s.binormal.y / bl, -0.9, 0.9),
     s: arc,
   };
+
+  // ---- THE THIRD TERM OF "HOW WIDE IS THE ROAD" ---------------------------
+  // The DRAWN carriageway is `halfWidth + kerbW + shoulder`. Until these two
+  // lines the station published the first term, every consumer hard-coded the
+  // second, and NOBODY had the third: `PathStation` has carried optional
+  // `shoulderL`/`shoulderR` from the day it was written, but `readSample()`
+  // returned position/tangent/normal/binormal/halfWidth/bank and dropped the
+  // shoulders on the floor. So `TerrainField.bake()` and `Props.deckFrameAt()`
+  // both took their `SH_FALLBACK` of 3 m at every station on every circuit,
+  // against authored widths of 0-24 m.
+  //
+  // Measured before the change, against the DRAWN ribbon triangles
+  // (`.probe-tmp/shoulderfix.ts`, claim B): the assumed corridor missed the
+  // drawn one by a mean of 1.20-3.80 m on the eight circuits, worst 19.45 m on
+  // volcano's 24 m shoulder nodes. The visible consequence was Boston's stay
+  // fan (claim C): all 42 girder post feet stood with no drawn road beneath
+  // them at all, 1.50 m outboard of the deck edge and 2.06 m above its surface.
+  // That is the owner's "suspension cables still appear to be floating",
+  // reported twice, arriving through the one term in the solve that was never
+  // solved.
+  //
+  // Left OPTIONAL, and left `undefined` rather than defaulted when the producer
+  // is silent: `demoCircuit()` below publishes no shoulders and must keep
+  // degrading to `SH_FALLBACK`, which is a different thing from asserting 0 m.
+  if (s.shoulderL !== null) out.shoulderL = s.shoulderL;
+  if (s.shoulderR !== null) out.shoulderR = s.shoulderR;
+  return out;
 }
 
 function spanOf(stations: PathStation[]): number {
