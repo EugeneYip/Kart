@@ -1,0 +1,45 @@
+drift payoff: 200 s, seeds 12345/777
+
+circuit / config             miniT  boostS contacts  meanLap  bestLap  spread  ovtk  offTrk topSpeed
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 4403.1 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 395.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1663.5 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 109.7 ms
+  volcanoRush live              36.5    19.2      6.0    55.07    51.53    5.28   21.5    18.0     45.4
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1671.5 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 181.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 678.2 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 95.5 ms
+  volcanoRush reverted          43.0    22.2     76.0    55.33    51.44    5.93   17.0    44.3     45.1
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 1088.8 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 661.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 856.1 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 56.5 ms
+  bostonHarbor live             23.0    12.1      1.0    58.22    56.46    3.45    6.0     4.5     38.1
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 1050.2 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 17.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 2850.3 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 349.1 ms
+  bostonHarbor reverted         31.0    16.7     18.5    58.58    56.32    3.99   15.5    20.2     37.9
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1111.7 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 212.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 418.9 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 240.2 ms
+  taipeiCircuit live            24.0    12.7      1.0    57.13    55.14    3.23   23.5     7.1     35.0
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 355.9 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 206.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 257.1 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 126.2 ms
+  taipeiCircuit reverted        36.0    19.2     21.0    57.26    53.63    4.71   21.0    27.1     35.3

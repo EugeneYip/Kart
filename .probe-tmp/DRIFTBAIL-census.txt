@@ -1,0 +1,52 @@
+drift census: 200 s, seeds 12345/777
+
+circuit           drifts  contacts | dur med  p95 |  peak|err| med  p90  p95   max | rate p50 p90  max | ending in contact | share of drifts the projected bail would cut, by T
+                                                                                                                     0.25s  0.35s  0.45s   0.6s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1658.4 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 473.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 870.2 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 174.3 ms
+sunsetCoastline       41        17 |    1.14 2.69 |           3.6  9.3  9.6  10.7 |    13.1 19.9  23.1 |      9   22.0%   |     63%    71%    71%    73%
+                  drifting-tick |err|: med 1.57 p75 2.98 p90 6.18 p99 9.63  (6406 ticks)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 1175.7 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 250.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 264.6 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 78.8 ms
+neonMetropolis       108        55 |    0.99 2.00 |           2.9  6.8  7.7  13.2 |    10.4 17.2  25.0 |     25   23.1%   |     56%    65%    69%    71%
+                  drifting-tick |err|: med 1.65 p75 3.25 p90 5.25 p99 10.09  (12839 ticks)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 2867.8 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 232.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 491.7 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 191.8 ms
+volcanoRush          193       152 |    0.82 3.67 |           2.0  6.7  8.8  13.7 |     8.5 18.1  29.3 |     41   21.2%   |     63%    71%    77%    83%
+                  drifting-tick |err|: med 1.54 p75 3.41 p90 6.47 p99 11.63  (25228 ticks)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 812.0 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 100.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 390.2 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 342.7 ms
+bostonHarbor         104        37 |    1.07 1.72 |           3.0  7.0  9.7  14.3 |    10.1 16.2  29.1 |     23   22.1%   |     61%    73%    79%    86%
+                  drifting-tick |err|: med 1.92 p75 3.18 p90 5.48 p99 12.02  (13021 ticks)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1315.3 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 204.8 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 566.8 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 28.5 ms
+taipeiCircuit        115        42 |    0.97 2.07 |           3.0  8.5 10.3  14.2 |    10.5 17.6  30.4 |     20   17.4%   |     56%    64%    67%    74%
+                  drifting-tick |err|: med 1.95 p75 3.49 p90 6.08 p99 9.97  (14510 ticks)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 396.2 ms
+[AI] racing line: 600 stations, 1468.0 m (centre 1535.6 m), v 22.3–36.0 m/s, barrier clearance >= 4.82 m, built in 35.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 423.9 ms
+[AI] racing line: 600 stations, 1468.0 m (centre 1535.6 m), v 22.3–36.0 m/s, barrier clearance >= 4.82 m, built in 97.4 ms
+tokyoNeon            113        50 |    1.04 1.73 |           3.1  8.1 10.2  12.8 |    10.1 17.6  22.7 |     20   17.7%   |     61%    65%    78%    81%
+                  drifting-tick |err|: med 1.93 p75 3.64 p90 6.06 p99 9.91  (13885 ticks)
