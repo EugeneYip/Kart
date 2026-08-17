@@ -832,13 +832,26 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // waterline, not a seam), 0.50 m below the nearest drawn road, and the
       // ground immediately outside its road-facing edge is AT the waterline, so
       // there is no lip on the side you see it from.
-      { type: 'harbourWater', t: 0.500, lat: 110, scale: 0.60, up: 0.16 },
+      // POSE AND SIZE NOW COME FROM THE BASIN, not from these fields. See
+      // `CITY_WATER_BASINS` in `WorldTextures.ts`: the terrain is carved to a
+      // rounded rectangle and `Props.collectAuthored` snaps the plate onto it —
+      // centre, yaw, extent and waterline all from the one table, because a
+      // plate and the hole it sits in cannot be allowed to drift apart. What
+      // this entry still decides is that this circuit HAS a harbour at all.
+      // Kept numerically in step with the basin so the file does not lie.
+      { type: 'harbourWater', t: 0.500, lat: 96, up: -2.8 },
       // The bulkhead at the water's edge. The `seaWall` run above is the street
       // railing at lat 20; this is the same recipe standing where the water
       // actually starts, so the 48 m of quay between them reads as a working
       // apron rather than as a wall in a field. It is the same authored type, so
       // it shares that type's InstancedMesh and costs no additional draw call.
-      { type: 'seaWall', t: 0.452, lat: 64, step: 0.010, end: 0.552 },
+      // Moved from lat 64 to lat 40: that is where the water's edge is now.
+      // Profiled on the carved field (`.probe-tmp/basinsite.ts`), the waterline
+      // runs lat 41-47 along this stretch — the basin rim is at lat 36, but
+      // inside ~50 m of the centreline the road blend lifts the ground back
+      // toward the carriageway, so the shore sits outboard of the rim and a
+      // quay placed at the rim would have stood in open water.
+      { type: 'seaWall', t: 0.452, lat: 34, step: 0.010, end: 0.548 },
       // ---- WHAT MAKES IT READ AS WATER RATHER THAN AS A GREY FLOOR ---------
       // The plate is a static surface on the reflective `metal` material: it
       // takes the sky, and nothing on it moves. Moored hulls fix both halves of
@@ -846,11 +859,13 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // sails are `mastCloth`, so they are the one thing in the basin that is
       // actually animated.
       //
-      // Every `up` below is measured, not nudged. `.probe-tmp/shoreprofile.ts`
-      // walks the ground under this basin: -0.64 m at (t 0.470, lat 110), -0.47
-      // at (0.500, 130), about -0.32 along the lat-86 line. The plate is at
-      // -0.22, so the raw seating would give these hulls 0.10-0.42 m of draught;
-      // `up` takes each to roughly 0.4 m, which is what a 5 m sloop draws.
+      // `up` IS NOW A DRAUGHT, and that is a real change of meaning. It used to
+      // be measured against the ground each hull happened to stand on, because
+      // `collectAuthored` seated everything on the heightfield; over a carved
+      // basin that would have put these two on the seabed, 1.7 m under their
+      // own waterline. Condition 5 there now treats an authored basin surface as
+      // a waterline wherever the ground beneath is genuinely below it, so `up`
+      // is metres relative to the water: 0 floats, negative sits deeper.
       { type: 'sailboat', t: 0.468, lat: 108, yaw: 0.5 },
       { type: 'sailboat', t: 0.500, lat: 128, yaw: -0.7, scale: 0.9, up: -0.15 },
       // The channel, marked. Four buoys on one InstancedMesh pair.
@@ -1081,11 +1096,15 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // horizontal tangent while the instance is yawed by the prop placer, and
       // a couple of degrees of difference is enough at 135 m of reach. Dropping
       // it 0.36 m clears both with margin and costs about a tenth of the area.
-      { type: 'harbourWater', t: 0.390, lat: 110, scale: 0.90, up: 0.36 },
+      // Pose and size come from `CITY_WATER_BASINS` — see Boston's note above.
+      { type: 'harbourWater', t: 0.390, lat: 96, up: -3.0 },
       // The embankment along the near bank, at the waterline rather than at the
       // kerb: same recipe as Boston's and Hong Kong's quays, same InstancedMesh,
       // no extra draw call.
-      { type: 'seaWall', t: 0.300, lat: 44, step: 0.010, end: 0.400 },
+      // At lat 38, which is the carved waterline here (it runs 34-43 over the
+      // length of this run), and extended to cover the basin's t span rather
+      // than stopping 0.07 short of it.
+      { type: 'seaWall', t: 0.322, lat: 38, step: 0.010, end: 0.452 },
       { type: 'streetLamp', t: 0.305, lat: 17, step: 0.017, end: 0.44, mirror: true },
       // ---- NOTHING TALL ON THE RIVER SIDE OF THE RIVERSIDE STRAIGHT --------
       // Both of these used to stand between the road and the water. The
@@ -1441,7 +1460,10 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // harbour that is a 15 m ribbon behind the quay instead of a 60 m one, and
       // the honest fix for that is a carved basin in `WorldTextures.naturalHeightAt`'s
       // `city` branch, which is not this file's to write.
-      { type: 'harbourWater', t: 0.020, lat: 95, up: -1.35 },
+      // Pose and size come from `CITY_WATER_BASINS` — see Boston's note above.
+      // This is the circuit the basin was written for: 7.0 % of this plate was
+      // open water before it and 79.2 % after, 3069 m² against 36 933 m².
+      { type: 'harbourWater', t: 0.020, lat: 98, up: -3.4 },
       { type: 'seaWall', t: 0.010, lat: 20, step: 0.008, end: 0.112 },
       { type: 'flagPole', t: 0.018, lat: 22, step: 0.013, end: 0.072 },
       // A junk under sail, moored off the promenade.
@@ -1455,8 +1477,15 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // the waterline is between lat 25 and lat 40 (profiled: -0.68 m at lat 20,
       // -0.18 at 30, +0.02 at 40), so that is where a moored boat goes. `up`
       // lifts each hull the rest of the way onto the surface from its own ground.
-      { type: 'junk', t: 0.048, lat: 30, yaw: 0.4, up: 0.35 },
-      { type: 'junk', t: 0.086, lat: 34, yaw: -0.9, scale: 0.85, up: 0.2 },
+      // BOTH MOVED OUT AGAIN, to lat 62 and 78. The paragraph above is a
+      // faithful record of where the waterline was when the plate was a sheet
+      // laid on unmodified ground — between lat 25 and 40 — and it is simply no
+      // longer where the water is. On the carved basin the shore runs lat 40 to
+      // 163 (`.probe-tmp/basinsite.ts`, three stations along the reach), so at
+      // lat 30 these two would have been beached on the near bank. `up` is now
+      // a draught relative to the waterline, not a lift off local ground.
+      { type: 'junk', t: 0.048, lat: 62, yaw: 0.4, up: -0.1 },
+      { type: 'junk', t: 0.086, lat: 78, yaw: -0.9, scale: 0.85, up: -0.15 },
       // ---- THE TWO LANDMARKS, ACROSS THE WATER ------------------------------
       // Read the Taipei supertall note before moving either. A tower needs
       // roughly (its height / tan(half the vertical FOV above the eyeline)) of
@@ -1697,8 +1726,12 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // nearest carriageway is 94 m away and the ground relief over the plate
       // falls from 4.15 m to 0.34 m — which for a flat water surface is the
       // number that actually matters.
-      { type: 'parkLake', t: 0.360, lat: 95 },
-      { type: 'parkTree', t: 0.392, lat: 132, step: 0.014, end: 0.470 },
+      // Pose and size come from `CITY_WATER_BASINS` — see Boston's note above.
+      { type: 'parkLake', t: 0.360, lat: 86, up: -2.6 },
+      // Out from lat 132 to 160: the lake plate is the basin plus the margin
+      // plus its outline wobble, and the run is 0.078 of a lap long, so at 142
+      // its far end still curved back into the water (3 elms, measured).
+      { type: 'parkTree', t: 0.392, lat: 160, step: 0.014, end: 0.470 },
       { type: 'signChevron', t: 0.396, lat: -15, step: 0.006, end: 0.426 },
       { type: 'brakeBoard', t: 0.412, lat: -14 },
       { type: 'crowdStand', t: 0.372, lat: -27 },
@@ -1748,7 +1781,8 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // footprint is sized to fit under it. 23 428 m2 of open water against
       // 2816 — 8.3x — at 10 % burial, 1.81 m deep, its near edge 30.5 m off the
       // asphalt and its far edge under the natural bank.
-      { type: 'harbourWater', t: 0.550, lat: -94, scale: 0.75, up: 1.38 },
+      // Pose and size come from `CITY_WATER_BASINS` — see Boston's note above.
+      { type: 'harbourWater', t: 0.550, lat: -92, up: -2.2 },
       { type: 'signChevron', t: 0.632, lat: 14, step: 0.006, end: 0.660 },
       { type: 'brakeBoard', t: 0.624, lat: -14 },
       // ---- downtown -----------------------------------------------------------

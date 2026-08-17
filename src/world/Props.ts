@@ -6699,16 +6699,27 @@ export class Props implements ISubsystem {
           }
           return top;
         };
-        /** Lowest permitted CENTRE for a box of half-size (hx, hy) at (cx, z). */
+        /**
+         * Lowest permitted CENTRE for a box of half-size (hx, hy) at (cx, z).
+         *
+         * Counted, because a guard that quietly declines to fire is the failure
+         * mode this file keeps repairing — this one already did exactly that
+         * once, against the hardcoded `arc: 0` (see `collectAuthored`), and the
+         * only reason it was caught is that somebody printed the inputs.
+         */
         const headFloor = (cx: number, hx: number, hy: number, z: number): number => {
           const t = roadTop(Math.max(0, Math.abs(cx) - hx), Math.abs(cx) + hx, z);
           return t === -Infinity ? -Infinity : t + ROAD_HEADROOM + hy;
         };
-        console.log(`[PROBE] tunnelportal arcs ${tpArcs.join(',')}  `
-          + `hw@ ${tpArcs.map((a) => this.deckFrameAt(a, _deck).hw.toFixed(2)).join(',')}  `
-          + `bank@ ${tpArcs.map((a) => { const f = this.deckFrameAt(a, _deck); return (Math.abs(f.b.y) / Math.hypot(f.b.x, f.b.z)).toFixed(3); }).join(',')}  `
-          + `floor(i=4,z=8.2) ${headFloor(-Math.cos(4 / 18 * Math.PI) * 13.60, 0.9, 0.5, 8.2).toFixed(2)}  `
-          + `design ${(Y0 + Math.sin(4 / 18 * Math.PI) * (H - 1.05)).toFixed(2)}`);
+        let liftedN = 0, liftedMax = 0;
+        /** Apply the floor to one fitting and record whether it bit. */
+        const seatAbove = (design: number, cx: number, hx: number, hy: number, z: number): number => {
+          const floor = headFloor(cx, hx, hy, z);
+          if (floor <= design) return design;
+          liftedN++;
+          liftedMax = Math.max(liftedMax, floor - design);
+          return floor;
+        };
 
         // ---- 5. splayed reveal — three rings going in ---------------------
         // Horizontal radius held at 13.60 (see the CLEARANCE note); the depth
@@ -6721,7 +6732,7 @@ export class Props implements ISubsystem {
           for (let i = 1; i < 18; i++) {
             const a = (i / 18) * Math.PI;
             const cx = -Math.cos(a) * 13.60;
-            const cy = Math.max(Y0 + Math.sin(a) * (H - drop), headFloor(cx, 0.9, 0.5, z));
+            const cy = seatAbove(Y0 + Math.sin(a) * (H - drop), cx, 0.9, 0.5, z);
             const g = Math.round(0x6f * tone);
             b.box(cx, cy, z, 0.9, 0.5, 0.55,
               (g << 16) | (Math.round(0x66 * tone) << 8) | Math.round(0x5b * tone),
@@ -6744,7 +6755,7 @@ export class Props implements ISubsystem {
         for (let i = 2; i < 17; i++) {
           const a = (i / 18) * Math.PI;
           const cx = -Math.cos(a) * (R - 0.55);
-          glow.box(cx, Math.max(Y0 + Math.sin(a) * (H - 0.55), headFloor(cx, 0.52, 0.16, 0.85)),
+          glow.box(cx, seatAbove(Y0 + Math.sin(a) * (H - 0.55), cx, 0.52, 0.16, 0.85),
             0.85, 0.52, 0.16, 0.3, 0xffb066);
         }
         /**
@@ -6810,6 +6821,18 @@ export class Props implements ISubsystem {
           for (const sx of [-1, 1]) glow.box(sx * 2.2, Y0 + 6.9, z, 0.34, 0.18, 0.5, 0xffc98a);
         }
 
+        // The wall lamps (|x| 12.65), the guide strip (13.15) and the crown run
+        // (|x| 2.2 at 6.4 m up) are NOT put through the floor. That is a
+        // measurement, not an exemption: `.probe-tmp/envelope.ts` walks their
+        // real triangles against the drawn ribbon on all eight circuits and
+        // none of them is in the envelope — the first two are outboard of the
+        // widest carriageway at any portal, and the crown run clears it even
+        // where the bore climbs. If that ever changes, `seatAbove` is the line
+        // to route them through.
+        console.log(`[Props] portal headroom: ${liftedN} reveal/cove fittings raised to clear `
+          + `${ROAD_HEADROOM.toFixed(1)} m over the banked carriageway`
+          + `${liftedN > 0 ? `, worst lift ${liftedMax.toFixed(2)} m` : ''}`
+          + ` (sites at arc ${tpArcs.map((a) => a.toFixed(0)).join(', ')})`);
         return {
           geo: b.build('tunnelPortal'),
           glow: glow.build('tunnelPortalGlow'),
@@ -9852,6 +9875,10 @@ export class Props implements ISubsystem {
         // every vertex is at least the margin outside the rim, and the whole
         // basin is covered. The lake basin is authored round (`round` equal to
         // its half-extent) so one radius answers for every bearing.
+        //
+        // The wobble is 0-6 m and not 0-14. Overhang is dry plate: at 0-14 the
+        // outline reached 50 m over a 30 m basin and only 24 % of the footprint
+        // was open water, which reads as a wide stone apron with a pond in it.
         const basin = basinFor(this.field.waterBasins, 'parklake');
         const b = this.builder();
         b.uvScale = 0.35;
@@ -9860,7 +9887,7 @@ export class Props implements ISubsystem {
         const base = basin ? basin.halfAcross + BASIN_PLATE_MARGIN : 30;
         const rad: number[] = [];
         for (let i = 0; i < N; i++) {
-          rad.push(base + 7 + 4 * Math.sin(i * 1.7) + 3 * Math.sin(i * 3.1 + 1.2));
+          rad.push(base + 3 + 1.7 * Math.sin(i * 1.7) + 1.3 * Math.sin(i * 3.1 + 1.2));
         }
         const px = (i: number, k: number): number =>
           Math.cos((i % N / N) * Math.PI * 2) * rad[i % N] * k;

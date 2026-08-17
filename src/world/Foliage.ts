@@ -1369,7 +1369,7 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     if (y < this.ctx.waterLevel + 0.35) return false;
     // The push has to respect the harbour too, or `scatterSpots`' rejection is
     // undone one call later by a plant walked outboard into the water.
-    if (insideAuthoredWater(this.field.waterBasins, x, z, 4)) return false;
+    if (insideAuthoredWater(this.field.waterBasins, x, z, 6)) return false;
     if (this.field.slopeAt(x, z) > 0.66) return false;
     // Keep the original vertical bedding offset, which differs per recipe.
     sp.y += y - this.field.heightAt(sp.x, sp.z);
@@ -1421,7 +1421,7 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       // too — see `WaterBasin` in WorldTextures.ts. Grass blades are placed on
       // the GPU and cannot be filtered here; they are killed by the same
       // footprint in the terrain bake's `data.r` mask instead.
-      if (insideAuthoredWater(field.waterBasins, x, z, 4)) continue;
+      if (insideAuthoredWater(field.waterBasins, x, z, 6)) continue;
       if (field.slopeAt(x, z) > 0.66) continue;
       const moist = field.moistureAt(x, z);
       if (rng.next() > 0.16 + moist * moistureBias * 1.5) continue;
