@@ -36,8 +36,10 @@ import { SHADOW_LAYER } from './Lighting';
 // hint rather than the live `worldRegistry.sky`.
 import { SKY_PRESETS, skyNightFactor } from './Sky';
 import {
-  InstanceChunks, canvasTexture, makeDetailNormal, roadVerge, worldRegistry,
-  type PathStation, type RoadVerge, type TerrainField, type WorldContext, type WorldTheme,
+  BASIN_PLATE_MARGIN, InstanceChunks, basinDistance, canvasTexture, insideAuthoredWater,
+  makeDetailNormal, roadVerge, worldRegistry,
+  type PathStation, type ResolvedBasin, type RoadVerge, type TerrainField,
+  type WorldContext, type WorldTheme,
 } from './WorldTextures';
 // The shared procedural texture library (AGENTS.md section 4). Only the two
 // primitives the facade sets need: a Sobel height->normal and a float->greyscale
@@ -201,6 +203,16 @@ interface DeckFrame {
 }
 
 const _deck: DeckFrame = {
+  p: new THREE.Vector3(), b: new THREE.Vector3(1, 0, 0), n: new THREE.Vector3(0, 1, 0),
+  hw: 11, shL: 3, shR: 3, ok: false,
+};
+
+/**
+ * A second scratch frame, for the one caller that needs two stations at once:
+ * a prop that reaches metres down-track has to compare the road under its far
+ * end against the road at its own anchor, and `_deck` alone cannot hold both.
+ */
+const _deck2: DeckFrame = {
   p: new THREE.Vector3(), b: new THREE.Vector3(1, 0, 0), n: new THREE.Vector3(0, 1, 0),
   hw: 11, shL: 3, shR: 3, ok: false,
 };
@@ -2028,6 +2040,14 @@ export function planStands(ctx: WorldContext, limit = 8): StandSpec[] {
       if (field.roadDistanceAt(x, z) < s.halfWidth + 8) continue;
       const y = field.heightAt(x, z);
       if (y < ctx.waterLevel + 0.6) continue;
+      // ...and not in the harbour. `ctx.waterLevel` above cannot answer this:
+      // on a city circuit it is the -9 m sentinel that keeps `Water` switched
+      // off, so every authored basin floor is metres ABOVE it and the test
+      // passes over open water. A stand is the worst offender of the three
+      // scatterers because Crowd then seats ~90 people on it — 75 of the 125
+      // instances standing in Victoria Harbour before this were crowd. Padded
+      // by half the terrace width, since the anchor is its centre.
+      if (insideAuthoredWater(field.waterBasins, x, z, width * 0.5)) continue;
       if (field.slopeAt(x, z) > 0.55) continue;
       // 1.16x, not 1.0. `standParts` builds roof eaves and end walls past the
       // nominal `width` — measured, a 46 m stand emits a 53 m mesh — so testing
@@ -2115,6 +2135,10 @@ function roadside(
       if (field.roadDistanceAt(x, z) < s.halfWidth + o.min * 0.9) continue;
       const y = field.heightAt(x, z);
       if (y < ctx.waterLevel + 0.35) continue;
+      // See the note in `planStands`: on a city circuit `ctx.waterLevel` is the
+      // -9 m sentinel and cannot see an authored basin. This is what keeps
+      // street lamps, sign stacks, parked cars and flood masts out of the water.
+      if (insideAuthoredWater(field.waterBasins, x, z)) continue;
       if (field.slopeAt(x, z) > maxSlope) continue;
       if (o.skipNearStands) {
         let blocked = false;
@@ -2152,6 +2176,13 @@ function annulus(
     if (field.roadDistanceAt(x, z) < o.minRoadDist) continue;
     const y = field.heightAt(x, z);
     if (o.dry !== false && y < ctx.waterLevel + 0.5) continue;
+    // The skyscraper mid-river on New York and the apartment slabs in Taipei's
+    // came through here — `annulus()` is what `buildCity()` scatters its
+    // background towers with, and its only wet test was the `ctx.waterLevel`
+    // sentinel. 17 m of pad: `TOWER_H`-tall recipes are jittered to a footprint
+    // half-width of about 16 m by `buildCity`'s `pose()`, so an origin that
+    // merely clears the shoreline still puts a corner of the block in the water.
+    if (insideAuthoredWater(field.waterBasins, x, z, 17)) continue;
     if (field.slopeAt(x, z) > maxSlope) continue;
     let clash = false;
     for (const p of out) if (Math.hypot(p.x - x, p.z - z) < 34) { clash = true; break; }
@@ -2159,6 +2190,41 @@ function annulus(
     out.push({ x, y, z, yaw: rng.next() * Math.PI * 2, side: 0, arc: 0, scale: 1, seed: rng.next() });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+//  AUTHORED WATER PLATES
+// ---------------------------------------------------------------------------
+
+/** Normalised prop keys that ARE a water surface, i.e. want a basin. */
+const WATER_PLATE_KEYS: ReadonlySet<string> = new Set(['harbourwater', 'parklake']);
+
+/**
+ * Height of a recipe's water surface above its own anchor, metres.
+ *
+ * `harbourWater` builds its facets about local y = 0; `parkLake` floats them at
+ * 0.2 so the stone coping at 0.34 stands proud of the water. Subtracting this
+ * from `WaterBasin.surface` is what makes the two recipes agree on where the
+ * waterline is, which is the number the drowning audit is taken against.
+ */
+function plateLocalSurface(key: string): number {
+  return key === 'parklake' ? 0.2 : 0;
+}
+
+/** The basin a water-plate prop key belongs to, or null. */
+function basinFor(basins: readonly ResolvedBasin[], key: string): ResolvedBasin | null {
+  if (!WATER_PLATE_KEYS.has(key)) return null;
+  const want = key === 'parklake' ? 'lake' : 'harbour';
+  for (const b of basins) if (b.kind === want) return b;
+  return null;
+}
+
+/** The basin whose PLATE footprint covers `(x, z)`, or null. */
+function basinAt(basins: readonly ResolvedBasin[], x: number, z: number): ResolvedBasin | null {
+  for (const b of basins) {
+    if (basinDistance(b, x, z) <= BASIN_PLATE_MARGIN) return b;
+  }
+  return null;
 }
 
 /** Anchors just below the waterline — jetties, moored boats, shore rocks. */
@@ -2839,6 +2905,44 @@ const PROP_KERB_VERGE = 0.6;
 const PROP_KERB_W = 1.55;
 /** How far outboard an anchor may be walked before the push is abandoned. */
 const PROP_PUSH_LIMIT = 6;
+
+/**
+ * ===========================================================================
+ *  HEADROOM — how much air a structure that STRADDLES the road must leave
+ * ===========================================================================
+ *  The lateral guards in this file are thorough and the vertical one did not
+ *  exist. `CORRIDOR_PROPS` — gantry, portal, arch, deck pylon — are exempt from
+ *  `clearRoadSurface` precisely because they are *supposed* to reach across the
+ *  carriageway, and the deal implied by that exemption is that they clear it.
+ *  Nothing checked that they do.
+ *
+ *  The number is derived, not chosen:
+ *
+ *    1.400 m   the tallest of the 72 driver x chassis rigs on the roster, from
+ *              the tyre contact patch to the crown of the driver's head
+ *              (`.probe-tmp/kartsize.ts`, every rig built with the real
+ *              `KartModel`, measured — AGENTS.md's "~1.4 m" is the kart's
+ *              WIDTH, and the two agreeing is a coincidence worth not relying
+ *              on).
+ *  + 0.682 m   the largest rise above its own resting ride height that any of
+ *              12 AI karts reached within 25 m of the stations these
+ *              structures stand at, over 110 s per circuit with items on
+ *              (`.probe-tmp/rideheight.ts`, seated on the drawn road ribbon).
+ *              Whole-lap maxima are far larger — 4.5 m off newYork's jump — but
+ *              a ramp is not under an arch.
+ *  = 2.082 m   worst case top of a kart at one of these stations.
+ *  x 1.44      so 3.00 m, which is where `.probe-tmp/propfoot.ts`'s
+ *              `DRIVE_HEIGHT` already sits. The audit band and this build-time
+ *              requirement are deliberately the SAME number: a structure that
+ *              satisfies this cannot be flagged by that.
+ *
+ *  What would make it wrong: a taller character or chassis added to the roster,
+ *  a suspension or hop change that lifts the dynamic component, or a ramp
+ *  authored close enough to one of these structures that karts arrive at them
+ *  airborne. All three are measurable, and re-running those two probes is the
+ *  check.
+ */
+const ROAD_HEADROOM = 3.0;
 
 /**
  * ===========================================================================
@@ -4403,10 +4507,58 @@ export class Props implements ISubsystem {
       const span = Math.max(...sites.map((s) => s.halfWidth)) + 3.5;
       const cols = [0xff4a3d, 0xffd23f, 0x3fa9ff, 0x5ee06a, 0xff7be0];
       const N = 34;
+      /** Lowest point of balloon `i`, relative to the arc's own height there. */
+      const drop = (i: number): number => (0.42 + (i % 3) * 0.05) + 0.12;
+      /**
+       * ---- ...AND THE FIX ABOVE ONLY WIDENED IT. THE ROAD ALSO TILTS. -------
+       * `span` follows the road's WIDTH. Nothing followed the road's BANK, and
+       * this arch is built in a LEVEL plane: `arches` takes its yaw from the
+       * tangent and no roll at all, so the arc's springing sits at centreline
+       * height while a banked carriageway climbs away from it. `siteNear`
+       * tolerates `|tanBank| <= 0.10` (and pass 2 drops even that), and 0.10 of
+       * bank across an 11 m half-width lifts the outer asphalt edge a full
+       * 1.03 m into the arch — a third of the whole driving envelope, spent
+       * before the first balloon is placed.
+       *
+       * Measured before this change (`.probe-tmp/envelope.ts`, ultra, real
+       * triangles against the drawn ribbon, minimum sampled off the TRIANGLES
+       * rather than the vertices): the underside of balloon 4 stood
+       * 2.32-2.61 m over the tarmac on SEVEN of the eight circuits, 0.48-0.97 m
+       * inside the drawn carriageway. `propfoot.ts` reported those same seven
+       * as "2.91-3.00 m up", which is an artefact of its own band ceiling —
+       * a vertex at 3.01 m is not flagged, so the tallest FLAGGED vertex of
+       * anything arching out of the envelope is pinned just under 3.00 by
+       * construction and says nothing about the lowest one.
+       *
+       * The arc is `y = sin(t.PI) * (span * 0.62)`, so scaling that amplitude
+       * raises every balloon in proportion and leaves the two tethered ends at
+       * `y = 0.4` where the ground is — the reason to scale rather than lift.
+       * `rise` is the SMALLEST scale for which every balloon that overhangs the
+       * carriageway clears `ROAD_HEADROOM` above the banked road beneath it, on
+       * the worse of the two sites. On an unbanked site it solves to 1 and the
+       * geometry is unchanged; the vertex and triangle counts never move.
+       */
+      let rise = 1;
+      for (const s of sites) {
+        const bank = Math.abs(s.tanBank);
+        for (let i = 0; i <= N; i++) {
+          const t = i / N;
+          const x = Math.abs((t * 2 - 1) * span);
+          const r = 0.42 + (i % 3) * 0.05;
+          if (x - r >= s.halfWidth) continue;      // never over the asphalt
+          // The road climbs with |lat| on the rising side, so the worst surface
+          // under this balloon's plan footprint is at its outermost point that
+          // is still carriageway.
+          const roadTop = Math.min(x + r, s.halfWidth) * bank;
+          const amp = Math.sin(t * Math.PI) * (span * 0.62);
+          if (amp < 1e-3) continue;                 // a tethered end, on the verge
+          rise = Math.max(rise, (ROAD_HEADROOM + roadTop + drop(i) - 0.4) / amp);
+        }
+      }
       for (let i = 0; i <= N; i++) {
         const t = i / N;
         const x = (t * 2 - 1) * span;
-        const y = Math.sin(t * Math.PI) * (span * 0.62) + 0.4;
+        const y = Math.sin(t * Math.PI) * (span * 0.62 * rise) + 0.4;
         // Free-floating balloons bob; the tethered ends don't.
         b.flap = Math.sin(t * Math.PI);
         const r = 0.42 + (i % 3) * 0.05;
@@ -5817,8 +5969,23 @@ export class Props implements ISubsystem {
         // umbrellas. A hull seated ON the water plane is right by construction —
         // that is what floating means — and it is a strictly better answer than a
         // plane extrapolated 74 m sideways off the road.
-        const onWater = ground < this.ctx.waterLevel;
-        const datum = onWater ? this.ctx.waterLevel : ground;
+        //
+        // ---- AND AN AUTHORED BASIN IS A WATERLINE TOO ----------------------
+        // `ctx.waterLevel` is -9 on every city circuit — the sentinel that keeps
+        // `Water` from building a disc — so it is metres below any basin floor
+        // and the test above passes straight over open water. Boston's two
+        // sloops and its four channel buoys sit inside the harbour footprint;
+        // without this they seat on the basin FLOOR and sail 1.7 m under their
+        // own waterline. The gate is deliberately "wet HERE", not "inside the
+        // footprint": the footprint overhangs its basin by
+        // `BASIN_PLATE_MARGIN` and laps a few metres up the bank, and a prop
+        // standing on that bank is on dry land and must stay on it.
+        const basin = basinAt(this.field.waterBasins, p.position.x, p.position.z);
+        const inBasinWater = basin !== null && ground < basin.surface;
+        const onWater = inBasinWater || ground < this.ctx.waterLevel;
+        const datum = inBasinWater
+          ? (basin as ResolvedBasin).surface
+          : onWater ? this.ctx.waterLevel : ground;
         {
           const seated = datum + surf.up;
           if (Math.abs(seated - y) > 1e-3) {
@@ -5844,11 +6011,85 @@ export class Props implements ISubsystem {
           if (!onWater) groundUp = surf.up;
         }
       }
+      // ---- A WATER PLATE IS SEATED ON ITS BASIN, NOT ON THE GROUND --------
+      // Everything above works out where the terrain is and puts the prop on
+      // it. For a water surface that is exactly backwards: the terrain under a
+      // harbour is the SEABED, `depth` metres down, and seating the plate there
+      // would leave the basin dry with a sheet of metal at the bottom of it.
+      //
+      // The basin owns the answer. `surface` is the authored waterline, chosen
+      // against the measured lowest drawn road nearby, so taking it verbatim is
+      // also what makes the no-drowning guarantee auditable — there is one
+      // number, in one table, and `.probe-tmp/basin.ts` checks it.
+      //
+      // Pose comes from the basin too (centre, yaw, and `scale: 1` because the
+      // recipe below is built at the basin's own size). Anything else would let
+      // the plate and the hole it sits in drift apart.
+      //
+      // `up` is deliberately left undefined: it is the flag that licenses
+      // `clearAuthored` / `clearRoadSurface` / `pushOffCarriageway` to re-seat
+      // an anchor on the heightfield after a lateral push, and re-seating a
+      // water plate on the seabed is the failure this whole block exists to
+      // avoid. With it undefined all three guards hit their `heightAt` sanity
+      // check — the plate is `depth` metres off the ground, far more than the
+      // 0.25 m they allow — and decline to move it.
+      const basin = basinFor(this.field.waterBasins, key);
+      if (basin) {
+        list.push({
+          x: basin.cx, y: basin.surface - plateLocalSurface(key), z: basin.cz,
+          yaw: basin.yaw, side: 0, arc: this.arcNearest(basin.cx, basin.cz),
+          scale: 1, seed: this.rng.next(),
+          up: undefined,
+        });
+        continue;
+      }
+      if (WATER_PLATE_KEYS.has(key)) {
+        console.warn(
+          `[Props] "${p.type}" is a water plate but this circuit has no basin for it`
+          + ` (terrainSeed ${this.ctx.hints.terrainSeed} is not in CITY_WATER_BASINS).`
+          + ' Falling back to seating it on the heightfield, which is what made'
+          + ' the City Series water invisible — see WaterBasin in WorldTextures.ts.',
+        );
+      }
+      /**
+       * ---- `arc: 0` MEANT EVERY CORRIDOR RECIPE READ THE START LINE. -------
+       * `Anchor.arc` was hardcoded to 0 here, and three recipes size themselves
+       * from it: `startgantry` and `balloonarch` take `deckFrameAt(a.arc).hw` to
+       * find the widest site they will stand on, and the `tunnelportal`
+       * headroom floor added below reads the bank and grade there.
+       *
+       * The bug hid behind a coincidence. A start gantry stands AT the start
+       * line, so `arc: 0` is its true arc on all eight circuits and its
+       * half-width came out right; the constant looked like it worked. A tunnel
+       * portal does not stand at the start line, so its floor was computed
+       * against arc 0 — a wide, level, unbanked station on every circuit — and
+       * resolved to "no lift needed" while the portal it was protecting sat on
+       * a 12.7 degree bank 1305 m away. Measured with a temporary print:
+       * `tunnelportal arcs 0,0  hw@ 12.00,12.00  bank@ 0.000,0.000`, against a
+       * real 10.00 m and 0.226 at the site.
+       *
+       * `arcNearest` is O(stations) per authored prop, ~80 of them per circuit.
+       */
       list.push({
         x: p.position.x, y, z: p.position.z,
-        yaw, side: 0, arc: 0, scale: clamp(scale, 0.15, 12), seed: this.rng.next(),
+        yaw, side: 0, arc: this.arcNearest(p.position.x, p.position.z),
+        scale: clamp(scale, 0.15, 12), seed: this.rng.next(),
         up: groundUp,
       });
+    }
+
+    // The other half of the same check: a basin with no plate is a hole in the
+    // ground with nothing in it, which is a worse artefact than either fault on
+    // its own. Cheap, and it is the only thing tying the seed-keyed basin table
+    // back to the circuit that owns it.
+    for (const b of this.field.waterBasins) {
+      if (!byType.has(b.kind === 'lake' ? 'parklake' : 'harbourwater')) {
+        console.warn(
+          `[Props] basin "${b.kind}" is carved into the terrain but this circuit`
+          + ' authors no water plate for it — an empty pit. Add the prop in'
+          + ' CityDefs.ts or drop the basin from CITY_WATER_BASINS.',
+        );
+      }
     }
 
     if (unknown.size) {
@@ -6382,6 +6623,93 @@ export class Props implements ISubsystem {
             WING * 0.5 + 0.3, 1.35, FACE + 0.5, dark, { shade: { top: 1.14 } });
         }
 
+        /**
+         * ===================================================================
+         *  THE CLEARANCE NOTE ABOVE IS ENTIRELY LATERAL, AND HALF THE PROBLEM
+         *  IS VERTICAL.
+         * ===================================================================
+         *  Two things defeat "nothing may come inside 13.4 m of the centreline
+         *  below the springing", and both were measured, not reasoned:
+         *
+         *   1. 13.60 IS THE STONE'S CENTRE, NOT ITS FACE. Each reveal block is
+         *      1.8 m wide in x, so even at the springing its inner face is at
+         *      12.70 m — already inside the 13.4 m the note reserves. And the
+         *      ring is an ARCH: by construction the stones move inboard as they
+         *      climb, to |x| = 9.53 m at the fourth of eighteen. That is not a
+         *      bug in itself. It is only safe if what is under it stays down.
+         *
+         *   2. IT DOES NOT STAY DOWN. This prop is built in a LEVEL, STRAIGHT
+         *      local frame and instanced with a single yaw. The bore it lines
+         *      is banked — 9.4 deg at bostonHarbor arc 652, 12.7 deg at
+         *      volcanoRush arc 1305 — and on volcano it is also climbing, so
+         *      the road rises both ACROSS the frame and ALONG it. At 12.7 deg
+         *      the outer asphalt edge stands 2.2 m above the springing plane
+         *      before the grade adds anything.
+         *
+         *  Measured before this change (`.probe-tmp/envelope.ts`, ultra, real
+         *  triangles against the drawn ribbon): reveal stones and the cove
+         *  strip stood 2.29-2.98 m over the tarmac and 0.21-1.24 m inside the
+         *  drawn carriageway on volcano and boston. `propfoot.ts` called the
+         *  same rows "0.66-0.80 m inside at ~2.9 m"; its depth column is
+         *  `halfWidth - |lat|` off a 2 m centreline projection and it reads
+         *  NEGATIVE on volcano — -0.44 m "outside the drivable edge" for a
+         *  vertex standing on asphalt — so neither of its numbers was the one
+         *  to fix against.
+         *
+         *  `roadTop` answers the question the note should have asked: how high
+         *  is the road, in THIS PROP'S OWN LOCAL FRAME, under a fitting at that
+         *  offset and that depth. It reads `deckFrameAt` at every authored site
+         *  and at both facings — the entrance is yawed 0 and the exit PI, so
+         *  local +z runs down-track for one and up-track for the other, and one
+         *  geometry serves both — and takes the worst. Fittings then sit no
+         *  lower than `ROAD_HEADROOM` above that. On a level, straight site it
+         *  returns the springing plane and nothing moves.
+         */
+        const tpArcs = (this.authored.get('tunnelportal') ?? []).map((an) => an.arc);
+        if (tpArcs.length === 0) {
+          // A theme can emit the type with no authored placement. Fall back to
+          // the worst station on the circuit rather than to no constraint:
+          // every guard this file has had to repair failed OPEN.
+          let worst = -1, at = 0;
+          for (const stn of this.ctx.stations) {
+            const score = stn.halfWidth * Math.abs(stn.tanBank);
+            if (score > worst) { worst = score; at = stn.s; }
+          }
+          tpArcs.push(at);
+        }
+        /**
+         * Worst road-surface height in local coordinates under a fitting whose
+         * plan footprint covers |x| in [x0, x1] at depth z. `-Infinity` when no
+         * site puts asphalt under it at all.
+         */
+        const roadTop = (x0: number, x1: number, z: number): number => {
+          let top = -Infinity;
+          for (const arc of tpArcs) {
+            const home = this.deckFrameAt(arc, _deck);
+            for (const dir of [-1, 1] as const) {
+              const f = this.deckFrameAt(arc + dir * z, _deck2);
+              // Only the part of the footprint that is over asphalt counts; the
+              // road climbs with |lat| on the rising side, so take the
+              // outermost such point.
+              const lat = Math.min(x1, f.hw);
+              if (lat <= x0) continue;
+              const bank = Math.abs(f.b.y) / Math.max(1e-6, Math.hypot(f.b.x, f.b.z));
+              top = Math.max(top, (f.p.y - home.p.y) + lat * bank);
+            }
+          }
+          return top;
+        };
+        /** Lowest permitted CENTRE for a box of half-size (hx, hy) at (cx, z). */
+        const headFloor = (cx: number, hx: number, hy: number, z: number): number => {
+          const t = roadTop(Math.max(0, Math.abs(cx) - hx), Math.abs(cx) + hx, z);
+          return t === -Infinity ? -Infinity : t + ROAD_HEADROOM + hy;
+        };
+        console.log(`[PROBE] tunnelportal arcs ${tpArcs.join(',')}  `
+          + `hw@ ${tpArcs.map((a) => this.deckFrameAt(a, _deck).hw.toFixed(2)).join(',')}  `
+          + `bank@ ${tpArcs.map((a) => { const f = this.deckFrameAt(a, _deck); return (Math.abs(f.b.y) / Math.hypot(f.b.x, f.b.z)).toFixed(3); }).join(',')}  `
+          + `floor(i=4,z=8.2) ${headFloor(-Math.cos(4 / 18 * Math.PI) * 13.60, 0.9, 0.5, 8.2).toFixed(2)}  `
+          + `design ${(Y0 + Math.sin(4 / 18 * Math.PI) * (H - 1.05)).toFixed(2)}`);
+
         // ---- 5. splayed reveal — three rings going in ---------------------
         // Horizontal radius held at 13.60 (see the CLEARANCE note); the depth
         // read comes from the z stagger plus a soffit that descends as it goes,
@@ -6393,7 +6721,7 @@ export class Props implements ISubsystem {
           for (let i = 1; i < 18; i++) {
             const a = (i / 18) * Math.PI;
             const cx = -Math.cos(a) * 13.60;
-            const cy = Y0 + Math.sin(a) * (H - drop);
+            const cy = Math.max(Y0 + Math.sin(a) * (H - drop), headFloor(cx, 0.9, 0.5, z));
             const g = Math.round(0x6f * tone);
             b.box(cx, cy, z, 0.9, 0.5, 0.55,
               (g << 16) | (Math.round(0x66 * tone) << 8) | Math.round(0x5b * tone),
@@ -6410,10 +6738,14 @@ export class Props implements ISubsystem {
         //    even when the lining beyond them is dark.
         // `Lighting.NIGHT_EMITTERS` has a `portallamp` class so these also seat
         // real point lights on any circuit whose preset wants artificial light.
+        // The cove traces the same arch as the reveal rings and reaches inboard
+        // for the same reason, so it takes the same floor. Measured at
+        // 2.42-2.98 m over the tarmac on volcano and boston before this.
         for (let i = 2; i < 17; i++) {
           const a = (i / 18) * Math.PI;
-          glow.box(-Math.cos(a) * (R - 0.55), Y0 + Math.sin(a) * (H - 0.55), 0.85,
-            0.52, 0.16, 0.3, 0xffb066);
+          const cx = -Math.cos(a) * (R - 0.55);
+          glow.box(cx, Math.max(Y0 + Math.sin(a) * (H - 0.55), headFloor(cx, 0.52, 0.16, 0.85)),
+            0.85, 0.52, 0.16, 0.3, 0xffb066);
         }
         /**
          *  HOW FAR A RIGID PROP MAY REACH DOWN A CURVING BORE — and why the
@@ -8977,18 +9309,27 @@ export class Props implements ISubsystem {
         // it takes the sky and the city glow as a reflection rather than being
         // painted blue — with a 5.5 m apron all round that buries the near seam.
         //
-        // ACROSS-ROAD half-extent 70 m, and that number is MEASURED, not chosen
-        // for looks. `.probe-tmp/citysite.ts` walks the ground on the harbour
-        // side of Hong Kong's promenade: it rises 0.09 m at lat 40, 1.53 m at
-        // 100, 5.6 m at 170 and 16.7 m at 330. So the far half of any wider
-        // plate would be underground. At 70 the far edge sits about 4 m below
-        // the natural bank, which is not a defect — that bank IS the far shore,
-        // and the towers across the water stand up it. Hong Kong Island rises
-        // straight out of the harbour, so a rising far bank is the correct read.
+        // ---- THE SIZE COMES FROM THE BASIN, NOT FROM A CONSTANT -------------
+        // It used to be a fixed 150 x 70 half-extent scaled per circuit, and the
+        // note here defended the 70 with a measurement of Hong Kong's rising
+        // ground: "the far half of any wider plate would be underground". That
+        // was true and it was the wrong conclusion — the plate was not too wide,
+        // the ground was too high, and 92.8 % of this surface was inside the
+        // hill anyway (`.probe-tmp/basin.ts`). Now the ground is carved to fit
+        // the water instead of the water trimmed to fit the ground, so the plate
+        // takes its extent from the hole: the basin's half-extents plus
+        // `BASIN_PLATE_MARGIN`, which lands the rim and its 5.5 m apron a few
+        // metres up the bank where the terrain hides them.
+        //
+        // `NX`/`NZ` stay at 20 x 10 whatever the size, so this is 408 triangles
+        // on every circuit exactly as before and §5b does not move.
+        const basin = basinFor(this.field.waterBasins, 'harbourwater');
         const b = this.builder();
         b.uvScale = 0.06;
         b.jitter = 0.06;
-        const SX = 150, SZ = 70, NX = 20, NZ = 10;
+        const SX = basin ? basin.halfAlong + BASIN_PLATE_MARGIN : 150;
+        const SZ = basin ? basin.halfAcross + BASIN_PLATE_MARGIN : 70;
+        const NX = 20, NZ = 10;
         // ---- THE SURFACE WAS A CHEQUERBOARD ---------------------------------
         // Only visible once the winding fix above put the surface on screen at
         // all. `(i + j) % 3 === 0` over a 20 x 10 grid tiles 15 x 14 m cells in
@@ -9500,14 +9841,26 @@ export class Props implements ISubsystem {
         // `city` circuit, so the lake is a prop. An irregular 17-sided outline —
         // a circle would read as a puddle — with a coped stone rim, a 4 m apron
         // under it, and the surface on the `metal` pass so it takes the sky.
-        // ACROSS-ROAD half-extent 34 m.
+        //
+        // ---- THE OUTLINE HAS TO CONTAIN ITS BASIN ---------------------------
+        // The radii used to be `30 + 9 sin + 5 sin`, i.e. 16-44 m about a fixed
+        // centre. Against a carved basin that is not good enough: anywhere the
+        // outline falls INSIDE the hole leaves carved ground below the waterline
+        // with no water on it — a dry dip in the middle of the lake, which is a
+        // worse artefact than the flat pan it replaces. So the wobble is now
+        // strictly non-negative and measured out from `hz + BASIN_PLATE_MARGIN`:
+        // every vertex is at least the margin outside the rim, and the whole
+        // basin is covered. The lake basin is authored round (`round` equal to
+        // its half-extent) so one radius answers for every bearing.
+        const basin = basinFor(this.field.waterBasins, 'parklake');
         const b = this.builder();
         b.uvScale = 0.35;
         const N = 17;
         const rimHex = 0x8f887a, rock = 0x6f6a60;
+        const base = basin ? basin.halfAcross + BASIN_PLATE_MARGIN : 30;
         const rad: number[] = [];
         for (let i = 0; i < N; i++) {
-          rad.push(30 + 9 * Math.sin(i * 1.7) + 5 * Math.sin(i * 3.1 + 1.2));
+          rad.push(base + 7 + 4 * Math.sin(i * 1.7) + 3 * Math.sin(i * 3.1 + 1.2));
         }
         const px = (i: number, k: number): number =>
           Math.cos((i % N / N) * Math.PI * 2) * rad[i % N] * k;

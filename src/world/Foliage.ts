@@ -24,7 +24,7 @@ import { Rng, clamp01 } from '@/core/MathUtils';
 import { SHADOW_LAYER } from './Lighting';
 import {
   GLSL_FIELD, GLSL_FIELD_SHADOW_LOW, GLSL_NOISE,
-  InstanceChunks, fieldUniforms, makeBark, roadVerge,
+  InstanceChunks, fieldUniforms, insideAuthoredWater, makeBark, roadVerge,
   type RoadVerge, type TerrainField, type WorldContext, type WorldTheme,
   worldFogUniforms,
 } from './WorldTextures';
@@ -1367,6 +1367,9 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
     if (Math.hypot(x - sp.x, z - sp.z) > PUSH_LIMIT) return false;
     const y = this.field.heightAt(x, z);
     if (y < this.ctx.waterLevel + 0.35) return false;
+    // The push has to respect the harbour too, or `scatterSpots`' rejection is
+    // undone one call later by a plant walked outboard into the water.
+    if (insideAuthoredWater(this.field.waterBasins, x, z, 4)) return false;
     if (this.field.slopeAt(x, z) > 0.66) return false;
     // Keep the original vertical bedding offset, which differs per recipe.
     sp.y += y - this.field.heightAt(sp.x, sp.z);
@@ -1408,6 +1411,17 @@ diffuseColor.rgb *= mix( 0.62, 1.06, clamp( vCanopyUp * 0.5 + 0.5, 0.0, 1.0 ) );
       if (this.verge(x, z).verge < KERB_W + FOLIAGE_VERGE) continue;
       const y = field.heightAt(x, z);
       if (y < this.ctx.waterLevel + 0.35) continue;
+      // ---- AND NOT IN AN AUTHORED HARBOUR ----------------------------------
+      // The line above cannot answer this. On a `city` circuit `waterLevel` is
+      // the -9 m sentinel that keeps `Water` from building a disc, so every
+      // authored basin floor is metres above it and the wet test passes over
+      // open water. Measured before this: 51 bushes, 32 trees and 18 flowers
+      // standing in Boston's harbour, and the same again on the other three.
+      // `insideAuthoredWater` is the single footprint `Props` rejects against
+      // too — see `WaterBasin` in WorldTextures.ts. Grass blades are placed on
+      // the GPU and cannot be filtered here; they are killed by the same
+      // footprint in the terrain bake's `data.r` mask instead.
+      if (insideAuthoredWater(field.waterBasins, x, z, 4)) continue;
       if (field.slopeAt(x, z) > 0.66) continue;
       const moist = field.moistureAt(x, z);
       if (rng.next() > 0.16 + moist * moistureBias * 1.5) continue;

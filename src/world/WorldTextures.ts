@@ -947,15 +947,24 @@ export const BASIN_PLATE_MARGIN = 6;
  * is sized to bury the plate's apron and nothing more. Depth buys no pixels.
  */
 export const CITY_WATER_BASINS: ReadonlyMap<number, readonly WaterBasin[]> = new Map([
-  // bostonHarbor — the inner harbour on the outside of the long right sweeper.
+  // bostonHarbor — the inner harbour, outside the long sweeper at half distance.
+  // `halfAlong` is 95 and not 120 for a measured reason: at 120 the rectangle
+  // reaches far enough round the lap to swallow 709 samples of the carriageway
+  // at t=0.579 (`.probe-tmp/basinsite.ts`). They are 4 m above the waterline, so
+  // nothing would have drowned, but a plate over a road is the exact shape of a
+  // bug this circuit set has already shipped once, and 95 avoids the argument.
   [16301, [{
-    kind: 'harbour', t: 0.500, lat: 100, halfAlong: 120, halfAcross: 62,
-    surface: -2.0, depth: 1.7, shelf: 16, rim: 30, round: 22,
+    kind: 'harbour', t: 0.500, lat: 96, halfAlong: 95, halfAcross: 60,
+    surface: -2.0, depth: 1.7, shelf: 16, rim: 32, round: 22,
   }]],
-  // taipeiCircuit — the Keelung river reach behind the night market.
+  // taipeiCircuit — the Keelung river reach behind the night market. The near
+  // rim is at lat 32 rather than out where the plate used to start, because the
+  // natural ground between road and river stands +6.0 m at lat 20 and +6.3 m at
+  // lat 30 — 3.4 m above the carriageway. That levee is why this river read as
+  // "behind a wall"; the bank fade trims it instead of leaving a blindfold.
   [41102, [{
-    kind: 'harbour', t: 0.390, lat: 105, halfAlong: 130, halfAcross: 62,
-    surface: -1.0, depth: 1.7, shelf: 16, rim: 30, round: 24,
+    kind: 'harbour', t: 0.390, lat: 96, halfAlong: 125, halfAcross: 64,
+    surface: -2.4, depth: 1.6, shelf: 16, rim: 34, round: 24,
   }]],
   // hongKongHarbour — Victoria Harbour. The far bank IS Kowloon: the natural
   // ground climbs 4 m at lat 150 to 17 m at lat 340, and the carve stops short
@@ -965,13 +974,20 @@ export const CITY_WATER_BASINS: ReadonlyMap<number, readonly WaterBasin[]> = new
     kind: 'harbour', t: 0.020, lat: 98, halfAlong: 150, halfAcross: 66,
     surface: -2.4, depth: 1.8, shelf: 18, rim: 34, round: 26,
   }]],
-  // newYorkCircuit — the East River, and the boating lake in the park.
+  // newYorkCircuit — the East River, and the boating lake in the park. The
+  // river's near rim is at lat -30: the ground there mounds to +8.98 m at lat
+  // -20 against a carriageway at +7.86, and a 9.7 m drop in the 20 m beyond it
+  // hid the water completely from the only place anyone looks at it from.
+  //
+  // The lake is authored ROUND — `round` equal to both half-extents — because
+  // the `parkLake` recipe draws a 17-gon about one centre and a rectangular
+  // basin under a polygonal plate leaves carved ground with no water on it.
   [27418, [{
-    kind: 'harbour', t: 0.550, lat: -100, halfAlong: 120, halfAcross: 58,
-    surface: -1.4, depth: 1.7, shelf: 16, rim: 30, round: 22,
+    kind: 'harbour', t: 0.550, lat: -92, halfAlong: 120, halfAcross: 62,
+    surface: -1.4, depth: 1.7, shelf: 16, rim: 34, round: 24,
   }, {
-    kind: 'lake', t: 0.360, lat: 88, halfAlong: 46, halfAcross: 40,
-    surface: -1.8, depth: 1.5, shelf: 12, rim: 22, round: 18,
+    kind: 'lake', t: 0.360, lat: 84, halfAlong: 42, halfAcross: 42,
+    surface: -2.0, depth: 1.5, shelf: 12, rim: 24, round: 42,
   }]],
 ]);
 
