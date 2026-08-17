@@ -87,6 +87,16 @@ export interface TrackLike {
 export interface ItemsLike {
   getIconAtlas?(): unknown;
   getIconUV?(item: ItemType): unknown;
+  /**
+   * The projectile currently converging on `kartId`, or null.
+   *
+   * `Projectiles.buildThreats()` recomputes this every fixed step and its own
+   * header calls it "consumed by AI + HUD warnings" — but until the rear-threat
+   * rework the HUD never read it, and guessed instead from an `item:used`
+   * event. That guess fired for rockets aimed at somebody else and stayed
+   * silent for green shells and bombs actually about to hit the player.
+   */
+  getIncomingThreat?(kartId: number): { item: ItemType; distance: number } | null;
 }
 
 export interface RendererInfoLike {

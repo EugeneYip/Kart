@@ -58,6 +58,327 @@ const MINIMAP_DESIGN_PX = 216;
 
 type ThreatKind = 'red' | 'blue' | 'none';
 
+// ===========================================================================
+// Rear-threat model
+//
+// Owner report: "the red backward arrow plus the red flashing can stay active
+// for a long stretch — if another racer simply sits behind, the screen stays
+// red." Five different situations were being collapsed into one boolean:
+//
+//   1. a racer merely BEHIND you            — ambient, barely worth a cue
+//   2. a racer CLOSING from behind          — worth a real warning
+//   3. an IMMINENT contact / overtake       — worth a strong one
+//   4. an actual INCOMING projectile        — the loudest thing on the HUD
+//   5. a threat that has already PASSED     — worth nothing at all
+//
+// The old code had no input for 1, 2, 3 or 5 whatsoever, and approximated 4
+// with "somebody behind me pressed the item button and it was a rocket" —
+// which is neither necessary (it misses green shells and bombs actually
+// converging on you, and any rocket thrown before its owner fell behind) nor
+// sufficient (a rocket locks onto the kart ahead of its thrower, which is
+// usually not you). Meanwhile `ItemSystem.getIncomingThreat()` — documented
+// as "consumed by AI + HUD warnings" — was built every frame and read by
+// nobody.
+//
+// So: escalating tiers, each with its own minimum, its own MAXIMUM, and an
+// engagement latch. The maximum is the point. Any single unchanging condition
+// — the classic tailgater — gets one brief cue and then silence until the
+// situation actually changes. A louder tier may always pre-empt a quieter one
+// instantly; that is what keeps a real shell unmissable.
+// ===========================================================================
+
+/** Which of the five cases is driving the warning. Ordered by loudness. */
+export type ThreatCause = 'none' | 'proximity' | 'closing' | 'imminent' | 'item' | 'blue';
+
+const CAUSE_RANK: Readonly<Record<ThreatCause, number>> = {
+  none: 0, proximity: 1, closing: 2, imminent: 3, item: 4, blue: 5,
+};
+
+/** The two intensities of "a kart is running you down" — one shared budget. */
+function isClosingTier(c: ThreatCause): boolean {
+  return c === 'closing' || c === 'imminent';
+}
+
+/**
+ * Tuning. Distances in metres, rates in m/s, times in seconds.
+ *
+ * The two numbers that answer the owner's complaint are `proximity.maxOn` and
+ * the engagement latch: a kart that simply sits behind you produces ONE 2.2 s
+ * low-intensity arrow and then nothing at all until it drops back past
+ * `distOff` — no vignette, ever, at any point.
+ */
+export const REAR_THREAT = {
+  proximity: {
+    /** Enter the band. */
+    distOn: 7,
+    /** Leave it — the gap is the hysteresis that stops a hovering kart strobing. */
+    distOff: 11,
+    minOn: 0.45,
+    maxOn: 2.2,
+    /** Arrow only. Proximity NEVER lights the full-screen vignette. */
+    arrow: 0.4,
+    vignette: 0,
+  },
+  closing: {
+    distOn: 16,
+    distOff: 21,
+    /** Sustained approach speed needed to call it "closing". */
+    rateOn: 3,
+    rateOff: 1.2,
+    /** How long the rate must hold before we believe it. */
+    debounce: 0.22,
+    minOn: 0.7,
+    /** Shared with `imminent` — see `isClosingTier`. */
+    maxOn: 3.5,
+    arrow: 0.82,
+    vignette: 0.42,
+  },
+  imminent: {
+    /** Seconds to contact at the current closing rate. */
+    ttc: 1.1,
+    minOn: 0.7,
+    maxOn: 3.5,
+    arrow: 1,
+    vignette: 0.72,
+  },
+  item: {
+    minOn: 1.1,
+    maxOn: 7,
+    cooldown: 0.35,
+    arrow: 1,
+    vignette: 1,
+  },
+  blue: {
+    minOn: 1.5,
+    maxOn: 8,
+    arrow: 0,
+    vignette: 1,
+  },
+  /** A projectile whose distance has grown for this long has passed us (case 5). */
+  recedeGrace: 0.3,
+  /** How long the rear must be clear before a timed-out engagement may re-arm. */
+  clearForReArm: 0.5,
+} as const;
+
+/** Everything the model needs for one frame. Pure numbers — no DOM, no THREE. */
+export interface RearThreatInput {
+  dt: number;
+  /** Metres to the nearest kart BEHIND the player. `Infinity` when none. */
+  behindDistance: number;
+  /** Positive when that kart is closing the gap, m/s. */
+  closingRate: number;
+  /** Bearing to it in player space: 0 ahead, PI behind. */
+  bearing: number;
+  /** Distance of a real inbound projectile, or `Infinity`. */
+  itemDistance: number;
+  /** That projectile is a blue shell. */
+  itemIsBlue: boolean;
+  /** The player just took a hit — every pending threat has resolved. */
+  hit: boolean;
+}
+
+export interface RearThreatOutput {
+  cause: ThreatCause;
+  /** Arrow opacity, 0 = hidden. */
+  arrow: number;
+  /** Full-screen vignette level, 0 = hidden. */
+  vignette: number;
+  /** Where to point the arrow, radians; PI is directly behind. */
+  bearing: number;
+}
+
+/**
+ * The rear-threat state machine.
+ *
+ * Deliberately free of DOM and of `THREE` so `.probe-tmp/rearwarn.ts` can drive
+ * it over a whole race and produce a timeline. `HUD` owns one instance and does
+ * nothing but feed it and paint its output.
+ */
+export class RearThreatModel {
+  private cause: ThreatCause = 'none';
+  /** Seconds the current cause has been running. */
+  private held = 0;
+  /** Set when a kart engagement times out; blocks re-arm until the rear clears. */
+  private proxLatched = false;
+  private closeLatched = false;
+  private clearFor = 0;
+  /** Debounce accumulator for the closing rate. */
+  private closingFor = 0;
+  private itemCooldown = 0;
+  private lastItemDistance = Infinity;
+  private recedingFor = 0;
+  private out: RearThreatOutput = { cause: 'none', arrow: 0, vignette: 0, bearing: Math.PI };
+
+  /** Full reset — race restart, or the HUD being torn down. */
+  reset(): void {
+    this.cause = 'none';
+    this.held = 0;
+    this.proxLatched = false;
+    this.closeLatched = false;
+    this.clearFor = 0;
+    this.closingFor = 0;
+    this.itemCooldown = 0;
+    this.lastItemDistance = Infinity;
+    this.recedingFor = 0;
+    this.out.cause = 'none';
+    this.out.arrow = 0;
+    this.out.vignette = 0;
+  }
+
+  /** Longest a given cause is allowed to hold the screen. */
+  private static maxOn(c: ThreatCause): number {
+    switch (c) {
+      case 'proximity': return REAR_THREAT.proximity.maxOn;
+      case 'closing': return REAR_THREAT.closing.maxOn;
+      case 'imminent': return REAR_THREAT.imminent.maxOn;
+      case 'item': return REAR_THREAT.item.maxOn;
+      case 'blue': return REAR_THREAT.blue.maxOn;
+      default: return Infinity;
+    }
+  }
+
+  private static minOn(c: ThreatCause): number {
+    switch (c) {
+      case 'proximity': return REAR_THREAT.proximity.minOn;
+      case 'closing': return REAR_THREAT.closing.minOn;
+      case 'imminent': return REAR_THREAT.imminent.minOn;
+      case 'item': return REAR_THREAT.item.minOn;
+      case 'blue': return REAR_THREAT.blue.minOn;
+      default: return 0;
+    }
+  }
+
+  private static levels(c: ThreatCause): { arrow: number; vignette: number } {
+    switch (c) {
+      case 'proximity': return REAR_THREAT.proximity;
+      case 'closing': return REAR_THREAT.closing;
+      case 'imminent': return REAR_THREAT.imminent;
+      case 'item': return REAR_THREAT.item;
+      case 'blue': return REAR_THREAT.blue;
+      default: return { arrow: 0, vignette: 0 };
+    }
+  }
+
+  /**
+   * What the world is offering this frame, before any timing rules. Highest
+   * (loudest) applicable case wins.
+   */
+  private candidate(i: RearThreatInput): ThreatCause {
+    // --- case 4: a real projectile is inbound -----------------------------
+    if (Number.isFinite(i.itemDistance)) {
+      // Case 5: it is getting further away every frame — it has passed.
+      if (i.itemDistance > this.lastItemDistance + 1e-3) this.recedingFor += i.dt;
+      else this.recedingFor = 0;
+      if (this.recedingFor < REAR_THREAT.recedeGrace) {
+        return i.itemIsBlue ? 'blue' : 'item';
+      }
+    } else {
+      this.recedingFor = 0;
+    }
+
+    // --- cases 1-3: the kart behind ---------------------------------------
+    const d = i.behindDistance;
+    if (!Number.isFinite(d)) { this.closingFor = 0; return 'none'; }
+
+    const cl = REAR_THREAT.closing;
+    const closingNow = i.closingRate >= cl.rateOn;
+    if (closingNow) this.closingFor += i.dt;
+    else if (i.closingRate < cl.rateOff) this.closingFor = 0;
+
+    const closeBand = this.cause === 'closing' || this.cause === 'imminent'
+      ? d <= cl.distOff : d <= cl.distOn;
+    if (closeBand && this.closingFor >= cl.debounce && !this.closeLatched) {
+      // Case 3 is case 2 with the contact about to happen.
+      const ttc = i.closingRate > 0.01 ? d / i.closingRate : Infinity;
+      return ttc <= REAR_THREAT.imminent.ttc ? 'imminent' : 'closing';
+    }
+
+    const px = REAR_THREAT.proximity;
+    const proxBand = this.cause === 'proximity' ? d <= px.distOff : d <= px.distOn;
+    if (proxBand && !this.proxLatched) return 'proximity';
+    return 'none';
+  }
+
+  step(i: RearThreatInput): RearThreatOutput {
+    if (i.hit) {
+      // A hit resolves everything that was pending; do not keep shouting about
+      // a shell that has already landed.
+      this.reset();
+      this.out.bearing = i.bearing;
+      return this.out;
+    }
+
+    if (this.itemCooldown > 0) this.itemCooldown -= i.dt;
+
+    // The rear being genuinely clear is what releases a timed-out engagement.
+    const px = REAR_THREAT.proximity;
+    if (!Number.isFinite(i.behindDistance) || i.behindDistance > px.distOff) {
+      this.clearFor += i.dt;
+      if (this.clearFor >= REAR_THREAT.clearForReArm) {
+        this.proxLatched = false;
+        this.closeLatched = false;
+      }
+    } else {
+      this.clearFor = 0;
+    }
+    // A kart that stops closing has ended its closing engagement, even if it is
+    // still sitting there — otherwise one surge latches the tier out for good.
+    if (this.closeLatched && i.closingRate < REAR_THREAT.closing.rateOff) {
+      this.closeLatched = false;
+    }
+
+    let want = this.candidate(i);
+    if (want === 'item' && this.itemCooldown > 0) want = 'none';
+
+    const rankWant = CAUSE_RANK[want];
+    const rankNow = CAUSE_RANK[this.cause];
+    // `closing` and `imminent` are two intensities of ONE event — a kart running
+    // you down. They must share a single budget, or the escalation from one to
+    // the other resets the clock and the pair holds the screen for the sum of
+    // both ceilings. That chaining is how a 5 s cap produced a measured 4.9 s
+    // vignette and a 7.1 s arrow in a 12-kart pack.
+    const sameEngagement = isClosingTier(this.cause) && isClosingTier(want);
+
+    if (rankWant > rankNow) {
+      // Escalation is always allowed and always immediate — this is the rule
+      // that keeps an incoming shell unmissable no matter what came before.
+      this.cause = want;
+      if (!sameEngagement) this.held = 0;
+    } else if (want === this.cause && this.cause !== 'none') {
+      this.held += i.dt;
+      if (this.held >= RearThreatModel.maxOn(this.cause)) {
+        // Hard ceiling. One continuous condition may not hold the screen.
+        if (this.cause === 'proximity') this.proxLatched = true;
+        if (isClosingTier(this.cause)) this.closeLatched = true;
+        if (this.cause === 'item' || this.cause === 'blue') {
+          this.itemCooldown = REAR_THREAT.item.cooldown;
+        }
+        this.cause = 'none';
+        this.held = 0;
+      }
+    } else {
+      // The condition weakened. Honour the minimum so the warning cannot
+      // flicker off one frame after it appeared, then fall to whatever is left.
+      this.held += i.dt;
+      if (this.cause === 'none' || this.held >= RearThreatModel.minOn(this.cause)) {
+        const carry = sameEngagement ? this.held : 0;
+        this.cause = want;
+        this.held = carry;
+      }
+    }
+
+    this.lastItemDistance = i.itemDistance;
+
+    const lv = RearThreatModel.levels(this.cause);
+    this.out.cause = this.cause;
+    this.out.arrow = lv.arrow;
+    this.out.vignette = lv.vignette;
+    // A projectile comes from behind; a kart gets its true bearing.
+    this.out.bearing = this.cause === 'item' || this.cause === 'blue' ? Math.PI : i.bearing;
+    return this.out;
+  }
+}
+
 interface Roulette {
   active: boolean;
   /** Seconds since the spin began. */
@@ -72,6 +393,16 @@ interface Roulette {
 }
 
 const tmpV = new THREE.Vector3();
+// Rear-threat scratch — module level so `updateWarnings()` allocates nothing.
+const relV = new THREE.Vector3();
+const fwd = new THREE.Vector3();
+const right = new THREE.Vector3();
+const rearScratch = { distance: Infinity, closing: 0, bearing: Math.PI };
+const incomingScratch = { distance: Infinity, blue: false };
+const threatInput: RearThreatInput = {
+  dt: 0, behindDistance: Infinity, closingRate: 0, bearing: Math.PI,
+  itemDistance: Infinity, itemIsBlue: false, hit: false,
+};
 
 /** Module-level so the nameplate sort allocates no closure per frame. */
 function byDistance(a: { d: number }, b: { d: number }): number { return a.d - b.d; }
@@ -265,12 +596,27 @@ export class HUD implements ISubsystem {
   // warnings
   private warnBox!: HTMLDivElement;
   private warnArrow!: HTMLDivElement;
+  private warnVignette!: HTMLDivElement;
   private warnBlue!: HTMLDivElement;
   private hitFlash!: HTMLDivElement;
   private threat: ThreatKind = 'none';
   private threatAngle = Math.PI;
+  /**
+   * Manual override deadlines, in absolute `raceTime`. These are the `warn()`
+   * channel — the dev harness and the blue-shell event — and they are fed into
+   * the model as a synthetic inbound projectile rather than painted directly,
+   * so they get the same minimum, maximum and cooldown as everything else.
+   * Cleared by `clearTimedLatches()` on `race:start`.
+   */
   private threatUntil = -1;
   private blueUntil = -1;
+  private readonly rearThreat = new RearThreatModel();
+  /** Set by `item:hit`, consumed by the next `updateWarnings`. */
+  private threatResolved = false;
+  /** What the model decided last frame — read by `.probe-tmp/rearwarn.ts`. */
+  private threatCause: ThreatCause = 'none';
+  private lastArrowLevel = '';
+  private lastVigLevel = '';
 
   // nameplates
   private platesBox!: HTMLDivElement;
@@ -453,7 +799,13 @@ export class HUD implements ISubsystem {
     // --- warnings ---------------------------------------------------------
     const warn = el('div', 'ak-warn', root);
     this.warnBox = warn;
-    el('div', 'ak-warn__vignette', warn);
+    // Two layers, not one: the outer carries the *level* (how alarmed we are)
+    // and the inner carries the pulse. One element cannot do both, because the
+    // pulse keyframes animate `opacity` and would overwrite any level set on
+    // the same element — which is why the old warning had exactly one
+    // intensity and a tailgater looked identical to a blue shell.
+    this.warnVignette = el('div', 'ak-warn__vignette', warn);
+    el('i', undefined, this.warnVignette);
     const arrow = el('div', 'ak-warn__arrow', warn);
     this.warnArrow = arrow;
     const svg = svgEl('svg', { viewBox: '0 0 100 100' }, arrow);
@@ -708,14 +1060,21 @@ export class HUD implements ISubsystem {
         return;
       }
       if (item === ItemType.BlueShell && this.lastPos === 1) {
+        // A blue shell is aimed at first place by definition, so the launch
+        // event IS the threat — no need to wait for the projectile to close.
         this.blueUntil = this.raceTime + 5.5;
         this.threat = 'blue';
-      } else if (item === ItemType.RedShell) {
+      } else if (item === ItemType.RedShell && !this.hasThreatApi()) {
+        // FALLBACK ONLY. When the item system can be asked what is actually
+        // converging on us (`getIncomingThreat`), we use that instead — this
+        // event is a poor proxy: a rocket locks onto the kart ahead of its
+        // thrower, which is usually somebody else entirely, so this warned for
+        // attacks on other people and stayed silent for green shells and bombs
+        // genuinely inbound. Kept only so a build without a wired ItemSystem
+        // still shows something.
         const src = this.findKart(kartId);
         const me = this.player();
-        if (src && me && src.progress < me.progress) {
-          this.warn('red', Math.PI, 3.2);
-        }
+        if (src && me && src.progress < me.progress) this.warn('red', Math.PI, 3.2);
       }
     }));
 
@@ -725,6 +1084,9 @@ export class HUD implements ISubsystem {
       this.threat = 'none';
       this.threatUntil = -1;
       this.blueUntil = -1;
+      // Case 5: the threat has resolved. Keeping the alarm up after the shell
+      // has already landed is the single most annoying way to be wrong.
+      this.threatResolved = true;
       // `Banana` is the Plastic Bottle — you skid on it rather than spin out.
       // The old chain also had `Lightning` -> 'ZAPPED!' and `Squid` ->
       // 'BLINDED!'; both items have been REMOVED, so those were two branches
@@ -787,15 +1149,32 @@ export class HUD implements ISubsystem {
     this.blueUntil = -1;
     this.messageHideAt = -1;
     this.countdownHideAt = -1;
+    this.threatResolved = false;
+    this.rearThreat.reset();
   }
 
   // =======================================================================
   // Public presentation hooks (also used by the dev harness)
   // =======================================================================
 
-  /** Incoming-item warning. `angle` = 0 ahead, PI behind, in player space. */
+  /**
+   * Force an incoming-item warning. `angle` = 0 ahead, PI behind, player space.
+   *
+   * This is the manual channel — the dev harness and the blue-shell launch
+   * event. It arms an override deadline which `updateWarnings()` feeds to the
+   * model as a synthetic inbound projectile, so a forced warning still obeys
+   * the same maximum on-time as a real one.
+   */
   warn(kind: ThreatKind, angle = Math.PI, seconds = 3): void {
-    if (kind === 'none') { this.threat = 'none'; this.threatUntil = -1; return; }
+    if (kind === 'none') {
+      // A full stop, not a partial one: the old version left `blueUntil` armed,
+      // so `warn('none')` could not actually turn a blue-shell alarm off.
+      this.threat = 'none';
+      this.threatUntil = -1;
+      this.blueUntil = -1;
+      this.rearThreat.reset();
+      return;
+    }
     this.threat = kind;
     this.threatAngle = angle;
     if (kind === 'blue') this.blueUntil = this.raceTime + seconds;
@@ -1031,7 +1410,7 @@ export class HUD implements ISubsystem {
     this.updateRivals(p);
 
     // --- warnings ---------------------------------------------------------
-    this.updateWarnings(p);
+    this.updateWarnings(p, dt);
 
     // --- nameplates -------------------------------------------------------
     this.updatePlates(p);
@@ -1269,22 +1648,156 @@ export class HUD implements ISubsystem {
   // Warnings
   // ---------------------------------------------------------------------
 
-  private updateWarnings(p: KartState): void {
-    if (this.threatUntil > 0 && this.raceTime > this.threatUntil && this.threat === 'red') {
-      this.threat = 'none';
+  /** Cached once: can the item system tell us what is actually inbound? */
+  private threatApi: boolean | null = null;
+
+  private hasThreatApi(): boolean {
+    if (this.threatApi === null) {
+      this.threatApi = typeof probe<unknown>(this.items, 'getIncomingThreat') === 'function';
+    }
+    return this.threatApi;
+  }
+
+  /**
+   * Distance of a genuinely inbound projectile, and whether it is a blue shell.
+   *
+   * A dropped bottle sitting on the road is not an *incoming* attack and must
+   * not raise a rear-threat alarm, so it is filtered out here; shells and bombs
+   * converging on us are exactly what the loudest tier is for.
+   */
+  private readIncoming(p: KartState): { distance: number; blue: boolean } {
+    const out = incomingScratch;
+    out.distance = Infinity;
+    out.blue = false;
+    const t = tryCall<{ item: ItemType; distance: number } | null>(
+      this.items, 'getIncomingThreat', p.id,
+    );
+    if (!t || typeof t.distance !== 'number' || !Number.isFinite(t.distance)) return out;
+    switch (t.item) {
+      case ItemType.RedShell:
+      case ItemType.TripleRedShell:
+      case ItemType.GreenShell:
+      case ItemType.TripleGreenShell:
+      case ItemType.Bomb:
+        out.distance = t.distance;
+        return out;
+      case ItemType.BlueShell:
+        out.distance = t.distance;
+        out.blue = true;
+        return out;
+      default:
+        return out;
+    }
+  }
+
+  /**
+   * Nearest kart behind the player: distance, closing rate and bearing.
+   * Writes into `rearScratch` so the per-frame path allocates nothing.
+   */
+  private readRear(p: KartState): { distance: number; closing: number; bearing: number } {
+    const out = rearScratch;
+    out.distance = Infinity;
+    out.closing = 0;
+    out.bearing = Math.PI;
+    const list = this.karts?.karts;
+    if (!list || list.length < 2) return out;
+
+    let best: KartState | null = null;
+    let bestD = Infinity;
+    for (const k of list) {
+      if (k === p || k.id === p.id) continue;
+      // "Behind" is a race-order question, not a geometry one — a kart a lap
+      // down that happens to be nearby is not chasing you.
+      if (k.progress > p.progress) continue;
+      const d = Math.sqrt(tmpV.subVectors(k.position, p.position).lengthSq());
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    if (!best || !Number.isFinite(bestD)) return out;
+
+    out.distance = bestD;
+
+    // Closing rate: the component of their velocity relative to ours along the
+    // line joining us. Differencing the distance frame to frame would work too
+    // but is far noisier, and noise here is what makes a warning strobe.
+    tmpV.subVectors(p.position, best.position);
+    if (tmpV.lengthSq() > 1e-6) {
+      tmpV.normalize();
+      relV.subVectors(best.velocity, p.velocity);
+      out.closing = relV.dot(tmpV);
+    }
+
+    // Bearing in the player's own basis. Karts face -Z, so the forward axis is
+    // -Z rotated by the player's orientation; 0 is dead ahead, PI dead astern.
+    fwd.set(0, 0, -1).applyQuaternion(p.quaternion);
+    right.set(1, 0, 0).applyQuaternion(p.quaternion);
+    tmpV.subVectors(best.position, p.position);
+    out.bearing = Math.atan2(tmpV.dot(right), tmpV.dot(fwd));
+    return out;
+  }
+
+  private updateWarnings(p: KartState, dt: number): void {
+    // --- manual override channel (`warn()`, blue-shell launch) -------------
+    if (this.threatUntil > 0 && this.raceTime > this.threatUntil) {
       this.threatUntil = -1;
+      if (this.threat === 'red') this.threat = 'none';
     }
     if (this.blueUntil > 0 && this.raceTime > this.blueUntil) {
       this.blueUntil = -1;
       if (this.threat === 'blue') this.threat = 'none';
     }
-    const red = this.threat === 'red';
-    const blue = this.threat === 'blue' || this.blueUntil > 0;
-    setClass(this.warnBox, 'ak-warn--red', red && !blue);
+
+    const rear = this.readRear(p);
+    const inc = this.readIncoming(p);
+
+    // Overrides enter as a synthetic inbound projectile so they are subject to
+    // exactly the same minimum, maximum and cooldown as a real one. Nothing
+    // gets to bypass the ceiling — that is what stopped the screen unsticking.
+    let itemDistance = inc.distance;
+    let itemIsBlue = inc.blue;
+    if (this.blueUntil > 0) { itemDistance = Math.min(itemDistance, 20); itemIsBlue = true; }
+    else if (this.threatUntil > 0) { itemDistance = Math.min(itemDistance, 20); }
+
+    threatInput.dt = dt;
+    threatInput.behindDistance = rear.distance;
+    threatInput.closingRate = rear.closing;
+    threatInput.bearing = rear.bearing;
+    threatInput.itemDistance = itemDistance;
+    threatInput.itemIsBlue = itemIsBlue;
+    threatInput.hit = this.threatResolved;
+    this.threatResolved = false;
+
+    const o = this.rearThreat.step(threatInput);
+    this.threatCause = o.cause;
+    this.threatAngle = o.bearing;
+
+    const blue = o.cause === 'blue';
+    const showArrow = o.arrow > 0.001;
+    const showVig = o.vignette > 0.001;
+
+    // The arrow and the vignette deliberately do NOT share a lifetime. The
+    // arrow is directional information and is allowed to appear on its own for
+    // mere proximity; the full-screen red is an alarm and is reserved for
+    // something actually happening to you.
+    setClass(this.warnBox, 'ak-warn--red', showVig && !blue);
     setClass(this.warnBox, 'ak-warn--blue', blue);
+    // Fast pulse for an attack, slow for a kart closing — so the two read
+    // differently at a glance instead of both being "the screen is red".
+    setClass(this.warnBox, 'ak-warn--urgent', o.cause === 'item' || o.cause === 'blue');
     setClass(this.warnBlue, 'ak-warn__blue--on', blue);
-    setClass(this.warnArrow, 'ak-warn__arrow--on', red);
-    if (red) {
+    setClass(this.warnArrow, 'ak-warn__arrow--on', showArrow);
+
+    const aStr = o.arrow.toFixed(2);
+    if (aStr !== this.lastArrowLevel) {
+      this.lastArrowLevel = aStr;
+      this.warnArrow.style.setProperty('--ak-warn-a', aStr);
+    }
+    const vStr = o.vignette.toFixed(2);
+    if (vStr !== this.lastVigLevel) {
+      this.lastVigLevel = vStr;
+      this.warnVignette.style.setProperty('--ak-warn-v', vStr);
+    }
+
+    if (showArrow) {
       const a = this.threatAngle;
       const rx = this.lastW * 0.34;
       const ry = this.lastH * 0.34;
@@ -1296,7 +1809,6 @@ export class HUD implements ISubsystem {
         this.warnArrow.style.transform = tf;
       }
     }
-    void p;
   }
 
   // ---------------------------------------------------------------------
