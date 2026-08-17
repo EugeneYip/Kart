@@ -833,6 +833,238 @@ vec3 worldLight(vec3 n, vec3 albedo, float wrapAmt, float shadowAtt){
 //  values the GPU sees. Sampling is bilinear on both sides — identical results.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+//  AUTHORED WATER BASINS — the City Series
+// ---------------------------------------------------------------------------
+
+/**
+ * A carved basin: the hole a city circuit's water sits in.
+ *
+ * WHY THIS EXISTS. The `city` theme has no global water plane and cannot have
+ * one — every level that wets a connected body also floods the carriageway (the
+ * sweep is in `bostonHarbor.waterLevel`'s note in `CityDefs.ts`). So the water
+ * is a PROP, seated on the heightfield. That worked, in the sense that the
+ * geometry existed; it did not work in the sense that anyone could see it.
+ * Measured at ultra before this change (`.probe-tmp/basin.ts`):
+ *
+ *     circuit        open water   land above water   share of an 800x450 frame
+ *                                 12 m outside it    at the best point of the lap
+ *     bostonHarbor      87.2 %         +0.14 m               0.56 %
+ *     taipeiCircuit     84.3 %         +0.77 m               0.90 %
+ *     hongKongHarbour    7.0 %         +4.32 m               1.37 %
+ *     newYork harbour   91.0 %         +0.89 m               1.27 %
+ *     newYork lake      44.6 %         +0.10 m               0.13 %
+ *
+ * Three separate faults in those two columns:
+ *
+ *  1. **No bank.** A plate seated ON the heightfield is level with the ground it
+ *     stands on, so the land 12 m outside it stands 0.10-0.89 m above the water
+ *     on four of the five. From a 4 m eye that is not a shoreline, it is a
+ *     change of material in a flat field, and it is why waves and foam would
+ *     have bought nothing: there was no silhouette for them to break.
+ *  2. **Hong Kong was buried.** Its ground rises 0.09 m at lat 40 to 16.7 m at
+ *     lat 330 — the far two thirds of a 141 m plate is inside the hill. 92.8 %
+ *     of it was under the terrain, leaving 3069 m² in fragments.
+ *  3. **Too far out to be in frame.** Boston's plate started at lat 67. The
+ *     horizontal half-FOV is 45.8°, so scenery 67 m to the side only enters the
+ *     frame once it is 65 m ahead, by which time it is 93 m away and flat on.
+ *
+ * A basin fixes all three at once and costs nothing to draw: it is a term in
+ * `naturalHeightAt`, so it is baked into the heightfield that already exists.
+ * `waterLevel` STAYS NULL — `Water.init()` still builds zero sectors, no disc,
+ * no reflection target, no extra scene pass. See `CITY_WATER_BASINS` for the
+ * one constraint that imposes.
+ *
+ * Authored in the ROAD FRAME at `t`, not in world coordinates, because that is
+ * how every other placement on these circuits is authored and it survives a
+ * spline edit. `resolveBasins()` turns it into a world-space oriented rectangle
+ * once, against the same `stations` the bake uses.
+ */
+export interface WaterBasin {
+  /** Which authored prop covers it. One basin per plate, one plate per basin. */
+  readonly kind: 'harbour' | 'lake';
+  /** Lap parameter of the centre, 0..1. */
+  readonly t: number;
+  /** Lateral offset of the centre from the centreline, m. + = driver's right. */
+  readonly lat: number;
+  /** Half-extent along the road at `t`, metres. */
+  readonly halfAlong: number;
+  /** Half-extent across the road, metres. */
+  readonly halfAcross: number;
+  /**
+   * World Y of the water surface.
+   *
+   * ABSOLUTE CONSTRAINT: no drawn road surface may ever be below this inside
+   * the plate's footprint. `.probe-tmp/basin.ts` measures it strictly — inside
+   * the ROTATED footprint, against the mesh `raycastGround` returns, at 0.5 m
+   * lateral resolution — and it must print 0. A plate above the promenade has
+   * been a real bug on this circuit set once already.
+   */
+  readonly surface: number;
+  /** Metres the basin floor sits below `surface`. */
+  readonly depth: number;
+  /** Metres inside the rim over which the floor rises to meet the shoreline. */
+  readonly shelf: number;
+  /** Metres outside the rim over which the bank climbs back to natural grade. */
+  readonly rim: number;
+  /** Corner radius, metres — a rectangle with square corners reads as a pool. */
+  readonly round: number;
+}
+
+/**
+ * How far the water PLATE overhangs its basin, metres.
+ *
+ * The plate has to end on dry land or its edge and its 5.5 m apron are visible
+ * as a step in the middle of the water. The carve puts the ground exactly at
+ * `surface` at the basin rim and climbs from there, so an overhang of a few
+ * metres lands the plate edge under the bank. This is also the footprint the
+ * scatter rejection uses: anything inside it is standing on the plate.
+ */
+export const BASIN_PLATE_MARGIN = 6;
+
+/**
+ * Every authored basin, keyed by `terrainSeed`.
+ *
+ * KEYED BY SEED, WHICH DESERVES AN EXPLANATION. `TerrainField` is handed
+ * `seed`, `extent`, `res`, `centre`, `stations`, `theme`, `waterLevel` and
+ * `amplitude` — and nothing else. It never sees the track id or the decoration
+ * hints, and the plumbing that would carry them runs through `Environment.ts`,
+ * which this agent does not own. `terrainSeed` is the only per-circuit value
+ * that reaches the bake, and it is unique across the eight circuits. The link
+ * is checked rather than trusted: `Props` logs loudly if a circuit authors a
+ * water plate with no basin, or a basin with no plate.
+ *
+ * THE ONE HARD LIMIT ON `depth`. `Water.init()` returns before building
+ * anything only while `waterLevel < field.minHeight - 3`. The `city` default
+ * for `waterLevel: null` is -9, so **the whole baked heightfield must stay
+ * above -6.00 m** or the disc, the reflection target and an extra full-scene
+ * pass all switch themselves on. Baked minima before this change were -4.04
+ * (boston), -3.20 (taipei), -4.04 (tokyo), -3.79 (hongKong), -4.36 (newYork);
+ * every floor below is inside that budget, and `.probe-tmp/basin.ts` prints the
+ * gate verdict and the sector count on every run.
+ *
+ * The floor is never seen — the plate is opaque (metalness 0.85) — so `depth`
+ * is sized to bury the plate's apron and nothing more. Depth buys no pixels.
+ */
+export const CITY_WATER_BASINS: ReadonlyMap<number, readonly WaterBasin[]> = new Map([
+  // bostonHarbor — the inner harbour on the outside of the long right sweeper.
+  [16301, [{
+    kind: 'harbour', t: 0.500, lat: 100, halfAlong: 120, halfAcross: 62,
+    surface: -2.0, depth: 1.7, shelf: 16, rim: 30, round: 22,
+  }]],
+  // taipeiCircuit — the Keelung river reach behind the night market.
+  [41102, [{
+    kind: 'harbour', t: 0.390, lat: 105, halfAlong: 130, halfAcross: 62,
+    surface: -1.0, depth: 1.7, shelf: 16, rim: 30, round: 24,
+  }]],
+  // hongKongHarbour — Victoria Harbour. The far bank IS Kowloon: the natural
+  // ground climbs 4 m at lat 150 to 17 m at lat 340, and the carve stops short
+  // of it deliberately so the towers stand up a shore that rises out of the
+  // water. That rise was the whole defect and it is now the whole composition.
+  [52807, [{
+    kind: 'harbour', t: 0.020, lat: 98, halfAlong: 150, halfAcross: 66,
+    surface: -2.4, depth: 1.8, shelf: 18, rim: 34, round: 26,
+  }]],
+  // newYorkCircuit — the East River, and the boating lake in the park.
+  [27418, [{
+    kind: 'harbour', t: 0.550, lat: -100, halfAlong: 120, halfAcross: 58,
+    surface: -1.4, depth: 1.7, shelf: 16, rim: 30, round: 22,
+  }, {
+    kind: 'lake', t: 0.360, lat: 88, halfAlong: 46, halfAcross: 40,
+    surface: -1.8, depth: 1.5, shelf: 12, rim: 22, round: 18,
+  }]],
+]);
+
+/** A `WaterBasin` with its world-space rectangle worked out. */
+export interface ResolvedBasin extends WaterBasin {
+  /** World centre. */
+  readonly cx: number;
+  readonly cz: number;
+  /** Unit vector along the road at `t` (the rectangle's local +X). */
+  readonly ux: number;
+  readonly uz: number;
+  /** Unit vector across it (local +Z), + = driver's right. */
+  readonly vx: number;
+  readonly vz: number;
+  /** Yaw for a prop whose local +X runs along the road. */
+  readonly yaw: number;
+}
+
+/**
+ * Resolve authored basins against a station list.
+ *
+ * The frame is the HORIZONTAL road frame — the station's `tx/tz` and `bx/bz` —
+ * not the banked binormal `Track.getDecorationHints()` uses. A basin is a hole
+ * in a heightfield, so its footprint is a plan-space rectangle; taking the
+ * banked binormal would tilt the rectangle out of plan and hand a large `lat`
+ * spurious altitude it has no use for.
+ */
+export function resolveBasins(
+  basins: readonly WaterBasin[], stations: PathStation[],
+): ResolvedBasin[] {
+  const out: ResolvedBasin[] = [];
+  const n = stations.length;
+  if (!n) return out;
+  const lap = stations[n - 1].s || 1;
+  for (const b of basins) {
+    // Nearest station by arc, which is what `t` means on these circuits.
+    const want = ((b.t % 1) + 1) % 1 * lap;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(stations[i].s - want);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    const s = stations[best];
+    const tl = Math.hypot(s.tx, s.tz) || 1;
+    const ux = s.tx / tl, uz = s.tz / tl;
+    const bl = Math.hypot(s.bx, s.bz) || 1;
+    const vx = s.bx / bl, vz = s.bz / bl;
+    out.push({
+      ...b,
+      cx: s.px + vx * b.lat,
+      cz: s.pz + vz * b.lat,
+      ux, uz, vx, vz,
+      // Local +X along the road. `atan2(tx, tz)` is the yaw that rotates world
+      // +X onto (tx, tz) under this project's Y-up, -Z-forward convention.
+      yaw: Math.atan2(ux, uz) - Math.PI * 0.5,
+    });
+  }
+  return out;
+}
+
+/**
+ * Signed horizontal distance from `(x, z)` to a basin's rounded rectangle:
+ * negative inside, zero on the rim, positive outside.
+ */
+export function basinDistance(b: ResolvedBasin, x: number, z: number): number {
+  const dx = x - b.cx, dz = z - b.cz;
+  const a = Math.abs(dx * b.ux + dz * b.uz) - (b.halfAlong - b.round);
+  const c = Math.abs(dx * b.vx + dz * b.vz) - (b.halfAcross - b.round);
+  const qa = a > 0 ? a : 0, qc = c > 0 ? c : 0;
+  const outside = Math.sqrt(qa * qa + qc * qc);
+  const insideD = Math.min(Math.max(a, c), 0);
+  return outside + insideD - b.round;
+}
+
+/**
+ * Is `(x, z)` under an authored water plate?
+ *
+ * THE one rejection test. `pad` is extra clearance for the width of whatever is
+ * being placed — a tower needs its footprint out of the water, not just its
+ * origin. Positions inside this are refused by `annulus()`, `roadside()`,
+ * `planStands()` and the Foliage scatter, which is every procedural placement
+ * on a city circuit; authored props (the junks, the sailboats, the buoys) are
+ * deliberately NOT filtered — a moored boat belongs in the water.
+ */
+export function insideAuthoredWater(
+  basins: readonly ResolvedBasin[], x: number, z: number, pad = 0,
+): boolean {
+  for (const b of basins) {
+    if (basinDistance(b, x, z) <= BASIN_PLATE_MARGIN + pad) return true;
+  }
+  return false;
+}
+
 export interface TerrainFieldOptions {
   seed: number;
   /** Side length of the baked square, metres. */
@@ -975,6 +1207,15 @@ export class TerrainField {
   private readonly ridgeAmp: number;
   private readonly coastDir: number;
 
+  /**
+   * Authored water basins, resolved into world rectangles. Empty on every
+   * non-`city` theme and on any city circuit with no entry in
+   * `CITY_WATER_BASINS`. Public because it is the single footprint that the
+   * plate geometry, the plate's pose and every scatter rejection all read —
+   * two copies of this rectangle would drift the day someone moved one.
+   */
+  readonly waterBasins: readonly ResolvedBasin[];
+
   constructor(opts: TerrainFieldOptions, renderer: THREE.WebGLRenderer | null) {
     this.extent = opts.extent;
     this.res = opts.res;
@@ -999,6 +1240,11 @@ export class TerrainField {
       default:        this.hillFreq = 0.0021; this.ridgeAmp = 260; break;
     }
     this.coastDir = (opts.seed % 4) * (Math.PI * 0.5) + 0.6;
+
+    // Resolved BEFORE `bake()`, because `naturalHeightAt` carves them.
+    this.waterBasins = opts.theme === 'city'
+      ? resolveBasins(CITY_WATER_BASINS.get(opts.seed) ?? [], opts.stations)
+      : [];
 
     const n = opts.res * opts.res;
     this.height = new Float32Array(n);
@@ -1098,6 +1344,34 @@ export class TerrainField {
       }
       case 'city': {
         h = h * 0.42;
+        // ---- carve the authored basins ------------------------------------
+        // The profile, as a function of the signed distance `d` to the rim:
+        //
+        //   d <= -shelf   the floor, `surface - depth`
+        //   -shelf < d< 0 rising off the floor to meet the shore
+        //   d == 0        EXACTLY `surface` — the rim IS the waterline
+        //   0 < d < rim   the bank, climbing from `surface` to natural ground
+        //   d >= rim      untouched
+        //
+        // Both ends are `smootherstep`, so value AND slope are continuous where
+        // this meets the untouched field; there is no ring of cliff at `rim`.
+        //
+        // WHY THIS CANNOT SUBMERGE THE ROAD, which is the one absolute rule
+        // here. `bake()` does not use this height under the carriageway: it
+        // blends toward `roadH - SINK`, and `roadH` comes from the stations'
+        // own `py`, which this function never touches. Inside `flatW` the blend
+        // weight is exactly 1, so the drawn road is bit-for-bit what it was. All
+        // a carve can do near a road is steepen the verge, and the blend runs
+        // over `BAND` = 30 m, which turns the deepest basin here into a 6°
+        // foreshore. The plate's own surface height is the thing that could
+        // drown a road, and that is `surface` above — measured, not assumed.
+        for (const b of this.waterBasins) {
+          const d = basinDistance(b, x, z);
+          if (d >= b.rim) continue;
+          const wIn = 1 - smootherstep(clamp01(d / b.rim));
+          const inner = b.surface - b.depth * smootherstep(clamp01(-d / b.shelf));
+          h += (inner - h) * wIn;
+        }
         break;
       }
       default: break;
@@ -1549,8 +1823,22 @@ export class TerrainField {
         // bake resolution rather than by a constant that silently stops working
         // when the tier changes `metresPerTexel` from 2.4 to 5.0.
         const grassPlateau = mHw + KERB_W + mpt;
-        const roadMask = mDist < INF
+        let roadMask = mDist < INF
           ? clamp01((grassPlateau + GRASS_RAMP - mDist) / GRASS_RAMP) : 0;
+        // ...and the same mask kills grass under an authored water plate. This
+        // channel is the ONLY gate the blade shader has: blades are placed on a
+        // GPU-side clipmap, so no CPU rejection can reach them, and a lawn
+        // growing out of Victoria Harbour is exactly as wrong as one growing out
+        // of the asphalt. Saturated across the plate's whole footprint and
+        // ramped out over `GRASS_RAMP` so the shoreline is not a hard line of
+        // blades. Bushes, trees and flowers are scattered on the CPU and are
+        // refused by `insideAuthoredWater()` instead.
+        for (const b of this.waterBasins) {
+          const bd = basinDistance(b, wx, wz);
+          if (bd >= BASIN_PLATE_MARGIN + GRASS_RAMP) continue;
+          const m = clamp01((BASIN_PLATE_MARGIN + GRASS_RAMP - bd) / GRASS_RAMP);
+          if (m > roadMask) roadMask = m;
+        }
         const ao = clamp01(1 - (blur[i] - h) * 0.085);
         const moist = clamp01(
           fbm2D(wx * 0.0034, wz * 0.0034, 4, this.seed + 1201) * 1.25 - 0.12,
