@@ -366,7 +366,18 @@ console.log('\nRED CHECKS');
     //     and demand the bisection recover it. This is the arm that makes every
     //     "0.66 m inside" number in the table mean something.
     let worstErr = 0, worstAt = 0;
-    for (const inset of [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]) {
+    // ---- THESE NUMBERS ARE DELIBERATELY OFF-GRID. -------------------------
+    // The first cut of this arm calibrated on 0.25 / 0.5 / 1 / 2 / 4 / 8 m, and
+    // `--breakdepth` — which deletes the bisection entirely and returns the
+    // coarse march's lower bound — recovered every one of them to 0.000 m and
+    // the arm PASSED. The coarse march steps 0.25 m, so every one of those
+    // insets sat exactly on a step boundary and the crippled search could not
+    // be wrong about them. A control whose test points are aligned to the grid
+    // of the thing it is testing is not a control.
+    //
+    // Off-grid, a missing bisection is off by up to a full step, which is four
+    // times the tolerance below.
+    for (const inset of [0.31, 0.57, 1.13, 2.42, 4.68, 8.09]) {
       const lat = s.halfWidth - inset;
       const x = s.position.x + s.binormal.x * lat;
       const y = s.position.y + s.binormal.y * lat;

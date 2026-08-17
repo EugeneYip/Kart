@@ -1,0 +1,64 @@
+
+tier ultra  —  visible footprint of anything whose box reaches inside the road
+ground truth: the DRAWN ribbon, nearest deck below each vertex   [--breaksoup: asphalt tag deleted]
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 7126.7 ms
+[Foliage] road-edge clearance: palm0 reach 3.7 m: moved 3, dropped 6 of 122; palm1 reach 3.4 m: moved 2, dropped 2 of 121; tree1 reach 5.8 m: moved 3, dropped 3 of 50; tree2 reach 3.9 m: moved 5, dropped 2 of 49; Bush reach 1.3 m: moved 5, dropped 2 of 608; Fern reach 0.4 m: moved 1, dropped 2 of 496; Flowers reach 0.2 m: moved 1, dropped 0 of 550
+[Props] re-seated 79 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.79 m (buoy); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 8 seated on the water plane
+[Props] portal headroom: 0 reveal/cove fittings raised to clear 3.0 m over the banked carriageway (sites at arc 736, 897)
+[Props] road-volume guard: 3 authored props pushed clear, 18 instances dropped from 35 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 106 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 62 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== sunsetCoastline ===
+  PASS  the drawn ribbon indexed                       47336 triangles
+      ribbon coverage 0.00 % of the driving surface (7945/7945 samples blind to a vertical line, longest blind run 1145 m near arc 1169-1612; 24 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 102854 vertices over 439 instances (268 culled: no ribbon under them)
+
+RED CHECKS
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 2952.2 ms
+  *** FAIL  a box ON the centreline is caught              NOT DETECTED — the audit is blind
+  PASS  the same box 6 m OUTSIDE is not                    0/8 corners flagged
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 4175.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 2734.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 3863.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 2383.8 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 2414.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 2174.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 11959.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 1072.0 ms
+  *** FAIL  a stacked carriageway exists to test against    NONE FOUND — arm (c) is vacuous
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 984.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 326.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 466.8 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 349.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1044.3 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 1452.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 562.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 2673.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 975.2 ms
+     (neonMetropolis arc 854: binormal.y 1.00, i.e. 84 deg of bank; a box 50 m horizontally out reads as lat 3.83 of halfW 10.00)
+  PASS  ...and the legacy lat test IS fooled by it         |lat| 3.83 < halfW 10.00
+  PASS  a box 50 m out on a banked section is not          0/8 by ribbon, 0/8 by the legacy ground truth
+
+FAIL: 2 failed
