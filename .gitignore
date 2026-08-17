@@ -4,3 +4,17 @@ dist
 *.log
 .probe-tmp/
 dist-track/
+
+# Editor / agent scratch. `src/world/Props.ts.bak` was sitting untracked in the
+# tree and would have been swept into the next `git add -A` — which is exactly
+# the provenance accident this project has already had three times. Ignored
+# rather than deleted: excluding a scratch copy is not the same as destroying
+# someone's work.
+*.bak
+*.orig
+*.rej
+
+# Local subpath rehearsal for GitHub Pages: `dist` copied to `served/<repo>/`
+# and served over static HTTP, which is what catches absolute-path mistakes that
+# `vite preview` at the origin root hides. Build output, never committed.
+served/

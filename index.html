@@ -5,6 +5,43 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#05070f" />
     <title>Foxy Kart</title>
+
+    <!--
+      FAVICON — inline SVG data URI. A tyre ring over the boot screen's gold,
+      legible as a mark at 16 px. A data URI rather than a file so AGENTS.md
+      rule 3 stays literally true — zero network requests, nothing to 404 — and
+      so `dist/` stays exactly four asset files.
+
+      WHAT THIS DOES AND DOES NOT FIX — measured, not assumed.
+      With no icon declared, the static subpath rehearsal logged one
+      `404 /favicon.ico` on every single page load. Browsers probe for an icon at
+      the ORIGIN ROOT, never at the page's own directory, so on Pages that request
+      is `https://<user>.github.io/favicon.ico`. That path is OUTSIDE this
+      project's published subtree: `base` cannot redirect it and no file this
+      repository ships can answer it. Only the owner's user site — the separate
+      `<user>.github.io` repository — owns that URL. So the residual 404 is
+      structurally unfixable from here, and it is harmless: it is a browser
+      convenience request for a decoration, not an app asset, and the game never
+      reads it.
+
+      Declaring the icon does reduce the probe rather than eliminate it. Measured
+      over three forced reloads of the built site: two loads made no `/favicon.ico`
+      request at all, one still did. So do NOT read a stray `404 /favicon.ico` in
+      a network panel as a deployment fault — check that the five real requests
+      (index.html + 3 JS + 1 CSS) are all 200, which is the actual contract.
+
+      The attributes are all load-bearing, and each was needed before Chrome
+      would accept the icon at all: `type="image/svg+xml"` (without it Chrome
+      does not commit to an SVG icon), explicit `width`/`height` on the <svg>
+      (a viewBox alone leaves the image intrinsically sizeless — it measured
+      150x150), and `%20` for spaces (literal spaces are not legal in a URI).
+    -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      sizes="any"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%2305070f'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='9.5'%20fill='none'%20stroke='%23ffd166'%20stroke-width='4'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='3'%20fill='%23f2901f'/%3E%3C/svg%3E"
+    />
     <!--
       ===================================================================
        BOOT SCREEN — typographic

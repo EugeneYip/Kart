@@ -1,0 +1,87 @@
+# =============================================================================
+#  Foxy Kart — build and publish to GitHub Pages
+# =============================================================================
+#  WHY ACTIONS AND NOT A gh-pages BRANCH
+#  The build is `tsc --noEmit && vite build`: a typecheck gate in front of a
+#  bundler, over ~105 TypeScript modules. Committing `dist/` to a branch would
+#  mean the published site is whatever someone last built on their laptop, with
+#  their Node, their node_modules, and the typecheck possibly skipped — and
+#  `dist/` is currently in `.gitignore`, so it would have to come back out and be
+#  re-committed on every change, producing a diff of minified bundles on every
+#  push. Actions keeps the artifact reproducible from the commit, keeps the
+#  typecheck non-optional, and keeps generated output out of history entirely.
+#
+#  WHY NO CACHE-DEPENDENCY DANCE
+#  `actions/setup-node` with `cache: npm` keys off `package-lock.json`, which is
+#  committed, so this is a one-line cache and needs no manual key.
+#
+#  NOTHING HERE FETCHES ANYTHING AT RUNTIME
+#  AGENTS.md rule 3: every texture is canvas-2D/DataTexture/noise and every model
+#  is authored TS geometry. There are no images, fonts, audio files or models to
+#  copy, no `public/` directory, and no post-build asset step. Audited: `src/`
+#  contains no `fetch`, `XMLHttpRequest`, `new Audio`, three `Loader`,
+#  `new Worker` or service worker. If that ever changes, this workflow does not
+#  need to — but the zero-404 smoke test does.
+# =============================================================================
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Lets the owner publish without pushing (e.g. re-deploy after changing a
+  # Pages setting).
+  workflow_dispatch:
+
+# The minimum the deploy-pages action needs: read the tree, write a Pages
+# deployment, and mint the OIDC token it exchanges for the upload credential.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. `cancel-in-progress: false` so an in-flight
+# publish finishes rather than leaving the site half-swapped.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 LTS. Vite 8 requires Node ^20.19 || >=22.12, so 20 would work
+      # but only on its newest patches; 22 is the current LTS, is what this was
+      # built and smoke-tested against locally (v22.15.1), and leaves headroom.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` not `npm install`: installs exactly `package-lock.json`, so the
+      # published bundle is a function of the commit and nothing else.
+      - run: npm ci
+
+      # `npm run build` is `tsc --noEmit && vite build` — the typecheck is part
+      # of the build by design, so a type error fails the deploy instead of
+      # shipping. Do not replace this with a bare `vite build`.
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      # `dist` is Vite's default `build.outDir` and is not overridden in
+      # `vite.config.ts`.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

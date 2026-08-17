@@ -1736,12 +1736,21 @@ function makeFlagAtlas(): THREE.CanvasTexture {
  *  THE GLYPHS ARE SYSTEM TEXT, AND THAT IS A DELIBERATE, VERIFIED RISK
  *  ---------------------------------------------------------------------------
  *  AGENTS.md section 3 forbids fetching a font at runtime, and nothing here
- *  does: these are drawn with `ctx.fillText` against the platform CJK stack
- *  (PingFang / Hiragino / Heiti / Microsoft JhengHei, then a generic
- *  `sans-serif` fallback). If a platform has no CJK face at all the cells draw
- *  tofu boxes rather than characters — which is why this was checked on screen
- *  in the browser and not reasoned about. The headless canvas shim rasterises
- *  nothing, so no probe in `.probe-tmp` can speak to it either way.
+ *  does: these are drawn with `ctx.fillText` against the platform CJK stack —
+ *  see `HK_FONT_STACK`, which names every Traditional-capable face that ships
+ *  with macOS, Windows, Linux and Android before falling back to generic
+ *  `sans-serif`.
+ *
+ *  A client with NO CJK face anywhere is still possible (a stripped container, a
+ *  minimal image), and rule 3 means we cannot fetch one. That case is detected
+ *  rather than hoped about: `hkGlyphSupport()` rasterises two different Han
+ *  characters and compares the bitmaps, and `glyphs()` swaps to an abstract
+ *  stroke treatment when they come back identical or blank. So the failure mode
+ *  is "signs carry ornament instead of words", never "signs carry tofu boxes".
+ *  Both branches were checked on screen in a real browser rather than reasoned
+ *  about. The headless canvas shim rasterises nothing, so no probe in
+ *  `.probe-tmp` can speak to it either way — which is exactly why the detector
+ *  has an 'unknown' verdict that keeps the shim on the text path.
  *
  *  Traditional characters throughout, because that is what Hong Kong uses and
  *  the simplified forms would read as the mainland.
@@ -1868,11 +1877,180 @@ const HK_SHOPS: readonly HkShop[] = [
   },
 ];
 
-/** The platform CJK stack. See the note above on why this is not a fetch. */
+/**
+ * The platform CJK stack. See the note above on why this is not a fetch.
+ *
+ * Deliberately long, and ordered TRADITIONAL-FIRST per platform, because this is
+ * the only thing standing between a client and tofu — the list costs nothing (a
+ * browser matches names against installed faces and loads exactly one) whereas a
+ * missing name costs the whole sign. Traditional faces lead so that the shapes a
+ * Hong Kong street actually shows win over a Simplified face that happens to
+ * cover the same codepoints.
+ *
+ *   macOS / iOS   PingFang HK|TC|SC, Hiragino Sans GB, Heiti TC|SC,
+ *                 Apple LiGothic, STHeiti
+ *   Windows       Microsoft JhengHei UI|JhengHei (ships with every SKU since
+ *                 Vista), MingLiU / PMingLiU, DFKai-SB, then the Simplified
+ *                 YaHei / SimHei / SimSun as a last Windows resort
+ *   Linux/Android Noto Sans TC|HK, Noto Sans CJK TC|HK|SC, Source Han Sans TC|HK,
+ *                 WenQuanYi Zen Hei / Micro Hei, Droid Sans Fallback,
+ *                 AR PL UMing TW
+ *   last resort   Arial Unicode MS, then generic `sans-serif`
+ *
+ * A name being absent is free; being present and unlisted is a blank sign. When
+ * in doubt, add the name.
+ */
+const HK_FONT_STACK =
+  '"PingFang HK", "PingFang TC", "PingFang SC", "Hiragino Sans GB",'
+  + ' "Heiti TC", "Heiti SC", "Apple LiGothic", "STHeiti",'
+  + ' "Microsoft JhengHei UI", "Microsoft JhengHei", "MingLiU", "PMingLiU",'
+  + ' "DFKai-SB", "Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "SimSun",'
+  + ' "Noto Sans TC", "Noto Sans HK", "Noto Sans CJK TC", "Noto Sans CJK HK",'
+  + ' "Noto Sans CJK SC", "Source Han Sans TC", "Source Han Sans HK",'
+  + ' "WenQuanYi Zen Hei", "WenQuanYi Micro Hei", "Droid Sans Fallback",'
+  + ' "AR PL UMing TW", "Arial Unicode MS", sans-serif';
+
 function hkFont(px: number): string {
-  return `700 ${Math.round(px)}px "PingFang HK", "PingFang TC", "PingFang SC",`
-    + ` "Hiragino Sans GB", "Heiti TC", "Heiti SC", "Microsoft JhengHei",`
-    + ` "Noto Sans CJK TC", sans-serif`;
+  return `700 ${Math.round(px)}px ${HK_FONT_STACK}`;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * TOFU DETECTION — because "it renders on my machine" is not a deployment test
+ * ---------------------------------------------------------------------------
+ * `HK_FONT_STACK` makes tofu unlikely, not impossible: a stripped container, a
+ * kiosk build or a minimal Linux image can have no CJK face at all, and rule 3
+ * forbids fetching one. Shipping visible boxes on every sign of the Hong Kong
+ * circuit is worse than shipping no glyphs, so the atlas measures whether the
+ * client can actually draw these characters and picks its treatment accordingly.
+ *
+ * WHY RASTERISE AND COMPARE, NOT `measureText`
+ * The obvious test — does the glyph have non-zero advance width — passes on tofu,
+ * because a notdef box IS a glyph with a width. The decisive question is whether
+ * two DIFFERENT codepoints produce the SAME picture: a font with real coverage
+ * draws 茶 and 押 differently, while a font without draws the same notdef box for
+ * both (and the same box for an unassigned Private Use codepoint that no font on
+ * earth defines). So: rasterise 茶, 押 and U+E000 into one small canvas each and
+ * compare the bitmaps.
+ *
+ * THE THIRD ANSWER IS 'unknown', AND IT MATTERS
+ * The headless canvas shim used by `.probe-tmp` rasterises nothing, so all three
+ * bitmaps come back empty and identical — which a two-valued test would read as
+ * tofu, silently swapping the artwork under every existing probe. "No ink at all"
+ * means the measurement failed, not that the font is missing, so it returns
+ * 'unknown' and the caller draws text exactly as before. A check that cannot
+ * distinguish "absent font" from "absent rasteriser" is the kind of check that
+ * cannot fail.
+ */
+type HkGlyphSupport = 'ok' | 'tofu' | 'unknown';
+
+/** Probed once per page — the answer cannot change while the document lives. */
+let hkGlyphSupportCache: HkGlyphSupport | null = null;
+
+function probeHkGlyphSupport(): HkGlyphSupport {
+  // A codepoint in the Private Use Area: unassigned by Unicode, so no font can
+  // legitimately have a glyph for it. Whatever this rasterises to IS this
+  // client's notdef picture. Written as an escape rather than a literal
+  // character so it survives every editor, diff and terminal that would eat it.
+  const NOTDEF = String.fromCharCode(0xe000);
+  const S = 40;
+
+  let ctx: CanvasRenderingContext2D | null = null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = S;
+    c.height = S;
+    ctx = c.getContext('2d', { willReadFrequently: true });
+  } catch {
+    return 'unknown';
+  }
+  if (!ctx) return 'unknown';
+
+  /**
+   * Ink mask of one character: 1 bit per pixel, plus a total ink count. `font`
+   * defaults to the real CJK stack; the control glyph passes its own so that a
+   * broken stack cannot silently invalidate the control too.
+   */
+  const raster = (ch: string, font?: string): { bits: Uint8Array; ink: number } => {
+    const g = ctx as CanvasRenderingContext2D;
+    g.clearRect(0, 0, S, S);
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, S, S);
+    g.fillStyle = '#fff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = font ?? hkFont(S * 0.72);
+    g.fillText(ch, S * 0.5, S * 0.5);
+    let data: Uint8ClampedArray;
+    try {
+      data = g.getImageData(0, 0, S, S).data;
+    } catch {
+      // A tainted or unimplemented canvas: no measurement, no verdict.
+      return { bits: new Uint8Array(0), ink: -1 };
+    }
+    const bits = new Uint8Array(S * S);
+    let ink = 0;
+    for (let i = 0; i < S * S; i++) {
+      // Red channel is enough — the text is drawn pure white on pure black.
+      const on = data[i * 4] > 96 ? 1 : 0;
+      bits[i] = on;
+      ink += on;
+    }
+    return { bits, ink };
+  };
+
+  // THE CONTROL, and the reason this check can fail at all. Measured in a real
+  // browser: Chrome/macOS draws NOTHING for a codepoint no font covers — not a
+  // box. So "zero ink" is ambiguous between "this client has no CJK face" and
+  // "this canvas does not rasterise text", and an earlier revision of this
+  // function called both of them 'unknown' and drew the text anyway. On the
+  // no-CJK client that shipped eight blank lit signs, and the tofu branch below
+  // was unreachable — a check that could only ever return 'ok'.
+  //
+  // 'A' in a plain generic family settles it: every font on every platform has
+  // it, and it deliberately does NOT use `HK_FONT_STACK`, so nothing about the
+  // CJK situation can influence it. Ink here means the rasteriser works, which
+  // makes zero ink on 茶/押 a real verdict about fonts.
+  // `ink < 0` is a tainted/unimplemented canvas, `ink === 0` a canvas that
+  // rasterises nothing. Neither says anything about fonts.
+  const ctrl = raster('A', '700 29px sans-serif');
+  if (ctrl.ink <= 0) return 'unknown';
+
+  const a = raster('茶');
+  const b = raster('押');
+  const nd = raster(NOTDEF);
+
+  // Measurement failed outright (tainted canvas).
+  if (a.ink < 0 || b.ink < 0 || nd.ink < 0) return 'unknown';
+
+  // The rasteriser works and still painted nothing for either character: this
+  // client genuinely cannot draw these glyphs.
+  if (a.ink === 0 || b.ink === 0) return 'tofu';
+
+  const same = (x: Uint8Array, y: Uint8Array): boolean => {
+    if (x.length !== y.length || x.length === 0) return false;
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  };
+
+  // Two distinct Han characters drawing the same picture means neither is a real
+  // glyph. Matching the notdef picture says the same thing more directly.
+  if (same(a.bits, b.bits)) return 'tofu';
+  if (nd.ink > 0 && (same(a.bits, nd.bits) || same(b.bits, nd.bits))) return 'tofu';
+  return 'ok';
+}
+
+function hkGlyphSupport(): HkGlyphSupport {
+  if (hkGlyphSupportCache === null) {
+    hkGlyphSupportCache = probeHkGlyphSupport();
+    if (hkGlyphSupportCache === 'tofu') {
+      console.warn(
+        '[Props] No CJK face available for the Hong Kong signage; '
+        + 'falling back to abstract sign artwork instead of drawing tofu boxes.',
+      );
+    }
+  }
+  return hkGlyphSupportCache;
 }
 
 function makeHongKongSignAtlas(): THREE.CanvasTexture {
@@ -1905,9 +2083,62 @@ function makeHongKongSignAtlas(): THREE.CanvasTexture {
     };
 
     /**
+     * The no-CJK-face treatment for ONE glyph cell: an abstract stroke cluster.
+     *
+     * Not a decorative choice — the alternative on such a client is a visible
+     * notdef box on every sign of the circuit. Three to five bars of mixed
+     * orientation, at the density and weight of Han strokes, read as dense
+     * signage typography at the 40–80 m these boards are actually seen from, and
+     * read as ornament rather than as broken text up close. Deterministic from
+     * the character's code point, so a cell is stable across rebuilds and two
+     * different shops still get two different marks.
+     *
+     * It draws into the same rect, in the same `fg`, with the same halo as the
+     * text path, so nothing downstream — uv rects, emissive pass, tube colours —
+     * can tell the difference.
+     */
+    const strokeMark = (
+      cx: number, cy: number, size: number, ch: string, fg: string,
+    ): void => {
+      // MINSTD, not a bigger LCG: 2147483646 * 16807 is 3.6e13, comfortably
+      // inside the 2^53 of an exact double, so this is reproducible rather than
+      // merely deterministic. A wider multiplier silently loses low bits here.
+      let seed = (ch.charCodeAt(0) * 7919) % 2147483646 + 1;
+      const next = (): number => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647;
+      };
+      const bars = 3 + Math.floor(next() * 3);
+      const w = Math.max(1.5, size * 0.11);
+      ctx.fillStyle = fg;
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = size * 0.22;
+      for (let b = 0; b < bars; b++) {
+        const horiz = next() < 0.62;
+        const len = size * (0.42 + next() * 0.46);
+        // Bias positions towards the cell's centre band, the way a Han glyph's
+        // strokes cluster, instead of scattering to the corners.
+        const off = (next() - 0.5) * size * 0.62;
+        const slide = (next() - 0.5) * size * 0.22;
+        if (horiz) ctx.fillRect(cx - len * 0.5 + slide, cy + off - w * 0.5, len, w);
+        else ctx.fillRect(cx + off - w * 0.5, cy - len * 0.5 + slide, w, len);
+      }
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+    };
+
+    // One probe for the whole atlas, so every cell agrees on the treatment.
+    const support = hkGlyphSupport();
+
+    /**
      * Glyphs laid out across `dir = 'x'` or down `dir = 'y'`, sized so the run
      * fills the region without touching the tube rule. A halo behind each glyph
      * is what keeps a light-on-light sign legible at 60 m.
+     *
+     * When the client has no CJK face at all (`support === 'tofu'`) the same
+     * layout is filled with `strokeMark` instead of `fillText`. 'unknown' —
+     * a canvas that could not be measured, e.g. the headless probe shim — takes
+     * the text path, which is the pre-existing behaviour.
      */
     const glyphs = (
       x: number, y: number, rw: number, rh: number,
@@ -1922,6 +2153,10 @@ function makeHongKongSignAtlas(): THREE.CanvasTexture {
         const f = (i + 0.5) / n;
         const gx = dir === 'x' ? x + rw * f : x + rw * 0.5;
         const gy = dir === 'y' ? y + rh * f : y + rh * 0.52;
+        if (support === 'tofu') {
+          strokeMark(gx, gy, px, chars[i], fg);
+          continue;
+        }
         ctx.shadowColor = 'rgba(0,0,0,0.55)';
         ctx.shadowBlur = px * 0.22;
         ctx.fillStyle = fg;
