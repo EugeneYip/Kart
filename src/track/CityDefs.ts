@@ -1751,10 +1751,13 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // number that actually matters.
       // Pose and size come from `CITY_WATER_BASINS` — see Boston's note above.
       { type: 'parkLake', t: 0.360, lat: 86, up: -2.6 },
-      // Out from lat 132 to 160: the lake plate is the basin plus the margin
-      // plus its outline wobble, and the run is 0.078 of a lap long, so at 142
-      // its far end still curved back into the water (3 elms, measured).
-      { type: 'parkTree', t: 0.392, lat: 160, step: 0.014, end: 0.470 },
+      // Out from lat 132 to 178, in three measured steps. The lake plate is the
+      // basin plus `BASIN_PLATE_MARGIN` plus its outline wobble, and this run is
+      // 0.078 of a lap long, so `lat` is measured against a DIFFERENT station at
+      // each of its six anchors: at 142 three elms were still in the water and
+      // at 160 one was. The road curves away from the lake over the run, which
+      // is why a single `lat` has to clear the worst station, not the mean.
+      { type: 'parkTree', t: 0.392, lat: 178, step: 0.014, end: 0.470 },
       { type: 'signChevron', t: 0.396, lat: -15, step: 0.006, end: 0.426 },
       { type: 'brakeBoard', t: 0.412, lat: -14 },
       { type: 'crowdStand', t: 0.372, lat: -27 },

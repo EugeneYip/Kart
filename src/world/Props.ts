@@ -2771,6 +2771,12 @@ function nightFactorFor(hintName: string | undefined): number {
  * windows and lanterns should come up a tenth at golden hour, not snap off.
  */
 const WINDOW_NIGHT_MIN = 1e-3;
+/**
+ * Night factor at or above which a water plate switches to the emissive
+ * `waterSurface` material. Measured: Taipei's `sunset` preset scores 0.1 and
+ * must stay on `metal`; `night` presets score 1.
+ */
+const WATER_EMISSIVE_NIGHT = 0.5;
 
 /** Window emissive at full night. Scaled by the night factor, not offset by it. */
 const WINDOW_EMISSIVE_NIGHT = 3.7;
@@ -3119,6 +3125,16 @@ export class Props implements ISubsystem {
    * trick the lit-window pass uses, and zero on a daylight circuit. That is one
    * extra `MeshStandardMaterial` and ZERO extra draw calls: the water plate was
    * always its own mesh. No pass, no target, no reflection.
+   *
+   * NIGHT CIRCUITS ONLY, and that gate exists because the first version applied
+   * it to all five and REGRESSED two. Metalness 0.42 with roughness 0.20 holds
+   * a broad bright specular lobe; under Taipei's low sunset sun, straight
+   * across the river from the racing line, the whole reach rendered as a flat
+   * tan plain. Sun glitter is physically what that is and it reads as dry
+   * ground. Boston at metalness 0.85 under a midday sky was already correct
+   * blue-grey water — verified in the browser before this material existed — so
+   * the day and sunset circuits keep `metal`, which was measured good, and only
+   * the circuits with nothing to reflect get the emissive.
    */
   private waterSurface!: THREE.MeshStandardMaterial;
   private glow!: THREE.MeshStandardMaterial;
@@ -3173,6 +3189,16 @@ export class Props implements ISubsystem {
     this.rng = new Rng((ctx.hints.terrainSeed ^ 0x9e3779b9) >>> 0 || 7);
     this.density = clamp(quality.foliageDensity * 0.55 + 0.45, 0.35, 1);
     this.night = nightFactorFor(ctx.hints.skyPreset);
+  }
+
+  /**
+   * Which material a water plate takes. See `waterSurface` for the measurement
+   * behind the gate. NOT `WINDOW_NIGHT_MIN` — that is 1e-3, "any darkness at
+   * all", and Taipei's sunset scores 0.1 on the same scale, which is precisely
+   * the circuit this gate has to exclude.
+   */
+  private waterMat(): THREE.MeshStandardMaterial {
+    return this.night >= WATER_EMISSIVE_NIGHT ? this.waterSurface : this.metal;
   }
 
   /** True when lit windows belong on this circuit at all. */
@@ -9404,8 +9430,8 @@ export class Props implements ISubsystem {
         // emissive on `waterSurface` is driven BY these vertex colours, so at
         // #14303e it had almost nothing to emit. Still only a 1.15x step between
         // the two so a facet reads as a change of angle, not of material.
-        const deep = this.night > 0.35 ? 0x1d3d50 : 0x14303e;
-        const shallow = this.night > 0.35 ? 0x23485d : 0x18374a;
+        const deep = this.night >= WATER_EMISSIVE_NIGHT ? 0x1d3d50 : 0x14303e;
+        const shallow = this.night >= WATER_EMISSIVE_NIGHT ? 0x23485d : 0x18374a;
         const wy = (x: number, z: number): number =>
           0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
         // WINDING. See the long note on `box()`: `quad()` derives its normal from
@@ -9452,7 +9478,9 @@ export class Props implements ISubsystem {
             apron, 0.7,
           );
         }
-        return { geo: b.build('harbourWater'), mat: this.waterSurface, cull: 2400, shadow: false };
+        return {
+          geo: b.build('harbourWater'), mat: this.waterMat(), cull: 2400, shadow: false,
+        };
       }
 
       case 'flaghk': return this.flagMast(FLAG_HK);
@@ -9974,7 +10002,7 @@ export class Props implements ISubsystem {
         }
         return {
           geo: b.build('parkLake'), metal: met.build('parkLakeWater'),
-          metalMat: this.waterSurface, cull: 900, shadow: false,
+          metalMat: this.waterMat(), cull: 900, shadow: false,
         };
       }
 
