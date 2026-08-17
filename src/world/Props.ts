@@ -1092,11 +1092,25 @@ function patchProp(
       // face reduced to the corner colour of whatever cell its seed picked.
       // `clamp` cannot do that; the callers now inset with `CELL_FULL` as well, so
       // a linear filter cannot reach into the neighbouring cell either.
+      //
+      // ---- AND THE EMISSIVE UV, WHICH IS A SECOND VARYING -------------------
+      // three declares a SEPARATE varying per texture slot (`vMapUv`,
+      // `vEmissiveMapUv`, ... — see ShaderChunk.uv_pars_vertex); they are not
+      // aliased even when both maps carry the same texture and the same
+      // transform. Remapping only `vMapUv` therefore left an `emissiveMap` on
+      // the FULL atlas while the albedo was on the instance's cell, i.e. the
+      // Hong Kong sign atlas would have lit up with all eight shops at once on
+      // every board. No material in the file had an `emissiveMap` before
+      // `hkSign`, so `USE_EMISSIVEMAP` is undefined for every other consumer of
+      // `atlas` and this block compiles out for them.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <uv_vertex>', /* glsl */ `
         #include <uv_vertex>
         #ifdef USE_MAP
           vMapUv = aAtlas.xy + clamp(vMapUv, 0.0, 1.0) * aAtlas.zw;
+        #endif
+        #ifdef USE_EMISSIVEMAP
+          vEmissiveMapUv = aAtlas.xy + clamp(vEmissiveMapUv, 0.0, 1.0) * aAtlas.zw;
         #endif
       `);
     }
@@ -1671,6 +1685,275 @@ function makeFlagAtlas(): THREE.CanvasTexture {
       cloth(x, y);
     }
   }, { srgb: true, height: 512 });
+}
+
+/**
+ * ===========================================================================
+ *  THE HONG KONG SIGN ATLAS — the one identity lever that is not a prop count
+ * ===========================================================================
+ *  Every lit sign on all five city circuits was either a BLANK coloured plate on
+ *  `this.glow` (the cantilevered boxes, the shophouse sign stacks, the ring
+ *  masts) or a Latin sponsor wordmark off `makeSponsorAtlas` (VOLT, NITRO,
+ *  TURBO, APEX). Screenshotted at the real chase pose in Hong Kong's neon canyon
+ *  at t=0.196, the row of cantilevered boxes reads as its own silhouette — you
+ *  see them recede over the street from both sides, which is exactly right — and
+ *  then every one of them is a dark grey carcass with a 1.34 x 0.82 m coloured
+ *  rectangle on it. Nothing on the circuit carries a Chinese character.
+ *
+ *  That is why the frame reads "generic neon night city": the shape is Hong Kong
+ *  and the surface is nowhere. A shop sign in Hong Kong is a saturated field of
+ *  light with three or four big characters on it, so this atlas is that, and it
+ *  is fed to the two recipes that already own the signage — `neonCantilever` and
+ *  the `neonStack` shophouse column — at no cost in prop count.
+ *
+ *  ---------------------------------------------------------------------------
+ *  LAYOUT, AND WHY THE CELL CARRIES FOUR REGIONS INSTEAD OF ONE
+ *  ---------------------------------------------------------------------------
+ *  `emit({ atlasCells })` can pick exactly ONE cell per instance — the shader
+ *  does `vMapUv = aAtlas.xy + clamp(vMapUv, 0, 1) * aAtlas.zw`, so the cell is
+ *  an instance-level choice. A cantilevered sign needs a WIDE face (the box) and
+ *  a TALL one (the blade) at once, and a shophouse column needs four small
+ *  boards that are not all the same word. Baking a cell per quad would fix that
+ *  and lose the per-instance variety, which is the thing that stops 56 signs
+ *  reading as 56 copies.
+ *
+ *  Both are available because the remap NESTS: a geometry uv that is a sub-rect
+ *  of the unit square lands on the corresponding sub-rect of whichever cell the
+ *  instance picked. So one cell is one SHOP — one name, one palette — drawn four
+ *  times at four aspect ratios, and the geometry picks the region it needs:
+ *
+ *      HK_BOX     the wide box face      1.71 : 1
+ *      HK_BLADE   the vertical blade     0.32 : 1
+ *      HK_STACK   four small boards      0.52 : 1 each
+ *      HK_FLAT    a plain lit field      for hot edges and undersides
+ *
+ *  Region rects are in CELL-LOCAL uv with v TOP-FIRST, the same convention
+ *  `atlasRect()` uses and for the same reason — see the long note on the v axis
+ *  there. `canvasTexture` leaves `flipY = true`, so cell-local
+ *  `v = 1 - canvasY / cellHeight`.
+ *
+ *  ---------------------------------------------------------------------------
+ *  THE GLYPHS ARE SYSTEM TEXT, AND THAT IS A DELIBERATE, VERIFIED RISK
+ *  ---------------------------------------------------------------------------
+ *  AGENTS.md section 3 forbids fetching a font at runtime, and nothing here
+ *  does: these are drawn with `ctx.fillText` against the platform CJK stack
+ *  (PingFang / Hiragino / Heiti / Microsoft JhengHei, then a generic
+ *  `sans-serif` fallback). If a platform has no CJK face at all the cells draw
+ *  tofu boxes rather than characters — which is why this was checked on screen
+ *  in the browser and not reasoned about. The headless canvas shim rasterises
+ *  nothing, so no probe in `.probe-tmp` can speak to it either way.
+ *
+ *  Traditional characters throughout, because that is what Hong Kong uses and
+ *  the simplified forms would read as the mainland.
+ */
+const HK_SIGN_COLS = 4;
+const HK_SIGN_ROWS = 2;
+const HK_SIGN_CELLS = HK_SIGN_COLS * HK_SIGN_ROWS;
+
+/**
+ * Cell-local uv sub-rect, `[uMin, vTop, uMax, vBot]`. Mutable, because that is
+ * what `Builder.plate`'s `uvRect` parameter is; the values are never written.
+ */
+type HkRect = [number, number, number, number];
+
+/**
+ * ONE layout, in PIXELS, and the uv rects are derived from it.
+ *
+ * The sponsor atlas carries a long note about two mechanisms addressing the same
+ * 4x2 grid and disagreeing about v for all eight cells — every board showed the
+ * artwork of the cell four along, and nothing looked broken because all eight
+ * cells were legible. That defect is only possible when the drawing code and the
+ * uv code hold separate copies of the layout, so here they do not: `hkRegion()`
+ * is the only place a rectangle is written down, and both the canvas and the
+ * geometry read it.
+ *
+ * A cell is 512 x 1024 of a 2048 x 2048 canvas. Every region is inset 4 px so a
+ * linear filter cannot reach its neighbour, and every region's aspect ratio is
+ * matched to the plate that samples it so a character is never stretched.
+ */
+const HK_CELL_W = 512;
+const HK_CELL_H = 1024;
+
+interface HkRegion {
+  /** Pixel rect within the cell: x, y (top-down), width, height. */
+  readonly px: readonly [number, number, number, number];
+  /** The same rect as cell-local uv, v top-first. See `atlasRect()`'s v note. */
+  readonly uv: HkRect;
+}
+
+function hkRegion(x: number, y: number, w: number, h: number): HkRegion {
+  return {
+    px: [x, y, w, h],
+    uv: [x / HK_CELL_W, 1 - y / HK_CELL_H, (x + w) / HK_CELL_W, 1 - (y + h) / HK_CELL_H],
+  };
+}
+
+/** The wide box face. 168:98 = 1.71, against a 2.86 x 1.72 m plate (1.66). */
+const HK_BOX = hkRegion(4, 4, 504, 292);
+/** The vertical blade. 168:526 = 0.32, against a 0.92 x 2.82 m plate (0.33). */
+const HK_BLADE = hkRegion(4, 324, 168, 526);
+/** A plain lit field, no glyph: hot tubes and the sign's underside. */
+const HK_FLAT = hkRegion(4, 900, 168, 116);
+/** Four shophouse boards. 146:282 = 0.52, against a 0.50 x 0.98 m plate (0.51). */
+const HK_STACK: readonly HkRegion[] = [
+  hkRegion(204, 324, 146, 282),
+  hkRegion(356, 324, 146, 282),
+  hkRegion(204, 612, 146, 282),
+  hkRegion(356, 612, 146, 282),
+];
+
+/**
+ * One shop: its name (across the box face), a short form (down the blade), and
+ * the one-character boards of its column. `bg` is the lit field, `fg` the glyphs.
+ *
+ * There is deliberately no per-shop tube colour here. The geometry is SHARED
+ * across every instance and the cell is not, so a hex on this record could never
+ * have reached the right instance — the hot edges sample `HK_FLAT` of the
+ * instance's own cell instead, which cannot disagree with the artwork above them.
+ */
+interface HkShop {
+  /** Across the box face, left to right. */
+  readonly name: readonly string[];
+  /** Down the vertical blade, top to bottom. */
+  readonly blade: readonly string[];
+  /** One per board of a shophouse column, top to bottom. */
+  readonly stack: readonly string[];
+  readonly bg: string;
+  readonly fg: string;
+}
+
+/**
+ * Eight shops, chosen for what a Hong Kong street actually carries rather than
+ * for what is easy to draw: a tea restaurant, a pawnbroker, a herbal-tea shop, a
+ * goldsmith, a roast-meat shop, a dispensary, a mahjong parlour and a seafood
+ * restaurant. 大押 (the pawnbroker) and 茶餐廳 are the two no other city in the
+ * game could plausibly be showing.
+ *
+ * The palettes are the ones these trades actually use — a pawnbroker's green and
+ * gold, a 茶餐廳's red — rather than eight evenly spaced hues, because a street
+ * where every sign is a different colour of the rainbow reads as a fairground.
+ */
+const HK_SHOPS: readonly HkShop[] = [
+  {
+    name: ['茶', '餐', '廳'], blade: ['冰', '室', '茶'], stack: ['奶', '茶', '菠', '蘿'],
+    bg: '#c8102e', fg: '#ffe9b0',
+  },
+  {
+    name: ['大', '押'], blade: ['當', '舖', '押'], stack: ['珠', '寶', '典', '當'],
+    bg: '#12613f', fg: '#ffe45c',
+  },
+  {
+    name: ['涼', '茶'], blade: ['龜', '苓', '膏'], stack: ['廿', '四', '味', '茶'],
+    bg: '#1b3f8f', fg: '#8ff0ff',
+  },
+  {
+    name: ['金', '行'], blade: ['足', '金', '飾'], stack: ['金', '飾', '鑽', '石'],
+    bg: '#6d1a86', fg: '#ffd23a',
+  },
+  {
+    name: ['燒', '臘'], blade: ['飯', '店', '館'], stack: ['叉', '燒', '油', '雞'],
+    bg: '#a01414', fg: '#fff0c8',
+  },
+  {
+    name: ['藥', '房'], blade: ['西', '成', '藥'], stack: ['中', '西', '成', '藥'],
+    bg: '#0d5f6e', fg: '#eafff6',
+  },
+  {
+    name: ['麻', '雀'], blade: ['娛', '樂', '館'], stack: ['雀', '館', '通', '宵'],
+    bg: '#8c1350', fg: '#ffd6ea',
+  },
+  {
+    name: ['海', '鮮', '酒', '家'], blade: ['酒', '樓', '館'], stack: ['蒸', '魚', '生', '蠔'],
+    bg: '#1c2a6b', fg: '#ffe07a',
+  },
+];
+
+/** The platform CJK stack. See the note above on why this is not a fetch. */
+function hkFont(px: number): string {
+  return `700 ${Math.round(px)}px "PingFang HK", "PingFang TC", "PingFang SC",`
+    + ` "Hiragino Sans GB", "Heiti TC", "Heiti SC", "Microsoft JhengHei",`
+    + ` "Noto Sans CJK TC", sans-serif`;
+}
+
+function makeHongKongSignAtlas(): THREE.CanvasTexture {
+  return canvasTexture(2048, (ctx, w, h) => {
+    const cw = w / HK_SIGN_COLS, ch = h / HK_SIGN_ROWS;
+    ctx.fillStyle = '#07080b';
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    /** A lit field: the sign colour, a top-down sheen and a bright inner rule. */
+    const field = (x: number, y: number, rw: number, rh: number, s: HkShop): void => {
+      ctx.fillStyle = s.bg;
+      ctx.fillRect(x, y, rw, rh);
+      const g = ctx.createLinearGradient(0, y, 0, y + rh);
+      g.addColorStop(0, 'rgba(255,255,255,0.20)');
+      g.addColorStop(0.45, 'rgba(255,255,255,0.03)');
+      g.addColorStop(1, 'rgba(0,0,0,0.22)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x, y, rw, rh);
+      // The tube rule a real box sign has round its face. Two passes, so the
+      // inner edge reads as light and not as a drawn line.
+      const inset = Math.max(3, Math.min(rw, rh) * 0.055);
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = Math.max(2, Math.min(rw, rh) * 0.030);
+      ctx.strokeRect(x + inset, y + inset, rw - inset * 2, rh - inset * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = Math.max(1.5, Math.min(rw, rh) * 0.018);
+      ctx.strokeRect(x + inset * 2.1, y + inset * 2.1, rw - inset * 4.2, rh - inset * 4.2);
+    };
+
+    /**
+     * Glyphs laid out across `dir = 'x'` or down `dir = 'y'`, sized so the run
+     * fills the region without touching the tube rule. A halo behind each glyph
+     * is what keeps a light-on-light sign legible at 60 m.
+     */
+    const glyphs = (
+      x: number, y: number, rw: number, rh: number,
+      chars: readonly string[], dir: 'x' | 'y', fg: string,
+    ): void => {
+      const n = Math.max(1, chars.length);
+      const along = dir === 'x' ? rw : rh;
+      const across = dir === 'x' ? rh : rw;
+      const px = Math.min(across * 0.68, (along / n) * 0.86);
+      ctx.font = hkFont(px);
+      for (let i = 0; i < n; i++) {
+        const f = (i + 0.5) / n;
+        const gx = dir === 'x' ? x + rw * f : x + rw * 0.5;
+        const gy = dir === 'y' ? y + rh * f : y + rh * 0.52;
+        ctx.shadowColor = 'rgba(0,0,0,0.55)';
+        ctx.shadowBlur = px * 0.22;
+        ctx.fillStyle = fg;
+        ctx.fillText(chars[i], gx, gy);
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
+      }
+    };
+
+    /** Draw one region of one cell: the lit field, then its glyph run. */
+    const region = (
+      ox: number, oy: number, r: HkRegion, s: HkShop,
+      chars: readonly string[], dir: 'x' | 'y',
+    ): void => {
+      const [x, y, rw, rh] = r.px;
+      field(ox + x, oy + y, rw, rh, s);
+      if (chars.length) glyphs(ox + x, oy + y, rw, rh, chars, dir, s.fg);
+    };
+
+    for (let i = 0; i < HK_SIGN_CELLS; i++) {
+      const s = HK_SHOPS[i % HK_SHOPS.length];
+      const ox = (i % HK_SIGN_COLS) * cw, oy = Math.floor(i / HK_SIGN_COLS) * ch;
+      region(ox, oy, HK_BOX, s, s.name, 'x');
+      region(ox, oy, HK_BLADE, s, s.blade, 'y');
+      // No glyph on the flat field: this is what the hot tubes and the sign's
+      // underside sample, and a character smeared along a 0.05 m tube is noise.
+      region(ox, oy, HK_FLAT, s, [], 'y');
+      for (let k = 0; k < HK_STACK.length; k++) {
+        region(ox, oy, HK_STACK[k], s, [s.stack[k % s.stack.length]], 'y');
+      }
+    }
+  }, { srgb: true, height: 2048 });
 }
 
 /** Chain-link alpha for catch fencing. */
@@ -2350,6 +2633,14 @@ interface AuthoredSpec {
   signCells?: number;
   /** Companion pass on the lit-window material — city blocks and towers. */
   windows?: THREE.BufferGeometry;
+  /**
+   * Companion pass on the HONG KONG SIGN atlas — see `makeHongKongSignAtlas`.
+   * Emissive artwork with a per-instance cell, so a row of 56 cantilevered signs
+   * is 8 different shops rather than 56 copies of one. Author the quads with the
+   * region rects (`HK_BOX`, `HK_BLADE`, `HK_STACK`, `HK_FLAT`), which are
+   * cell-LOCAL: the instance attribute supplies the cell offset on top.
+   */
+  hkSign?: THREE.BufferGeometry;
   cull?: number;
   shadow?: boolean;
 }
@@ -3147,6 +3438,16 @@ export class Props implements ISubsystem {
   private windowsDay!: THREE.MeshStandardMaterial;
   private atlas!: THREE.MeshStandardMaterial;
   private atlasSway!: THREE.MeshStandardMaterial;
+  /**
+   * EMISSIVE artwork on the Hong Kong sign atlas — see `makeHongKongSignAtlas`.
+   * Built lazily, in `hkSignMat()`, because it is the only material in the file
+   * that exists for one circuit: paying 2048 x 2048 of canvas on the other seven
+   * to hold a texture nothing samples is exactly the kind of cost that gets found
+   * later as "why is Boston allocating a Chinese sign atlas".
+   */
+  private hkSign: THREE.MeshStandardMaterial | null = null;
+  /** The shared detail normal, kept so a lazy material can still use it. */
+  private detail!: THREE.Texture;
   /** Cloth on the FLAG atlas — see `makeFlagAtlas`. */
   private flagSway!: THREE.MeshStandardMaterial;
   private mastSway!: THREE.MeshStandardMaterial;
@@ -3384,6 +3685,7 @@ export class Props implements ISubsystem {
     const detail = makeDetailNormal(this.quality.tier === 'low' ? 128 : 256);
     detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
     this.textures.push(detail);
+    this.detail = detail;
 
     const base = (o: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial => {
       const m = new THREE.MeshStandardMaterial({
@@ -3514,6 +3816,45 @@ export class Props implements ISubsystem {
       }),
       this.u,
     );
+  }
+
+  /**
+   * The Hong Kong sign material, built on first request and then shared.
+   *
+   * `map` AND `emissiveMap` both carry the atlas, which is what makes a sign read
+   * at both ends of the day: the albedo gives it a printed face under any key
+   * light, and the emissive makes it a light source at night. `emissiveIntensity`
+   * follows the night factor for the same reason every other emissive in this
+   * file does — a sign box blazing at 2.9 under Boston's midday sky is the
+   * defect the `windows` / `windowsDay` gate exists to prevent — but it keeps a
+   * floor, because a shop sign is lit in the daytime too.
+   *
+   * `emissive` is held at 0xffffff and NOT multiplied by the vertex colour: the
+   * artwork already carries the colour, and `emissiveVertexColor` would let a
+   * recipe's own hex darken a cell it has no business darkening. The vertex
+   * colour still modulates the ALBEDO, which is where the recipes want it.
+   */
+  private hkSignMat(): THREE.MeshStandardMaterial {
+    if (this.hkSign) return this.hkSign;
+    const tex = makeHongKongSignAtlas();
+    tex.anisotropy = this.quality.anisotropy;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    this.textures.push(tex);
+    const m = new THREE.MeshStandardMaterial({
+      name: 'prop-hk-sign',
+      vertexColors: true,
+      normalMap: this.detail,
+      normalScale: new THREE.Vector2(0.35, 0.35),
+      map: tex,
+      emissiveMap: tex,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.55 + 2.35 * this.night,
+      roughness: 0.42,
+      metalness: 0.0,
+    });
+    this.materials.push(m);
+    this.hkSign = patchProp(m, this.u, { atlas: true });
+    return this.hkSign;
   }
 
   // =========================================================================
@@ -5066,22 +5407,53 @@ export class Props implements ISubsystem {
         }
         this.emit('signStack', b.build('signStack'), this.metal, anchors, { cull: 320 });
 
-        const g = this.builder();
-        const cols = kit.id === 'midrise'
-          ? [0xff4a3a, 0xffd23a, 0x3affc8, 0xff8ad0, 0xfff3d0]
-          : [0xff2e88, 0x2ef0ff, 0xffe23a, 0x8b5cff, 0x39ff88];
-        for (let i = 0; i < 4; i++) {
-          const y = 2.2 + i * 1.28;
-          g.cell = i;
-          // The lit face of each board, both sides, plus a hot edge tube so the
-          // sign still reads when seen end-on down the street.
-          g.plate(0.9, y, 0.145, 0.5, 0.98, 0, cols[i % cols.length], { single: true });
-          g.plate(0.9, y, -0.145, 0.5, 0.98, Math.PI, cols[(i + 2) % cols.length], { single: true });
-          g.box(0.9, y + 0.3, 0, 0.3, 0.035, 0.15, cols[(i + 1) % cols.length]);
+        // ---- HONG KONG PUTS CHARACTERS ON THESE, EVERYWHERE ELSE KEEPS THE
+        //      COLOURED PLATE ---------------------------------------------------
+        // Same 32 columns, same anchors, same ONE draw call — the only change is
+        // which material the lit faces are drawn with. On `hongkong` they go on
+        // `hkSign`, whose atlas carries a Chinese character per board with a
+        // per-instance cell, so the 32 columns read as eight different shops
+        // instead of one column repeated 32 times. Everywhere else this stays
+        // exactly the blank coloured plate it has always been: Taipei's night
+        // market and Tokyo's box signage are other people's art direction and a
+        // Cantonese pawnbroker's sign has no business on either.
+        //
+        // Triangles go DOWN (40 against 64 per column): the hot edge tube was a
+        // 12-triangle box and the artwork's own tube rule does that job now.
+        if (kit.id === 'hongkong') {
+          const s = this.builder();
+          s.uvScale = 1;
+          s.jitter = 0.012;
+          for (let i = 0; i < 4; i++) {
+            const y = 2.2 + i * 1.28;
+            const r = HK_STACK[i % HK_STACK.length].uv;
+            s.plate(0.9, y, 0.145, 0.5, 0.98, 0, 0xf6f6f4, { single: true, uvRect: r });
+            s.plate(0.9, y, -0.145, 0.5, 0.98, Math.PI, 0xf6f6f4, { single: true, uvRect: r });
+            // A lit sliver on the outboard edge, so the column still reads as a
+            // stack of light seen end-on down the street.
+            s.plate(0.9 + 0.26, y, 0, 0.28, 0.98, Math.PI * 0.5, 0xf6f6f4,
+              { single: true, uvRect: HK_FLAT.uv });
+          }
+          this.emit('signStackGlow', s.build('signStackHK'), this.hkSignMat(), anchors,
+            { cull: 320, bloom: true, shadow: false, atlasCells: HK_SIGN_CELLS });
+        } else {
+          const g = this.builder();
+          const cols = kit.id === 'midrise'
+            ? [0xff4a3a, 0xffd23a, 0x3affc8, 0xff8ad0, 0xfff3d0]
+            : [0xff2e88, 0x2ef0ff, 0xffe23a, 0x8b5cff, 0x39ff88];
+          for (let i = 0; i < 4; i++) {
+            const y = 2.2 + i * 1.28;
+            g.cell = i;
+            // The lit face of each board, both sides, plus a hot edge tube so the
+            // sign still reads when seen end-on down the street.
+            g.plate(0.9, y, 0.145, 0.5, 0.98, 0, cols[i % cols.length], { single: true });
+            g.plate(0.9, y, -0.145, 0.5, 0.98, Math.PI, cols[(i + 2) % cols.length], { single: true });
+            g.box(0.9, y + 0.3, 0, 0.3, 0.035, 0.15, cols[(i + 1) % cols.length]);
+          }
+          g.cell = 0;
+          this.emit('signStackGlow', g.build('signStackGlow'), this.glow, anchors,
+            { cull: 320, bloom: true, shadow: false });
         }
-        g.cell = 0;
-        this.emit('signStackGlow', g.build('signStackGlow'), this.glow, anchors,
-          { cull: 320, bloom: true, shadow: false });
       }
     }
 
@@ -6248,6 +6620,12 @@ export class Props implements ISubsystem {
           spec.signCells
             ? { cull: spec.cull ?? CULL_MID, atlasCells: spec.signCells, shadow: false, corridor }
             : { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
+      }
+      if (spec.hkSign) {
+        this.emit(`authored:${key}:hkSign`, spec.hkSign, this.hkSignMat(), anchors, {
+          cull: spec.cull ?? CULL_MID, bloom: this.night >= WINDOW_NIGHT_MIN,
+          shadow: false, corridor, atlasCells: HK_SIGN_CELLS,
+        });
       }
       if (spec.windows) {
         // The same day/night gate as `buildCity`'s tower pass. `glassTower` and
@@ -9171,28 +9549,51 @@ export class Props implements ISubsystem {
         b.box(0, HGT - 1.55, 2.5, 1.5, 1.0, 1.05, frame, { shade: { top: 1.08 } });
         b.box(0, HGT - 2.9, 3.9, 0.62, 1.5, 0.5, frame, { shade: { top: 1.08 } });
         b.box(0, HGT - 0.12, 2.5, 1.62, 0.12, 1.15, steel, { shade: { top: 1.18 } });
-        const glow = this.builder();
-        const cols = [0xff2e5a, 0x2ef0ff, 0xffd23a, 0x39ff88, 0xff7ad0, 0xfff0c0];
-        const c0 = cols[rng.int(0, cols.length - 1)];
-        const c1 = cols[rng.int(0, cols.length - 1)];
-        glow.cell = 0;
-        // Both long faces of the box, so the sign reads coming and going, plus
-        // the underside — which is the face a kart actually drives beneath.
+        // ---- THE FACES CARRY CHINESE, AND THEY COVER THE CARCASS -------------
+        // Two findings from the same screenshot, at the real chase pose in the
+        // canyon (t = 0.196, camera 2.2 m up, the row seen down its length):
+        //
+        //  1. The lit face was 1.34 x 0.82 m on a carcass whose own face is
+        //     3.00 x 2.00 m — 18 % of it — so what you actually saw was a row of
+        //     DARK GREY BOXES with a small coloured rectangle stamped on each.
+        //     A Hong Kong box sign is a luminous surface with a frame round it,
+        //     not a panel on a box, so the faces are now 2.86 x 1.72 (82 %) and
+        //     the blade 0.92 x 2.82 against its 1.24 x 3.00 carcass.
+        //  2. There was no artwork of any kind. The whole reason this circuit
+        //     read as "generic neon night city" is that its signage was blank
+        //     coloured plates while every OTHER sign in the game was a Latin
+        //     sponsor wordmark. These now sample `makeHongKongSignAtlas` with a
+        //     per-instance cell, so the 56 signs on the lap are eight different
+        //     shops in eight palettes — 茶餐廳, 大押, 涼茶, 金行, 燒臘, 藥房,
+        //     麻雀, 海鮮酒家.
+        //
+        // The vertex colour is held near-white: `hkSign`'s map multiplies it, so
+        // anything else would tint artwork that already carries its own colour.
+        const sign = this.builder();
+        sign.uvScale = 1;
+        sign.jitter = 0.012;
+        const paper = 0xf6f6f4;
         for (const [sz, yaw] of [[1.08, 0], [-1.08, Math.PI]] as const) {
-          glow.plate(0, HGT - 1.55, 2.5 + sz, 1.34, 0.82, yaw, c0, { single: true });
+          sign.plate(0, HGT - 1.55, 2.5 + sz, 2.86, 1.72, yaw, paper,
+            { single: true, uvRect: HK_BOX.uv });
         }
-        glow.cell = 1;
-        for (const [sx, yaw] of [[0.53, Math.PI * 0.5], [-0.53, -Math.PI * 0.5]] as const) {
-          glow.plate(sx, HGT - 2.9, 3.9, 0.9, 1.3, yaw, c1, { single: true });
+        for (const [sx, yaw] of [[0.535, Math.PI * 0.5], [-0.535, -Math.PI * 0.5]] as const) {
+          sign.plate(sx, HGT - 2.9, 3.9, 0.92, 2.82, yaw, paper,
+            { single: true, uvRect: HK_BLADE.uv });
         }
-        glow.cell = 2;
-        glow.box(0, HGT - 2.6, 2.5, 1.3, 0.05, 0.9, c0);
-        // A hot tube along the leading edge: the sign still reads end-on down
-        // the length of the street, which is how you mostly see it.
-        glow.box(0, HGT - 1.55, 3.58, 1.4, 0.9, 0.05, c1);
-        glow.cell = 0;
+        // The underside — the face a kart actually drives beneath — and the two
+        // ends of the box, which are what you see obliquely coming down the
+        // street. All three take the plain lit field of the instance's OWN cell,
+        // so they are automatically the right colour for the shop above them;
+        // there is no per-instance hex a shared geometry could have carried.
+        sign.plate(0, HGT - 2.57, 2.5, 2.86, 1.96, 0, paper,
+          { single: true, pitch: Math.PI * 0.5, uvRect: HK_FLAT.uv });
+        for (const sx of [1.52, -1.52]) {
+          sign.plate(sx, HGT - 1.55, 2.5, 2.02, 1.9, sx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5,
+            paper, { single: true, uvRect: HK_FLAT.uv });
+        }
         return {
-          geo: b.build('neonCantilever'), glow: glow.build('neonCantileverGlow'),
+          geo: b.build('neonCantilever'), hkSign: sign.build('neonCantileverSign'),
           cull: 380,
         };
       }
