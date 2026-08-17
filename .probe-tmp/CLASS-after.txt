@@ -1,0 +1,217 @@
+LOOP DETECTOR — 8 circuits x 6 seeds, 3 laps, cap 400 s, 150cc
+items ON, human-in-pack ON, displacement ON, STALE-LINE sequence (AI built on the previous circuit, then track swapped)
+cluster  = 3+ touches within 10 s and 40 m
+  legacy = that test on RAW rising edges, no recovery required  <- the 0.17-0.83 number
+  CYCLE  = same test on touches merged under 0.25 s, AND >= 0.1 s of
+           reverse/realign between two contacts (a recovery that failed)
+  grind  = merged cluster, no recovery, but >= 1.5 s contact
+  brush  = merged cluster, no recovery, short contact — a cornering clip
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 748.3 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 129.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1304.3 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 173.7 ms
+  sunsetCoastline  s 12345  lgcy   0  CYC   0  grd   0  brsh   0  eps    0  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   3  bigOff   0  maxOff 0.9s  worst capy/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 445.3 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 146.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 852.7 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 32.9 ms
+  sunsetCoastline  s   777  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   2  bigOff   0  maxOff 0.8s  worst zephyr/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 777.2 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 41.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 255.5 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 78.1 ms
+  sunsetCoastline  s  4242  lgcy   0  CYC   0  grd   0  brsh   0  eps    0  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   5  bigOff   0  maxOff 0.4s  worst capy/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 3486.9 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 223.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1152.4 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 195.5 ms
+  sunsetCoastline  s    99  lgcy   0  CYC   0  grd   0  brsh   0  eps    0  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   4  bigOff   0  maxOff 1.3s  worst capy/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 1839.6 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 357.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1274.0 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 47.6 ms
+  sunsetCoastline  s 31337  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   9  bigOff   0  maxOff 0.9s  worst vex/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 164.3 ms
+[AI] racing line: 600 stations, 1515.2 m (centre 1582.7 m), v 19.5–36.0 m/s, barrier clearance >= 4.82 m, built in 13.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 203.2 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 18.5 ms
+  sunsetCoastline  s20260816  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp  10  bigOff   2  maxOff 1.6s  worst pip/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 355.8 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 102.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 386.4 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 87.2 ms
+  neonMetropolis   s 12345  lgcy   1  CYC   0  grd   0  brsh   0  eps    9  cSec    1.0  pins   0  stalls   0  noFin  0  resp   0  offEp  17  bigOff   1  maxOff 1.7s  worst zephyr/0.5s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 256.9 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 52.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 316.3 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 17.8 ms
+  neonMetropolis   s   777  lgcy   0  CYC   0  grd   0  brsh   0  eps    2  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   5  bigOff   0  maxOff 1.2s  worst strata/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 223.8 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 23.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 119.0 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 42.0 ms
+  neonMetropolis   s  4242  lgcy   0  CYC   0  grd   0  brsh   0  eps    3  cSec    0.8  pins   0  stalls   0  noFin  0  resp   0  offEp   4  bigOff   0  maxOff 1.2s  worst nova/0.6s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 670.4 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 78.3 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 197.2 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 51.8 ms
+  neonMetropolis   s    99  lgcy   1  CYC   0  grd   0  brsh   0  eps    6  cSec    0.4  pins   0  stalls   0  noFin  0  resp   0  offEp   7  bigOff   0  maxOff 1.2s  worst pip/0.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 169.5 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 36.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 111.5 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 33.7 ms
+  neonMetropolis   s 31337  lgcy   0  CYC   0  grd   0  brsh   0  eps    5  cSec    0.4  pins   0  stalls   0  noFin  0  resp   0  offEp  15  bigOff   0  maxOff 1.3s  worst nova/0.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 204.6 ms
+[AI] racing line: 600 stations, 1544.1 m (centre 1612.9 m), v 17.2–36.0 m/s, barrier clearance >= 5.22 m, built in 17.3 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 270.1 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 223.3 ms
+  neonMetropolis   s20260816  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   4  bigOff   0  maxOff 0.6s  worst capy/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 141.7 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 18.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 422.5 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 21.0 ms
+  volcanoRush      s 12345  lgcy   0  CYC   0  grd   0  brsh   0  eps    4  cSec    0.7  pins   0  stalls   0  noFin  0  resp   0  offEp  27  bigOff   2  maxOff 2.1s  worst blitz/0.4s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 270.6 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 22.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 362.7 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 242.9 ms
+  volcanoRush      s   777  lgcy   0  CYC   0  grd   0  brsh   0  eps    6  cSec    0.4  pins   0  stalls   0  noFin  0  resp   0  offEp  38  bigOff   4  maxOff 2.0s  worst zephyr/0.3s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 7374.9 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 232.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1369.9 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 20.9 ms
+  volcanoRush      s  4242  lgcy   1  CYC   0  grd   0  brsh   0  eps   15  cSec    2.4  pins   1  stalls   0  noFin  0  resp   0  offEp  41  bigOff   3  maxOff 5.0s  worst zephyr/1.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 298.5 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 43.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 399.3 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 230.9 ms
+  volcanoRush      s    99  lgcy   0  CYC   0  grd   0  brsh   0  eps    8  cSec    0.3  pins   0  stalls   0  noFin  0  resp   0  offEp  39  bigOff   2  maxOff 1.7s  worst nova/0.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 481.1 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 115.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 522.9 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 300.1 ms
+  volcanoRush      s 31337  lgcy   4  CYC   0  grd   0  brsh   0  eps   24  cSec    1.2  pins   0  stalls   0  noFin  0  resp   0  offEp  41  bigOff   4  maxOff 2.1s  worst zephyr/0.5s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 2371.9 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 341.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 2914.4 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 53.6 ms
+  volcanoRush      s20260816  lgcy   0  CYC   0  grd   0  brsh   0  eps    4  cSec    0.5  pins   0  stalls   0  noFin  0  resp   0  offEp  33  bigOff   7  maxOff 2.6s  worst capy/0.3s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 172.4 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 21.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 113.2 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 17.9 ms
+  bostonHarbor     s 12345  lgcy   0  CYC   0  grd   0  brsh   0  eps    2  cSec    0.2  pins   0  stalls   0  noFin  0  resp   0  offEp  12  bigOff   0  maxOff 1.5s  worst skid/0.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 143.3 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 18.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 105.5 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 69.8 ms
+  bostonHarbor     s   777  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   5  bigOff   0  maxOff 0.8s  worst ember/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 137.8 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 16.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 89.1 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 18.1 ms
+  bostonHarbor     s  4242  lgcy   1  CYC   0  grd   0  brsh   0  eps    3  cSec    0.2  pins   0  stalls   0  noFin  0  resp   0  offEp   4  bigOff   0  maxOff 0.8s  worst blitz/0.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 309.2 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 62.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 194.9 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 209.6 ms
+  bostonHarbor     s    99  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.1  pins   0  stalls   0  noFin  0  resp   0  offEp   5  bigOff   0  maxOff 1.2s  worst capy/0.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 184.0 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 18.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 117.4 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 98.1 ms
+  bostonHarbor     s 31337  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   7  bigOff   0  maxOff 1.4s  worst zephyr/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 146.0 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 16.6 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 121.4 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 46.4 ms
+  bostonHarbor     s20260816  lgcy   0  CYC   0  grd   0  brsh   0  eps    2  cSec    0.0  pins   0  stalls   0  noFin  0  resp   0  offEp   4  bigOff   0  maxOff 1.3s  worst blitz/0.0s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 1260.7 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 367.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 321.0 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 304.9 ms
+  taipeiCircuit    s 12345  lgcy   0  CYC   0  grd   0  brsh   0  eps    1  cSec    0.1  pins   0  stalls   0  noFin  0  resp   0  offEp   8  bigOff   1  maxOff 1.5s  worst capy/0.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 259.6 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 33.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 199.1 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 17.4 ms
+  taipeiCircuit    s   777  lgcy   1  CYC   0  grd   0  brsh   0  eps    6  cSec    0.9  pins   0  stalls   0  noFin  0  resp   0  offEp  11  bigOff   3  maxOff 2.4s  worst pip/0.5s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 307.1 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 33.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 748.9 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 146.5 ms
+  taipeiCircuit    s  4242  lgcy   0  CYC   0  grd   0  brsh   0  eps    3  cSec    0.1  pins   0  stalls   0  noFin  0  resp   0  offEp   9  bigOff   0  maxOff 1.4s  worst skid/0.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 165.3 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 19.4 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 169.4 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 18.0 ms
+  taipeiCircuit    s    99  lgcy   0  CYC   0  grd   0  brsh   0  eps    5  cSec    0.9  pins   0  stalls   0  noFin  0  resp   0  offEp  11  bigOff   8  maxOff 2.0s  worst pip/0.3s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 382.1 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 31.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 191.9 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 242.5 ms
+  taipeiCircuit    s 31337  lgcy   0  CYC   0  grd   0  brsh   0  eps    2  cSec    0.2  pins   0  stalls   0  noFin  0  resp   0  offEp   9  bigOff   1  maxOff 2.1s  worst capy/0.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 2043.0 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 133.5 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1852.4 ms

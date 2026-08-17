@@ -1,0 +1,32 @@
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 2796.3 ms
+[AI] racing line: 600 stations, 1490.8 m (centre 1549.3 m), v 20.6–36.0 m/s, barrier clearance >= 4.45 m, built in 278.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1321.5 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 164.3 ms
+
+volcanoRush seed 31337 — RACE arm, kart 2 (nova)
+  raw contact episodes : 11
+  after merging <0.25 s : 2 touches
+  legacy loops         : 4
+  cycles/grinds/brushes: 0/0/0
+
+RAW EPISODES (t0, dur, gap-to-previous-end, arc):
+  t   41.358  dur 0.008  gap    -          arc  1051 m  mode race
+  t   41.425  dur 0.008  gap  0.058 MERGE  arc  1052 m  mode race
+  t   41.450  dur 0.033  gap  0.017 MERGE  arc  1053 m  mode race
+  t   41.492  dur 0.008  gap  0.008 MERGE  arc  1054 m  mode race
+  t   41.508  dur 0.008  gap  0.008 MERGE  arc  1055 m  mode race
+  t   41.542  dur 0.008  gap  0.025 MERGE  arc  1055 m  mode race
+  t   41.617  dur 0.008  gap  0.067 MERGE  arc  1057 m  mode race
+  t   41.642  dur 0.125  gap  0.017 MERGE  arc  1058 m  mode race
+  t  135.483  dur 0.017  gap 93.717        arc   556 m  mode race
+  t  135.642  dur 0.017  gap  0.142 MERGE  arc   559 m  mode race
+  t  135.767  dur 0.125  gap  0.108 MERGE  arc   561 m  mode race
+
+MERGED TOUCHES (t0, dur, raw folded in, arc):
+  t   41.358  dur 0.208  raw   8  arc  1051 m
+  t  135.483  dur 0.158  raw   3  arc   556 m
+
+clusters from merged touches: 0
+longest run of merged touches inside 10 s and 40 m: 1 starting t 41.36 arc 1051 m

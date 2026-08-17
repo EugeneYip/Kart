@@ -1,0 +1,47 @@
+LOOP DETECTOR — 2 circuits x 2 seeds, 3 laps, cap 260 s, 150cc
+items ON, human-in-pack ON, displacement off, BRUSH MIRROR (kart 5 grazed along barrier, peeled off the instant it touches)
+cluster  = 3+ touches within 10 s and 40 m
+  legacy = that test on RAW rising edges, no recovery required  <- the 0.17-0.83 number
+  CYCLE  = same test on touches merged under 0.25 s, AND >= 0.1 s of
+           reverse/realign between two contacts (a recovery that failed)
+  grind  = merged cluster, no recovery, but >= 1.5 s contact
+  brush  = merged cluster, no recovery, short contact — a cornering clip
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1010.3 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 273.9 ms
+  volcanoRush      s 12345  lgcy   5  CYC   0  grd   0  brsh   0  eps   41  cSec    5.4  pins   0  stalls   0  noFin  0  resp   0  offEp  40  bigOff  13  maxOff 2.7s  worst torque/5.3s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 569.1 ms
+[AI] racing line: 600 stations, 1429.9 m (centre 1536.2 m), v 14.4–36.0 m/s, barrier clearance >= 3.38 m, built in 97.5 ms
+  volcanoRush      s   777  lgcy   7  CYC   0  grd   0  brsh   0  eps   52  cSec    4.1  pins   0  stalls   0  noFin  0  resp   0  offEp  40  bigOff   7  maxOff 3.7s  worst torque/3.2s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 389.4 ms
+[AI] racing line: 600 stations, 1520.5 m (centre 1585.9 m), v 22.9–36.0 m/s, barrier clearance >= 5.62 m, built in 86.6 ms
+  hongKongHarbour  s 12345  lgcy  10  CYC   0  grd   0  brsh   0  eps   58  cSec    4.1  pins   0  stalls   0  noFin  0  resp   0  offEp  25  bigOff  11  maxOff 3.0s  worst torque/4.1s
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 168.2 ms
+[AI] racing line: 600 stations, 1520.5 m (centre 1585.9 m), v 22.9–36.0 m/s, barrier clearance >= 5.62 m, built in 289.3 ms
+  hongKongHarbour  s   777  lgcy   9  CYC   0  grd   0  brsh   0  eps   52  cSec    3.4  pins   0  stalls   0  noFin  0  resp   0  offEp  25  bigOff   9  maxOff 1.7s  worst torque/3.4s
+
+
+================ SUMMARY (per race, AI field only) ================
+circuit           runs  legacy  CYCLE  grind  brush cycKt loopKt worstLoop  where                    pins stalls  cSec longest  eps  noFin resp recEnt  offT offEp bigOff maxOff
+volcanoRush          2   6.00   0.00   0.00   0.00  0.00   0.00         0  -                         0.0    0.0   4.7     0.9  46.5     0  0.0    4.0  38.8  40.0   10.0    3.7
+hongKongHarbour      2   9.50   0.00   0.00   0.00  0.00   0.00         0  -                         0.0    0.0   3.7     0.8  55.0     0  0.0    0.5  26.0  25.0   10.0    3.0
+
+FAILED-RECOVERY CYCLE CENSUS: EMPTY — no NPC hit a barrier, failed a recovery and hit it again in any run.
+
+GRIND CENSUS: empty.
+
+BRUSH CENSUS (not the reported defect): empty.
+
+================ VERDICT over 4 races ================
+  legacy loops (raw edges, no recovery test) : 31  (7.75 per race)
+  FAILED-RECOVERY CYCLES                     : 0  (0.00 per race)
+  grinds (heavy, no recovery attempted)      : 0  (0.00 per race)
+  cornering brushes                          : 0  (0.00 per race)
+  pins (continuous contact >= 1.0 s)         : 0
+  stalls (2.5 s of contact in any 8 s)       : 0
+  longest single contact, any kart, any race : 0.88 s
+  recovery entries / retries / respawns      : 9 / 0 / 0

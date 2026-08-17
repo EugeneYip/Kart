@@ -1,0 +1,37 @@
+LOOP DETECTOR — 1 circuits x 1 seeds, 3 laps, cap 400 s, 150cc
+items ON, human-in-pack ON, displacement ON, STALE-LINE sequence (AI built on the previous circuit, then track swapped)
+cluster  = 3+ touches within 10 s and 40 m
+  legacy = that test on RAW rising edges, no recovery required  <- the 0.17-0.83 number
+  CYCLE  = same test on touches merged under 0.25 s, AND >= 0.1 s of
+           reverse/realign between two contacts (a recovery that failed)
+  grind  = merged cluster, no recovery, but >= 1.5 s contact
+  brush  = merged cluster, no recovery, short contact — a cornering clip
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 757.8 ms
+[AI] racing line: 600 stations, 1563.6 m (centre 1630.8 m), v 25.4–36.0 m/s, barrier clearance >= 4.82 m, built in 351.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1231.0 ms
+[AI] racing line: 600 stations, 1528.2 m (centre 1597.8 m), v 25.8–36.0 m/s, barrier clearance >= 5.62 m, built in 130.4 ms
+  taipeiCircuit    s20260816  lgcy   0  CYC   0  grd   0  brsh   0  eps    3  cSec    0.5  pins   0  stalls   0  noFin  0  resp   0  offEp  14  bigOff   3  maxOff 2.0s  worst strata/0.3s
+
+
+================ SUMMARY (per race, AI field only) ================
+circuit           runs  legacy  CYCLE  grind  brush cycKt loopKt worstLoop  where                    pins stalls  cSec longest  eps  noFin resp recEnt  offT offEp bigOff maxOff
+taipeiCircuit        1   0.00   0.00   0.00   0.00  0.00   0.00         0  -                         0.0    0.0   0.5     0.2   3.0     0  0.0    0.0   9.0  14.0    3.0    2.0
+
+FAILED-RECOVERY CYCLE CENSUS: EMPTY — no NPC hit a barrier, failed a recovery and hit it again in any run.
+
+GRIND CENSUS: empty.
+
+BRUSH CENSUS (not the reported defect): empty.
+
+================ VERDICT over 1 races ================
+  legacy loops (raw edges, no recovery test) : 0  (0.00 per race)
+  FAILED-RECOVERY CYCLES                     : 0  (0.00 per race)
+  grinds (heavy, no recovery attempted)      : 0  (0.00 per race)
+  cornering brushes                          : 0  (0.00 per race)
+  pins (continuous contact >= 1.0 s)         : 0
+  stalls (2.5 s of contact in any 8 s)       : 0
+  longest single contact, any kart, any race : 0.24 s
+  recovery entries / retries / respawns      : 0 / 0 / 0

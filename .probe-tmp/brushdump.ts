@@ -1,33 +1,52 @@
 /**
- * Why does the brush arm produce N legacy loops but no clusters at all?
+ * Why does a run report N legacy loops but no refined clusters at all?
  *
- * Prints kart 5's raw contact timeline and what `mergeChatter` does to it, so
+ * Prints one kart's raw contact timeline and what `mergeChatter` does to it, so
  * "the refined classifier found nothing" can be checked against "there was
  * nothing there but chatter" rather than assumed.
  *
- *   node src/dev/node-run.mjs .probe-tmp/brushdump.ts <track> <seed> <flags>
- *   flags: red | brush
+ *   node src/dev/node-run.mjs .probe-tmp/brushdump.ts <track> <seed> <mode>
+ *   mode: brush | red | race
+ *
+ * `race` is the ordinary green configuration the certification table was
+ * measured in — displacement on, stale-line sequence, no control arm — and
+ * dumps whichever AI kart had the most contacts.
  */
 import { runLoopRace, mergeChatter, scanLoops, EP_MERGE_GAP } from './loopdet';
+import { TRACK_IDS } from '@/dev/headless';
 
 const trackId = process.argv[3] ?? 'hongKongHarbour';
 const seed = Number(process.argv[4] ?? 12345);
 const mode = process.argv[5] ?? 'brush';
+const prevOf = (id: string): string => {
+  const i = TRACK_IDS.indexOf(id);
+  return TRACK_IDS[(i - 1 + TRACK_IDS.length) % TRACK_IDS.length];
+};
 
 const r = await runLoopRace({
   trackId,
   seed,
   targetLaps: 3,
-  capSeconds: 260,
+  capSeconds: mode === 'race' ? 400 : 260,
   keepEpisodes: true,
   red: mode === 'red',
   brush: mode === 'brush',
+  displace: mode === 'race',
+  staleLineFrom: mode === 'race' ? prevOf(trackId) : undefined,
 });
 
-const mine = r.episodes.filter((e) => e.kart === 5).sort((a, b) => a.t0 - b.t0);
+// Control arms drive kart 5; in an ordinary race, take the busiest AI kart.
+let subject = 5;
+if (mode === 'race') {
+  let best = -1;
+  for (let i = 1; i < r.karts.length; i++) {
+    if (r.karts[i].episodes > best) { best = r.karts[i].episodes; subject = i; }
+  }
+}
+const mine = r.episodes.filter((e) => e.kart === subject).sort((a, b) => a.t0 - b.t0);
 const touches = mergeChatter(mine);
 console.log(
-  `\n${trackId} seed ${seed} — ${mode.toUpperCase()} arm, kart 5 (${r.karts[5].character})\n` +
+  `\n${trackId} seed ${seed} — ${mode.toUpperCase()} arm, kart ${subject} (${r.karts[subject].character})\n` +
     `  raw contact episodes : ${mine.length}\n` +
     `  after merging <${EP_MERGE_GAP} s : ${touches.length} touches\n` +
     `  legacy loops         : ${r.legacyLoopCount}\n` +
