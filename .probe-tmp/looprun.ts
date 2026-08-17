@@ -51,7 +51,7 @@ console.log(
   `LOOP DETECTOR — ${tracks.length} circuits x ${seeds.length} seeds, ${laps} laps, cap ${cap} s, ${cc}cc\n` +
     `items ${items ? 'ON' : 'off'}, human-in-pack ${human ? 'ON' : 'off'}, ` +
     `displacement ${displace ? 'ON' : 'off'}${red ? ', RED CONTROL (kart 5 driven into barrier, 2.2 s on / 1.8 s off)' : ''}` +
-    `${brush ? ', BRUSH MIRROR (kart 5 flicked at barrier, 0.30 s on / 0.45 s off)' : ''}` +
+    `${brush ? ', BRUSH MIRROR (kart 5 grazed along barrier, peeled off the instant it touches)' : ''}` +
     `${stale ? `, STALE-LINE sequence (AI built on ${staleFrom ?? 'the previous circuit'}, then track swapped)` : ''}\n` +
     `cluster  = ${LOOP_N}+ touches within ${LOOP_WINDOW} s and ${LOOP_ARC} m\n` +
     `  legacy = that test on RAW rising edges, no recovery required  <- the 0.17-0.83 number\n` +

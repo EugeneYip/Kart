@@ -84,11 +84,15 @@
  *            the wall for 2.2 s, back off for 1.8 s, repeat). It must produce
  *            CYCLES, naming kart and arc. If it does not, the detector is
  *            broken and every green result from it is worthless.
- *  `--brush` drives kart 5 into the barrier with a fast flick — a touch far too
- *            short to trip recovery, repeated in one place. It is built to be
- *            exactly the false positive: it must produce `legacyLoops` > 0 and
- *            ZERO cycles. Without this arm, "refining" the classifier into one
- *            that detects nothing at all would read as success.
+ *  `--brush` grazes kart 5 along the barrier and peels it off the instant
+ *            contact starts, so no touch gets near `WALL.pinSeconds` and
+ *            recovery never trips. Measured, each graze re-triggers the probe
+ *            4-8 times at 0.01-0.14 s spacing — which is precisely the shape of
+ *            the readings in the certification table. It must therefore produce
+ *            `legacyLoops` > 0 and ZERO cycles. Without this arm, "refining"
+ *            the classifier into one that detects nothing at all would read as
+ *            success. `brushdump.ts` prints the raw-vs-merged timeline so the
+ *            zero can be checked against the contacts rather than trusted.
  * ============================================================================
  */
 
@@ -151,6 +155,16 @@ const OFF_DEPTH = 1.0;
 const OFF_LONG = 1.5;
 
 const BUCKET = 20;
+
+/**
+ * Brush mirror. Steer bias runs for `BRUSH_BURST` seconds every `BRUSH_PERIOD`,
+ * and every touch is answered by `BRUSH_PEEL` seconds of hard steer away.
+ * `BRUSH_PEEL` is what keeps each contact far below `WALL.pinSeconds` (0.9 s),
+ * and `BRUSH_BURST` is short enough that three touches fit inside `LOOP_ARC`.
+ */
+const BRUSH_BURST = 3.0;
+const BRUSH_PERIOD = 20;
+const BRUSH_PEEL = 0.45;
 
 export interface Episode {
   kart: number;
@@ -682,6 +696,11 @@ export async function runLoopRace(opts: LoopOptions): Promise<LoopReport> {
   const redRng = new Rng(seed ^ 0xbad);
   void redRng;
 
+  /** Brush mirror: three grazes 0.55 s apart, then quiet. See the block below. */
+  let brushNext = 12;
+  let brushLeft = 0;
+  let brushAt = 0;
+
   let elapsed = 0;
   let s = 0;
   for (; s < steps; s++) {
@@ -743,28 +762,54 @@ export async function runLoopRace(opts: LoopOptions): Promise<LoopReport> {
       // else: leave the AI's own control in place, so it peels off and returns.
     }
 
-    // --- mirror control: kart 5 FLICKS the barrier and pulls straight off ----
-    // Period 0.75 s: 0.30 s steering at the wall (enough to touch at racing
-    // speed, far short of WALL.pinSeconds = 0.9 s), then 0.45 s steering away.
-    // Three or four touches land inside LOOP_WINDOW and LOOP_ARC, so the
-    // ORIGINAL detector must call this a loop. Recovery never trips, so the
-    // refined one must call it brushes and nothing else.
+    // --- mirror control: kart 5 GRAZES the barrier three times in one place --
+    // A bang-bang controller, not a held steer. Holding steer at a wall does
+    // not brush it, it GRINDS it: the first version of this arm put 35 s of
+    // contact on the kart and produced real cycles, which is the opposite of
+    // the point. Here the wall-ward bias is released the instant contact is
+    // detected and replaced by an equally hard peel-off, so no touch gets near
+    // `WALL.pinSeconds` (0.9 s) and recovery never trips. Bursts of
+    // `BRUSH_BURST` seconds every `BRUSH_PERIOD`, so the clusters are isolated.
+    //
+    // The AI's own accel/brake are left alone — only steer is biased — so the
+    // kart is racing, not being flown into scenery.
+    //
+    // This is the false positive's exact shape: three short touches, one place,
+    // driver never leaves `race`. The ORIGINAL detector must call it a loop;
+    // the refined one must call it BRUSHES and ZERO cycles.
     if (opts.brush) {
-      const phase = t % 0.75;
+      if (t >= brushNext) brushNext = t + BRUSH_PERIOD;
+      const active = brushNext - t > BRUSH_PERIOD - BRUSH_BURST;
       const b = physics.getBody(5);
-      if (b) {
-        _probe.copy(b.position).addScaledVector(b.right, 6);
-        const hr = track.collideWalls(_probe, 1.0);
-        _probe.copy(b.position).addScaledVector(b.right, -6);
-        const hl = track.collideWalls(_probe, 1.0);
-        const dir = hr.hit ? 1 : hl.hit ? -1 : 1;
-        physics.setControl(5, {
-          steer: phase < 0.3 ? dir * 0.7 : dir * -0.45,
-          accel: 1,
-          brake: 0,
-          drift: false,
-          driftPressed: false,
-        });
+      if (active && b) {
+        // Nearest barrier: scan outward on both sides, take the first hit.
+        let dir = 0;
+        for (let dd = 3; dd <= 16 && dir === 0; dd += 1.5) {
+          _probe.copy(b.position).addScaledVector(b.right, dd);
+          if (track.collideWalls(_probe, 1).hit) dir = 1;
+          else {
+            _probe.copy(b.position).addScaledVector(b.right, -dd);
+            if (track.collideWalls(_probe, 1).hit) dir = -1;
+          }
+        }
+        if (dir !== 0) {
+          // `touching[5]` was written at the end of the previous tick.
+          if (touching[5]) brushAt = t + BRUSH_PEEL;
+          const peeling = t < brushAt;
+          // Steer away, but keep the throttle. Braking during the peel was
+          // tried and is wrong: it plants the kart on the barrier instead of
+          // detaching it (measured: one 5.14 s continuous contact, which is a
+          // pin, and the arm then produced real cycles). Full throttle carries
+          // the kart off the wall.
+          physics.setControl(5, {
+            steer: dir * (peeling ? -0.9 : 0.85),
+            accel: 1,
+            brake: 0,
+            drift: false,
+            driftPressed: false,
+          });
+          brushLeft++;
+        }
       }
     }
 
