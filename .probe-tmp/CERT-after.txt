@@ -1,0 +1,151 @@
+
+tier ultra  —  visible footprint of anything whose box reaches inside the road
+ground truth: the DRAWN ribbon, nearest deck below each vertex
+
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 3198.5 ms
+[Foliage] road-edge clearance: palm0 reach 3.7 m: moved 3, dropped 6 of 122; palm1 reach 3.4 m: moved 2, dropped 2 of 121; tree1 reach 5.8 m: moved 3, dropped 3 of 50; tree2 reach 3.9 m: moved 5, dropped 2 of 49; Bush reach 1.3 m: moved 5, dropped 2 of 608; Fern reach 0.4 m: moved 1, dropped 2 of 496; Flowers reach 0.2 m: moved 1, dropped 0 of 550
+[Props] re-seated 79 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.79 m (buoy); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 8 seated on the water plane
+[Props] portal headroom: 0 reveal/cove fittings raised to clear 3.0 m over the banked carriageway (sites at arc 736, 897)
+[Props] road-volume guard: 3 authored props pushed clear, 18 instances dropped from 35 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 106 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 62 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== sunsetCoastline ===
+  PASS  the drawn ribbon indexed                       47336 triangles
+      ribbon coverage 99.87 % of the driving surface (10/7945 samples blind to a vertical line, longest blind run 2 m near arc 1143-1144; 24 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 102854 vertices over 439 instances (268 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 522.1 ms
+[Foliage] road-edge clearance: tree0 reach 2.9 m: moved 1, dropped 0 of 103; tree1 reach 3.2 m: moved 0, dropped 1 of 103; tree2 reach 4.7 m: moved 1, dropped 0 of 102
+[Props] re-seated 85 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 0.62 m (alleyBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 14 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 6 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 64 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== neonMetropolis ===
+  PASS  the drawn ribbon indexed                       47872 triangles
+      ribbon coverage 97.47 % of the driving surface (193/7630 samples blind to a vertical line, longest blind run 62 m near arc 1293-1295; 24 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 156722 vertices over 670 instances (571 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 5008.5 ms
+[Foliage] road-edge clearance: deadtree1 reach 1.2 m: moved 1, dropped 0 of 117; Bush reach 1.0 m: moved 2, dropped 0 of 190; ScorchedScrub reach 0.7 m: moved 4, dropped 2 of 520
+[Props] re-seated 58 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 55.93 m (lavaRock); 3 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] portal headroom: 12 reveal/cove fittings raised to clear 3.0 m over the banked carriageway, worst lift 1.40 m (sites at arc 1234, 1304)
+[Props] road-volume guard: 0 authored props pushed clear, 42 instances dropped from 129 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 195 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 62 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+[Props] carriageway guard: 1 props walked off the drivable road (worst move 11.86 m) [obsidian x1]; 0 DROPPED because they were still on it
+=== volcanoRush ===
+  PASS  the drawn ribbon indexed                       59328 triangles
+      ribbon coverage 99.87 % of the driving surface (10/7570 samples blind to a vertical line, longest blind run 2 m near arc 409-410; 23 m of authored TF.Gap excluded — no road is drawn there);  686 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 90021 vertices over 403 instances (360 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 961.4 ms
+[Foliage] road-edge clearance: tree0 reach 3.5 m: moved 1, dropped 0 of 103; tree1 reach 4.8 m: moved 1, dropped 0 of 103; tree2 reach 5.2 m: moved 1, dropped 0 of 102
+[Props] re-seated 118 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 7.89 m (towerBlock); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 7 seated on the water plane
+[Props] portal headroom: 14 reveal/cove fittings raised to clear 3.0 m over the banked carriageway, worst lift 2.18 m (sites at arc 518, 651)
+[Props] road-volume guard: 6 authored props pushed clear, 44 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 10 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 74 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== bostonHarbor ===
+  PASS  the drawn ribbon indexed                       49714 triangles
+      ribbon coverage 100.00 % of the driving surface (0/8155 samples blind to a vertical line; 0 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 130403 vertices over 584 instances (429 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 1082.4 ms
+[Foliage] road-edge clearance: tree0 reach 3.1 m: moved 1, dropped 0 of 103; Bush reach 1.1 m: moved 1, dropped 0 of 684
+[Props] re-seated 143 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 9.34 m (seaWall); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 1 seated on the water plane
+[Props] kerb clearance: 88 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== taipeiCircuit ===
+  PASS  the drawn ribbon indexed                       47480 triangles
+      ribbon coverage 100.00 % of the driving surface (0/7990 samples blind to a vertical line; 0 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 154328 vertices over 776 instances (467 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 1566.1 ms
+[Foliage] road-edge clearance: tree2 reach 3.6 m: moved 1, dropped 1 of 102; Flowers reach 0.2 m: moved 0, dropped 1 of 495
+[Props] re-seated 113 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 4.44 m (torii); 0 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 0 seated on the water plane
+[Props] road-volume guard: 0 authored props pushed clear, 34 instances dropped from 76 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 9 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 73 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== tokyoNeon ===
+  PASS  the drawn ribbon indexed                       48802 triangles
+      ribbon coverage 100.00 % of the driving surface (0/7680 samples blind to a vertical line; 0 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 132467 vertices over 625 instances (572 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 1189.8 ms
+[Foliage] road-edge clearance: tree1 reach 5.6 m: moved 1, dropped 1 of 103; Bush reach 1.2 m: moved 1, dropped 0 of 684; Flowers reach 0.2 m: moved 0, dropped 1 of 495
+[Props] re-seated 236 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 5.68 m (pine); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 3 seated on the water plane
+[Props] footprint bedding: 18 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 87 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== hongKongHarbour ===
+  PASS  the drawn ribbon indexed                       47192 triangles
+      ribbon coverage 100.00 % of the driving surface (0/7930 samples blind to a vertical line; 0 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 157774 vertices over 824 instances (592 culled: no ribbon under them)
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 4587.0 ms
+[Foliage] road-edge clearance: tree0 reach 3.9 m: moved 1, dropped 0 of 103; tree2 reach 5.0 m: moved 0, dropped 1 of 102; Bush reach 1.1 m: moved 1, dropped 0 of 684
+[Props] re-seated 206 authored props onto the heightfield (outside the road corridor); worst within 40 m of the road 2.14 m (parkTree); 1 distant backdrop props corrected by more than 30 m (expected — see collectAuthored); 3 seated on the water plane
+[Props] road-volume guard: 1 authored props pushed clear, 15 instances dropped from 43 tunnel/bridge/anti-gravity sections
+[Props] footprint bedding: 7 anchors rejected for ground relief bigger than the instance standing on it (see bedOnFootprint)
+[Props] kerb clearance: 60 roadside anchors walked outboard so their geometry leaves 0.6 m past the kerb (see clearKerb)
+=== newYorkCircuit ===
+  PASS  the drawn ribbon indexed                       49088 triangles
+      ribbon coverage 100.00 % of the driving surface (0/7915 samples blind to a vertical line; 0 m of authored TF.Gap excluded — no road is drawn there);  0 samples have ANOTHER carriageway stacked over/under them
+  PASS  no prop geometry under trackCollision          0 prop meshes parented under it
+  PASS  no prop geometry in the driving envelope       nothing over the tarmac between the surface and 3 m
+      walked 203258 vertices over 822 instances (489 culled: no ribbon under them)
+
+RED CHECKS
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 2589.5 ms
+  PASS  a box ON the centreline is caught                  8/8 corners flagged
+  PASS  the same box 6 m OUTSIDE is not                    0/8 corners flagged
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1304.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 740.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 1271.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 3802.8 ms
+     (volcanoRush: carriageways at y 13.4 and 47.0, 33.6 m apart)
+  PASS  a box 1 m over the LOWER deck is caught            4/8
+  PASS  a box 1 m over the UPPER deck is caught            8/8
+  PASS  a box in the AIR GAP between them is not           0/8
+     legacy ground truth on the same three points: lower 0/8, upper 8/8, air gap 0/8
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Sunset Coastline: 1613 m, 1349 rings, 84656 tris, 13 draw calls, 92 decals, 1748.8 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 1358.9 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Volcano Rush: 1536 m, 1554 rings, 95090 tris, 12 draw calls, 93 decals, 234.1 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Boston Harbor: 1631 m, 1324 rings, 73180 tris, 12 draw calls, 143 decals, 690.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Taipei Circuit: 1598 m, 1320 rings, 79794 tris, 10 draw calls, 137 decals, 155.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Tokyo Neon: 1536 m, 1282 rings, 68644 tris, 8 draw calls, 122 decals, 123.2 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Hong Kong Harbour: 1586 m, 1312 rings, 77156 tris, 10 draw calls, 144 decals, 108.7 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] New York Circuit: 1583 m, 1319 rings, 70398 tris, 11 draw calls, 127 decals, 132.0 ms
+MeshBVH: "maxLeafTris" option has been deprecated. Use "targetLeafSize", instead.
+[Track] Neon Metropolis: 1549 m, 1331 rings, 66850 tris, 9 draw calls, 133 decals, 114.3 ms
+     (neonMetropolis arc 854: binormal.y 1.00, i.e. 84 deg of bank; a box 50 m horizontally out reads as lat 3.83 of halfW 10.00)
+  PASS  ...and the legacy lat test IS fooled by it         |lat| 3.83 < halfW 10.00
+  PASS  a box 50 m out on a banked section is not          0/8 by ribbon, 0/8 by the legacy ground truth
+
+PASS: 0 failed

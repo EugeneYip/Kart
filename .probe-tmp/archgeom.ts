@@ -22,6 +22,7 @@ import { Environment } from '@/world/Environment';
 import { fakeRenderer, loadTrack } from '@/dev/headless';
 import { QUALITY_PRESETS } from '@/core/Config';
 import { TRACK_ORDER } from '@/track/TrackDefs';
+import { ribbonSoup } from './ribbon';
 
 const ARGS = process.argv.slice(3);
 const ONLY = ARGS.filter((a) => !a.startsWith('--'));
@@ -72,6 +73,48 @@ for (const id of IDS) {
       if (Math.abs(k) < 8.0 || Math.abs(k) > 16.0) continue;
       console.log(`      x ${c.x0.toFixed(2)}..${c.x1.toFixed(2)}   `
         + `y ${c.y0.toFixed(2)}..${c.y1.toFixed(2)}   z ${c.z0.toFixed(2)}..${c.z1.toFixed(2)}   ${c.n} verts`);
+    }
+
+    // ---- CLEARANCE OVERHEAD --------------------------------------------
+    // Raising the balloon arch to clear the carriageway underneath it moves it
+    // TOWARD anything above it. Volcano stacks its helix over the lava tube and
+    // several circuits run bridges over their own road, so "the arch is taller
+    // now" is only safe if nothing is up there. Measured, not assumed: walk the
+    // instance's real vertices and ask the ribbon for the nearest crossing
+    // ABOVE each one.
+    const soup = ribbonSoup(track);
+    const mm = new THREE.Matrix4();
+    const vv = new THREE.Vector3();
+    for (let inst = 0; inst < (mesh.isInstancedMesh ? (mesh.count ?? 1) : 1); inst++) {
+      if (mesh.isInstancedMesh && mesh.instanceMatrix) {
+        mm.fromArray(mesh.instanceMatrix.array as unknown as number[], inst * 16);
+        mm.premultiply(mesh.matrixWorld);
+      } else mm.copy(mesh.matrixWorld);
+      // ONLY vertices that are genuinely in the air. The first cut of this asked
+      // every vertex and reported 0.00-0.20 m of overhead clearance on almost
+      // every instance INCLUDING the start gantry, which has never poked through
+      // anything: a gantry plinth is deliberately sunk 0.55 m into the verge and
+      // an arch's tethered ends sit at local y -0.19, so the "surface above" it
+      // was finding is the shoulder those feet are buried in. A metre of air
+      // under a vertex is what makes the question meaningful.
+      let gap = Infinity, topY = -Infinity, gapAtY = 0, aloft = 0;
+      for (let i = 0; i < pos.count; i++) {
+        vv.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mm);
+        topY = Math.max(topY, vv.y);
+        const nh = soup.hits(vv.x, vv.z);
+        let below = -Infinity, above = Infinity;
+        for (let k = 0; k < nh; k++) {
+          const y = soup.hy[k];
+          if (y < vv.y - 0.001) below = Math.max(below, y);
+          else if (y > vv.y + 0.001) above = Math.min(above, y);
+        }
+        if (vv.y - below < 1.0) continue;               // buried, or standing on it
+        aloft++;
+        if (above - vv.y < gap) { gap = above - vv.y; gapAtY = vv.y; }
+      }
+      console.log(`      #${inst} top of geometry y ${topY.toFixed(2)}; of ${aloft} vertices `
+        + `standing >1 m clear of any surface, nearest ribbon ABOVE one: `
+        + `${gap === Infinity ? 'none — open sky' : `${gap.toFixed(2)} m (at y ${gapAtY.toFixed(2)})`}`);
     }
 
     // Where each instance stands, and what the road is doing there.
