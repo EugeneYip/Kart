@@ -9577,8 +9577,26 @@ export class Props implements ISubsystem {
           sign.plate(0, HGT - 1.55, 2.5 + sz, 2.86, 1.72, yaw, paper,
             { single: true, uvRect: HK_BOX.uv });
         }
-        for (const [sx, yaw] of [[0.535, Math.PI * 0.5], [-0.535, -Math.PI * 0.5]] as const) {
+        // ---- THE BLADE WAS INSIDE ITS OWN CARCASS -----------------------------
+        // Its board is `b.box(..., 0.62, 1.5, 0.5, frame)`, i.e. half an extent
+        // of 0.62 in x, and the lit faces were authored at x = +/-0.53 — 0.09 m
+        // INSIDE the dark grey box. Screenshotted from the pavement at 26 m the
+        // blade read as a solid black slab hanging under every sign, which is
+        // what a buried emissive face looks like. It has been there since the
+        // recipe was written, on the untextured glow, where a missing colour is
+        // much harder to notice than a missing character.
+        //
+        // All FOUR faces now, at 0.03 m of clearance: the +/-X pair (0.92 x 2.82,
+        // exactly the region's 0.32 aspect) is the read coming down the street,
+        // which is what a projecting blade is for, and the +/-Z pair (1.16 x 2.82,
+        // a 24 % wider sample of the same region) is the read from alongside. A
+        // quarter of stretch on two faces is worth not having a black slab.
+        for (const [sx, yaw] of [[0.65, Math.PI * 0.5], [-0.65, -Math.PI * 0.5]] as const) {
           sign.plate(sx, HGT - 2.9, 3.9, 0.92, 2.82, yaw, paper,
+            { single: true, uvRect: HK_BLADE.uv });
+        }
+        for (const [sz, yaw] of [[0.53, 0], [-0.53, Math.PI]] as const) {
+          sign.plate(0, HGT - 2.9, 3.9 + sz, 1.16, 2.82, yaw, paper,
             { single: true, uvRect: HK_BLADE.uv });
         }
         // The underside — the face a kart actually drives beneath — and the two

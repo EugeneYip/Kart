@@ -1448,6 +1448,14 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'skyscraper', t: 0.012, lat: -92, step: 0.021, end: 0.118, scale: 1.5 },
       { type: 'towerBlock', t: 0.016, lat: -45, step: 0.015, end: 0.120 },
       { type: 'streetLamp', t: 0.020, lat: 17, step: 0.017, end: 0.120, mirror: true },
+      // A tram on the promenade, city side. This straight is 27 % of the lap with
+      // the flags as its only Hong Kong cue, and it is the stretch the player
+      // starts every lap on. lat -22 against a corridor of hw 12.5 + 1.55 + 5 =
+      // 19.05 m leaves 0.8 m past the shoulder, and t 0.0625 is the midpoint of
+      // the 27 m gap between the `streetLamp` masts at t 0.054 and t 0.071 — a
+      // 7 m vehicle with 10 m of clearance either end, rather than a tram with a
+      // lamp post growing through it.
+      { type: 'tramHK', t: 0.0625, lat: -22 },
       // ---- THE HARBOUR ------------------------------------------------------
       // MEASURED, then placed. `.probe-tmp/citysite.ts` walks the ground on the
       // harbour side of this straight: 0.09 m at lat 40, 0.42 at 60, 0.93 at 80,
@@ -1509,6 +1517,27 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // a draught relative to the waterline, not a lift off local ground.
       { type: 'junk', t: 0.048, lat: 62, yaw: 0.4, up: -0.1 },
       { type: 'junk', t: 0.086, lat: 78, yaw: -0.9, scale: 0.85, up: -0.15 },
+      // ---- AND A THIRD, BIG, BECAUSE THE FIRST TWO ARE UNDER THE SIGHT LINE ---
+      // Screenshotted across the water from the racing eye (2.6 m above the
+      // promenade at t=0.06, looking 66 degrees right): no water, no boat and no
+      // hull — a green bank, the sea wall coping and the far-shore towers. Raise
+      // the same camera to 12 m and the harbour is a broad plate with both junks
+      // on it. That is the ~11 % / peak 1.97 % harbour screen time already
+      // measured, it is bounded by the road corridor's own height blend, and the
+      // owner has ruled out moving the track to fix it.
+      //
+      // What is NOT bounded is how much of a boat stands ABOVE that sight line.
+      // At 100 m, anything higher than the eye is against the sky whatever the
+      // near bank does, and a junk's rig is the tallest thing the harbour has:
+      // scale 1.55 puts the main mast at 17.7 m and the battened lug sails
+      // between 4.7 and 16.4 m, so the oxide-red fan reads from the promenade
+      // even though its hull never will. 22 m on the waterline is a Victoria
+      // Harbour tourist junk, not an invention.
+      //
+      // lat 104 is mid-basin (the carved shore runs lat 40 to 163) and `up` is a
+      // draught relative to the waterline, per the note above — NOT a lift off
+      // local ground.
+      { type: 'junk', t: 0.070, lat: 104, yaw: -0.35, scale: 1.55, up: -0.12 },
       // ---- THE TWO LANDMARKS, ACROSS THE WATER ------------------------------
       // Read the Taipei supertall note before moving either. A tower needs
       // roughly (its height / tan(half the vertical FOV above the eyeline)) of
@@ -1534,6 +1563,22 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'neonCantilever', t: 0.176, lat: 20, step: 0.0072, end: 0.302, mirror: true },
       { type: 'marketStall', t: 0.182, lat: 19, step: 0.010, end: 0.296 },
       { type: 'trafficLight', t: 0.174, lat: -14 },
+      // ---- A SCAFFOLDED BLOCK IN THE CANYON TOO -------------------------------
+      // `bambooScaffold` was authored ONCE on this lap, at t 0.352, and one
+      // instance of the single most Hong Kong object in the kit is a thing you
+      // might drive past without ever seeing: `.probe-tmp/landmark.ts --tier=ultra`
+      // puts it in frame from 16.2 % of lap stations, and 16 % of one lap is one
+      // glance. The canyon is the street the player spends most of the lap
+      // looking down, so a second block goes here.
+      //
+      // Priced the same way as the original: the recipe reaches 10.2 m toward the
+      // road (the nylon canopy sets that, not the cage), against a corridor of
+      // hw 8.5 + kerb 1.55 + shoulder 2 = 12.05 m, so lat -26 leaves 3.75 m of
+      // clear verge — half a metre MORE than the t 0.352 instance has. It sits
+      // outboard of the `neonCantilever` piers at lat -20, which is the right
+      // way round: in Hong Kong the scaffolding goes up behind the signs and the
+      // signs stay lit.
+      { type: 'bambooScaffold', t: 0.272, lat: -26 },
       // NO `holoAd`. It was here, at `up: 11` over the canyon, and
       // `.probe-tmp/floating.ts` counted all three instances as floating anchor
       // groups with 6.13-8.26 m of air under them — which is what a hologram IS,
@@ -1550,6 +1595,12 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'bambooScaffold', t: 0.352, lat: 28 },
       { type: 'tramHK', t: 0.340, lat: -15 },
       { type: 'tramHK', t: 0.372, lat: 15 },
+      // A third on this street, so the tramway reads as a LINE rather than as two
+      // parked vehicles. lat -18 against a corridor of hw 10 + 1.55 + 3 = 14.55
+      // leaves 1.3 m past the shoulder on a 2.15 m half-extent, and it clears the
+      // `planter` run at lat -14 by 0.85 m and the `neonCantilever` piers at
+      // lat -20 by being 0.004 of a lap (6 m) past the end of that run.
+      { type: 'tramHK', t: 0.356, lat: -18 },
       { type: 'streetLamp', t: 0.310, lat: 16, step: 0.020, end: 0.400 },
       { type: 'planter', t: 0.316, lat: -14, step: 0.016, end: 0.398 },
       { type: 'neonCantilever', t: 0.318, lat: -20, step: 0.010, end: 0.352 },
