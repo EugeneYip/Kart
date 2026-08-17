@@ -654,6 +654,7 @@ export class HUD implements ISubsystem {
       this.lapStart = 0;
       this.bestLap = Infinity;
       this.finalLapShown = false;
+      this.clearTimedLatches();
       this.setVisible(true);
     }));
 
@@ -760,6 +761,33 @@ export class HUD implements ISubsystem {
       setClass(this.debugBox, 'ak-debug--on', this.debugOn);
     }
   };
+
+  /**
+   * Drop every deadline that was stored as an ABSOLUTE `raceTime`.
+   *
+   * `race:start` rewinds `this.raceTime` to 0. Any latch still holding a
+   * deadline from the previous race then sits far in the *future* of the new
+   * clock, so the thing it gates is pinned on from the green light until the
+   * new race catches up. Measured on the real HUD: a rocket warning armed at
+   * t=90 s leaves `threatUntil = 93.2`, and the next race opens with the red
+   * arrow and the full-screen red vignette already up and holds them for
+   * **93.2 seconds** — which is most of a three-lap race, on every circuit.
+   * That is the "the HUD feels permanently alarmed" report, and it is nothing
+   * to do with thresholds.
+   *
+   * This is the fourth instance of the same family on this project (AIManager's
+   * racing line, `refreshTrackPath`'s `pathReady` latch, Water's reflection
+   * target): state that outlives the race or circuit that created it. So this
+   * clears *all* of them here rather than just the threat, and anything added
+   * later that stores `this.raceTime + x` belongs in this list.
+   */
+  private clearTimedLatches(): void {
+    this.threat = 'none';
+    this.threatUntil = -1;
+    this.blueUntil = -1;
+    this.messageHideAt = -1;
+    this.countdownHideAt = -1;
+  }
 
   // =======================================================================
   // Public presentation hooks (also used by the dev harness)
