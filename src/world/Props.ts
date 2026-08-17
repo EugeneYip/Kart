@@ -2278,6 +2278,8 @@ interface AuthoredSpec {
   geo: THREE.BufferGeometry;
   /** Body material; defaults to `matte`. */
   mat?: THREE.MeshStandardMaterial;
+  /** Material for the `metal` companion pass; defaults to `metal` itself. */
+  metalMat?: THREE.MeshStandardMaterial;
   glow?: THREE.BufferGeometry;
   /** Use the dimmer `glowSoft` for the glow part (windows, buoy lamps). */
   softGlow?: boolean;
@@ -3098,6 +3100,27 @@ export class Props implements ISubsystem {
   private matte!: THREE.MeshStandardMaterial;
   private matteSway!: THREE.MeshStandardMaterial;
   private metal!: THREE.MeshStandardMaterial;
+  /**
+   * The water surfaces, and the reason they are not just `metal`.
+   *
+   * `metal` is roughness 0.34 / metalness 0.85, so it is almost pure specular:
+   * with metalness that high the albedo tints a reflection rather than lighting
+   * anything, and on a NIGHT circuit there is nothing to reflect. `waterLevel`
+   * is null on all five of these, so `Water` never builds its planar reflection
+   * — and it must not, that is the whole cost constraint — and the sky envmap
+   * after dark is close to black. Measured in the browser at ultra: with the
+   * basin carved and 36 575 m² of Victoria Harbour open, the plate rendered as
+   * a flat black hole with a lit green shore round it. Correct geometry, no
+   * water.
+   *
+   * So: metalness down to 0.42 so the albedo does some work, roughness down to
+   * 0.20 so the key light still leaves a sheen, and an emissive driven by the
+   * plate's own vertex colours at `0.9 x night` — the same `emissiveVertexColor`
+   * trick the lit-window pass uses, and zero on a daylight circuit. That is one
+   * extra `MeshStandardMaterial` and ZERO extra draw calls: the water plate was
+   * always its own mesh. No pass, no target, no reflection.
+   */
+  private waterSurface!: THREE.MeshStandardMaterial;
   private glow!: THREE.MeshStandardMaterial;
   private glowSoft!: THREE.MeshStandardMaterial;
   private windows!: THREE.MeshStandardMaterial;
@@ -3375,6 +3398,17 @@ export class Props implements ISubsystem {
     this.metal = patchProp(
       base({ name: 'prop-metal', roughness: 0.34, metalness: 0.85, envMapIntensity: 1.15 }),
       this.u,
+    );
+    this.waterSurface = patchProp(
+      base({
+        name: 'prop-water',
+        roughness: 0.20,
+        metalness: 0.42,
+        envMapIntensity: 1.35,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.62 * this.night,
+      }),
+      this.u, { emissiveVertexColor: true },
     );
     this.glow = patchProp(
       base({ name: 'prop-glow', roughness: 0.4, metalness: 0.0, emissive: 0xffffff, emissiveIntensity: 3.4 }),
@@ -6170,7 +6204,7 @@ export class Props implements ISubsystem {
           { cull: spec.cull ?? CULL_MID, atlasBaked: true, shadow: false, corridor });
       }
       if (spec.metal) {
-        this.emit(`authored:${key}:metal`, spec.metal, this.metal, anchors,
+        this.emit(`authored:${key}:metal`, spec.metal, spec.metalMat ?? this.metal, anchors,
           { cull: spec.cull ?? CULL_MID, corridor });
       }
       if (spec.metalPerAnchor) {
@@ -9366,7 +9400,12 @@ export class Props implements ISubsystem {
         //   * which tone a quad takes comes from a product of two sines at
         //     incommensurate frequencies, so the patches are irregular and
         //     several cells across instead of a diagonal stripe.
-        const deep = 0x14303e, shallow = 0x18374a;
+        // TWO TONES, LIGHTER AFTER DARK. The night pair is not decoration: the
+        // emissive on `waterSurface` is driven BY these vertex colours, so at
+        // #14303e it had almost nothing to emit. Still only a 1.15x step between
+        // the two so a facet reads as a change of angle, not of material.
+        const deep = this.night > 0.35 ? 0x1d3d50 : 0x14303e;
+        const shallow = this.night > 0.35 ? 0x23485d : 0x18374a;
         const wy = (x: number, z: number): number =>
           0.16 * Math.sin(x * 0.11 + z * 0.05) + 0.11 * Math.sin(x * 0.037 - z * 0.13);
         // WINDING. See the long note on `box()`: `quad()` derives its normal from
@@ -9413,7 +9452,7 @@ export class Props implements ISubsystem {
             apron, 0.7,
           );
         }
-        return { geo: b.build('harbourWater'), mat: this.metal, cull: 2400, shadow: false };
+        return { geo: b.build('harbourWater'), mat: this.waterSurface, cull: 2400, shadow: false };
       }
 
       case 'flaghk': return this.flagMast(FLAG_HK);
@@ -9935,7 +9974,7 @@ export class Props implements ISubsystem {
         }
         return {
           geo: b.build('parkLake'), metal: met.build('parkLakeWater'),
-          cull: 900, shadow: false,
+          metalMat: this.waterSurface, cull: 900, shadow: false,
         };
       }
 
