@@ -5426,7 +5426,13 @@ export class Props implements ISubsystem {
           s.jitter = 0.012;
           for (let i = 0; i < 4; i++) {
             const y = 2.2 + i * 1.28;
-            const r = HK_STACK[i % HK_STACK.length].uv;
+            // ---- THE COLUMN READ BOTTOM-TO-TOP ---------------------------------
+            // `i` counts UP the mast (i = 0 is the board at 2.2 m) and `HK_STACK`
+            // is ordered top-to-bottom, so a straight `HK_STACK[i]` put 金飾鑽石
+            // on the wall as 石鑽飾金. Vertical Chinese reads top to bottom;
+            // screenshotted at 13 m the goldsmith's column was legible and
+            // backwards, which is worse than blank. `3 - i` is the fix.
+            const r = HK_STACK[(HK_STACK.length - 1 - i) % HK_STACK.length].uv;
             s.plate(0.9, y, 0.145, 0.5, 0.98, 0, 0xf6f6f4, { single: true, uvRect: r });
             s.plate(0.9, y, -0.145, 0.5, 0.98, Math.PI, 0xf6f6f4, { single: true, uvRect: r });
             // A lit sliver on the outboard edge, so the column still reads as a

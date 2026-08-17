@@ -1448,14 +1448,28 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'skyscraper', t: 0.012, lat: -92, step: 0.021, end: 0.118, scale: 1.5 },
       { type: 'towerBlock', t: 0.016, lat: -45, step: 0.015, end: 0.120 },
       { type: 'streetLamp', t: 0.020, lat: 17, step: 0.017, end: 0.120, mirror: true },
-      // A tram on the promenade, city side. This straight is 27 % of the lap with
-      // the flags as its only Hong Kong cue, and it is the stretch the player
-      // starts every lap on. lat -22 against a corridor of hw 12.5 + 1.55 + 5 =
-      // 19.05 m leaves 0.8 m past the shoulder, and t 0.0625 is the midpoint of
-      // the 27 m gap between the `streetLamp` masts at t 0.054 and t 0.071 — a
-      // 7 m vehicle with 10 m of clearance either end, rather than a tram with a
-      // lamp post growing through it.
-      { type: 'tramHK', t: 0.0625, lat: -22 },
+      // ---- THE PROMENADE HAD NO HONG KONG IN IT AT ALL ------------------------
+      // Screenshotted down the straight from the racing eye at t 0.048: towers
+      // with amber window grids, a green verge, a TURBO hoarding and the flags.
+      // That is 27 % of the lap — and the 27 % the player starts every lap on —
+      // carrying one cue. The two below are the cheapest possible answers, in the
+      // exact sense that they cost NO draw calls:
+      //
+      //  * `neonSign` is claimed by `buildCity`'s `neonStack` branch and appended
+      //    to the SAME instanced mesh as the 32 kit-scattered shophouse columns
+      //    (`takeAuthored('neonsign')`), which on this kit now carries Chinese
+      //    characters off the Hong Kong sign atlas. Hong Kong authored no
+      //    `neonSign` at all; Taipei and Tokyo both do. lat -21 puts the columns
+      //    on the CITY side, never between the road and the water, against a
+      //    corridor of hw 12.5 + 1.55 + 5 = 19.05 m; the steps are offset half a
+      //    period from the `streetLamp` run at lat +/-17 so no column shares a
+      //    station with a lamp mast.
+      //  * the tram, at t 0.0965 — the midpoint of the 27 m gap between the lamps
+      //    at t 0.088 and t 0.105, so a 7 m vehicle has 10 m of clearance either
+      //    end rather than a lamp post growing through it. lat -22 leaves 0.8 m
+      //    past the shoulder on a 2.15 m half-extent.
+      { type: 'neonSign', t: 0.024, lat: -21, step: 0.014, end: 0.088 },
+      { type: 'tramHK', t: 0.0965, lat: -22 },
       // ---- THE HARBOUR ------------------------------------------------------
       // MEASURED, then placed. `.probe-tmp/citysite.ts` walks the ground on the
       // harbour side of this straight: 0.09 m at lat 40, 0.42 at 60, 0.93 at 80,
@@ -1647,6 +1661,11 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       { type: 'seaWall', t: 0.852, lat: 20, step: 0.008, end: 0.908 },
       { type: 'flagPole', t: 0.858, lat: -19, step: 0.013, end: 0.904 },
       { type: 'streetLamp', t: 0.920, lat: 17, step: 0.016, end: 0.995, mirror: true },
+      // Three more shophouse columns on the run to the line — see the note on the
+      // promenade run above; same mesh, same draw call, city side. The run stops
+      // at t 0.960 so it is clear of the `crowdStand` at t 0.968, and its steps
+      // sit 0.008 of a lap (12.7 m) off every lamp station.
+      { type: 'neonSign', t: 0.928, lat: -21, step: 0.016, end: 0.960 },
       { type: 'skyscraper', t: 0.900, lat: -94, step: 0.024, end: 0.990, scale: 1.4 },
       { type: 'crowdStand', t: 0.968, lat: -27 },
     ],
