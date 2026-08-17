@@ -152,8 +152,12 @@ for (const id of IDS) {
       if (!k.grounded) airTicks++;
       if (rise > lapMax) lapMax = rise;
       if (k.grounded && rise > groundedMax) groundedMax = rise;
+      // `KartState.progress` is written by `RaceState`, which this harness does
+      // not run, so it stays 0 here — using it would silently put every sample
+      // in the arc-0 window. Project the position instead.
+      const arcNow = track.project(k.position).distance;
       for (const w of wins) {
-        let d = Math.abs(k.progress * track.lapLength - w.arc);
+        let d = Math.abs(arcNow - w.arc);
         d = Math.min(d, track.lapLength - d);
         if (d > WINDOW) continue;
         w.n++;
