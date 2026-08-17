@@ -1065,7 +1065,25 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // gap between stalls, which is what a market looks like anyway.
       { type: 'marketStall', t: 0.168, lat: 20, step: 0.0075, end: 0.262, mirror: true },
       { type: 'trafficLight', t: 0.172, lat: -14 },
-      { type: 'holoAd', t: 0.20, lat: 0, up: 10, step: 0.03, end: 0.26 },
+      // NO `holoAd`, for the reason Hong Kong's identical run was removed at
+      // `up: 11` over its neon canyon — see the note in HONG_KONG's prop list.
+      // That fix was applied to one of the three circuits that had this run,
+      // which is why it came back as a report. Measured here on the built world
+      // at ultra: three instances, anchors at y 11.80-12.03, the LOWEST vertex
+      // of the emitter frame at y 9.14-9.37, ground beneath at y 1.58-1.87 —
+      // 7.3 to 7.5 m of clear air under every one of them, with nothing in
+      // between. Not an accident of seating either: the recipe's own comment
+      // says it, "built around the origin with no supports — it is a hologram,
+      // it does not need legs", and the geometry is four 0.16 m emitter rails
+      // and a glowing plate. A side-on frame from the street shows sky under
+      // the panel across the full 15 m span.
+      //
+      // Supporting it instead was the other option and it does not fit: the
+      // frame is 15 m across at lat 0, and legs at +-7.5 m would stand on a
+      // carriageway whose drawn half-width here is 8.5 + 1.55 + 2 = 12.05 m.
+      // A road-spanning gantry is a different prop with a different owner.
+      // The `marketStall` run, the `neonSign` run and `neonCantilever` already
+      // carry the overhead signage this street needs.
       { type: 'neonSign', t: 0.175, lat: 16, step: 0.014, end: 0.26 },
       { type: 'signChevron', t: 0.268, lat: 14, step: 0.006, end: 0.296 },
       // ---- riverside and the sweeper -------------------------------------
@@ -1271,7 +1289,12 @@ export const CITY_TRACKS: Record<string, TrackDef> = {
       // style on the section, not from parking a 29 m block on the kerb.
       { type: 'screenTower', t: 0.196, lat: 27, mirror: true },
       { type: 'screenTower', t: 0.246, lat: 27, mirror: true },
-      { type: 'holoAd', t: 0.20, lat: 0, up: 12, step: 0.026, end: 0.27 },
+      // NO `holoAd`. Same defect and same fix as Taipei's night market and Hong
+      // Kong's neon canyon — this was the third and last copy of the run. At
+      // `up: 12` the emitter frame's lowest vertex sits 9.5 m over the scramble
+      // crossing with nothing under it. `screenTower` above is the supported
+      // way to put a big lit screen over this junction: it stands on the ground
+      // at lat 27 and leans its face over the crossing.
       { type: 'trafficLight', t: 0.19, lat: 15 },
       { type: 'trafficLight', t: 0.262, lat: -15 },
       { type: 'billboard', t: 0.286, lat: -24, scale: 1.3 },
