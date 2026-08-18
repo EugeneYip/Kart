@@ -37,8 +37,11 @@ import {
 import type { AudioLike, GameLike } from './Widgets';
 import { CHARACTERS, KART_BODIES, TRACKS, characterColumns } from './Catalogue';
 import type { CharacterDef, StatBlock } from './Catalogue';
-import { TouchControls } from './TouchControls';
-import type { TouchLayout } from './TouchControls';
+import {
+  TouchControls, TOUCH_CONTROL_STYLES, TOUCH_LAYOUTS, STEER_SENSITIVITIES,
+} from './TouchControls';
+import type { TouchLayout, TouchControlStyle, SteerSensitivity } from './TouchControls';
+import { PREF_KEYS, readChoice, writeChoice } from './Prefs';
 
 // ===========================================================================
 // Roster / catalogue data
@@ -62,6 +65,42 @@ const STAT_LABEL: Record<keyof StatBlock, string> = {
 
 const CC_OPTIONS = [50, 100, 150, 200] as const;
 const QUALITY_ORDER: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra'];
+
+/** Menu wording for the touch steering styles. */
+const CONTROL_STYLE_LABEL: Record<TouchControlStyle, string> = {
+  swipe: 'SWIPE', joystick: 'JOYSTICK', dpad: 'D-PAD',
+};
+/**
+ * Menu wording for TOUCH LAYOUT, per style.
+ *
+ * The setting is always the same thing — which physical side the steering control
+ * is on and therefore which side the action buttons take — but it has to be named
+ * after the control the chosen style actually draws. In SWIPE there is no steering
+ * control at all, so the only thing the player can see move is the button cluster,
+ * and that is what the value names.
+ */
+const LAYOUT_LABEL: Record<TouchControlStyle, Record<TouchLayout, string>> = {
+  joystick: { 'stick-right': 'STICK RIGHT', 'stick-left': 'STICK LEFT' },
+  dpad: { 'stick-right': 'D-PAD RIGHT', 'stick-left': 'D-PAD LEFT' },
+  swipe: { 'stick-right': 'BUTTONS LEFT', 'stick-left': 'BUTTONS RIGHT' },
+};
+
+/** CONTROLS-screen wording for the steering gesture, per style. */
+const STEER_REF: Record<TouchControlStyle, string> = {
+  swipe: 'SLIDE ANYWHERE — LEFT / RIGHT',
+  joystick: 'DRAG THE STICK',
+  dpad: 'ARROW BUTTONS — HOLD',
+};
+
+/** Step through a fixed option list, wrapping either way. `dir < 0` goes back. */
+function cycle<T extends string>(list: readonly T[], current: T, dir: number): T {
+  const i = list.indexOf(current);
+  // A `current` that is not in the list would make `indexOf` return -1 and the
+  // modulo walk start from the wrong place, so treat it as "at the start".
+  const from = i < 0 ? 0 : i;
+  const n = (from + (dir >= 0 ? 1 : list.length - 1)) % list.length;
+  return list[n];
+}
 /** MK8's points table, trimmed to the grid size in play. */
 const POINTS = [15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 
@@ -119,6 +158,8 @@ export class MenuSystem implements ISubsystem {
   private pressStart!: HTMLDivElement;
   /** CONTROLS screen subtitle; names the device family actually in use. */
   private controlsSub: HTMLElement | null = null;
+  /** CONTROLS screen STEER cell; its wording depends on CONTROL STYLE. */
+  private touchSteerRef: HTMLElement | null = null;
   private screens = new Map<ScreenId, Screen>();
   private current: Screen | null = null;
   private built = false;
@@ -143,7 +184,18 @@ export class MenuSystem implements ISubsystem {
   private motionBlur = true;
   private mapRotate = false;
   private quality: QualityTier = 'high';
+  // --- touch controls ----------------------------------------------------
+  // These three are the only PERSISTED settings (see `./Prefs`). They are read in
+  // the constructor, before `build()` constructs the touch layer, so the layer is
+  // never briefly configured one way and then corrected — a player who chose
+  // D-PAD does not get one frame of joystick.
+  //
+  // Everything else on the OPTIONS screen is deliberately left un-persisted: this
+  // change is not the place to start remembering graphics tiers and volumes, and
+  // `Prefs` is general enough that doing so later is one line each.
   private touchLayout: TouchLayout = 'stick-right';
+  private controlStyle: TouchControlStyle = 'swipe';
+  private steerSens: SteerSensitivity = 'normal';
 
   // --- grand prix --------------------------------------------------------
   private gpRace = 0;
@@ -180,6 +232,13 @@ export class MenuSystem implements ISubsystem {
     if (q) this.quality = q;
     const camFov = probe<number>(game.engine?.camera, 'fov');
     if (typeof camFov === 'number') this.fov = Math.round(camFov);
+    // Persisted touch settings, BEFORE `build()`. Each read validates against the
+    // list of values this build understands and falls back to the field's own
+    // default, so a hand-edited or stale `localStorage` entry cannot select a mode
+    // that has no code behind it.
+    this.controlStyle = readChoice(PREF_KEYS.controlStyle, TOUCH_CONTROL_STYLES, this.controlStyle);
+    this.touchLayout = readChoice(PREF_KEYS.touchLayout, TOUCH_LAYOUTS, this.touchLayout);
+    this.steerSens = readChoice(PREF_KEYS.steerSensitivity, STEER_SENSITIVITIES, this.steerSens);
     this.build();
   }
 
@@ -223,6 +282,8 @@ export class MenuSystem implements ISubsystem {
       onPause: () => this.showPause(),
     });
     this.touch.setLayout(this.touchLayout);
+    this.touch.setControlStyle(this.controlStyle);
+    this.touch.setSensitivity(this.steerSens);
     this.applyTouchCopy();
 
     window.addEventListener('keydown', this.onKeyDown);
@@ -761,6 +822,38 @@ export class MenuSystem implements ISubsystem {
       value.style.display = 'block';
       this.optionRefresh.push(() => setText(value, this.mapRotate ? 'TRACK-UP' : 'NORTH-UP'));
     }
+    // ---- TOUCH CONTROLS ------------------------------------------------
+    // A labelled section rather than three more rows in the general list. The
+    // three settings only mean anything together — a sensitivity is a property of
+    // a control style, and which side the controls sit on depends on what they
+    // are — and a player on a phone who is looking for "the steering setting"
+    // should find all of it in one place instead of scanning for touch-shaped
+    // words. The header is not focusable, so keyboard and gamepad navigation walk
+    // straight past it exactly as before.
+    this.section(list, 'TOUCH CONTROLS');
+    {
+      // CONTROL STYLE — the answer to "how do I steer at all?".
+      //
+      // A hardware test said the virtual stick still oversteers for a first-timer
+      // after travel had already been doubled and the curve softened, and that
+      // another sensitivity tweak was not what was wanted. So this offers a
+      // different ARCHITECTURE rather than a different number: SWIPE has no stick
+      // to find or hold, JOYSTICK is the control that exists today, and D-PAD
+      // replaces analog steering with two ramped arrows. `TouchControls`'
+      // header documents each; nothing here knows how they work.
+      const { value } = this.addRow(s, list, 'CONTROL STYLE', '', () => this.cycleControlStyle(1), (d) => this.cycleControlStyle(d));
+      value.style.display = 'block';
+      this.optionRefresh.push(() => setText(value, CONTROL_STYLE_LABEL[this.controlStyle]));
+    }
+    {
+      // STEERING SENSITIVITY — scales TRAVEL (px to full lock) in the two
+      // displacement styles and the hold RATE on the D-Pad. See `SENSITIVITY` in
+      // `TouchControls` for the exact values each level resolves to; it is offered
+      // only because every level maps to real named numbers.
+      const { value } = this.addRow(s, list, 'STEERING SENSITIVITY', '', () => this.cycleSensitivity(1), (d) => this.cycleSensitivity(d));
+      value.style.display = 'block';
+      this.optionRefresh.push(() => setText(value, this.steerSens.toUpperCase()));
+    }
     {
       // TOUCH LAYOUT — the answer to "which thumb steers?".
       //
@@ -780,9 +873,12 @@ export class MenuSystem implements ISubsystem {
       // The row is only useful on a touch device, but it stays visible
       // everywhere: hiding it would make it undiscoverable on exactly the
       // hardware that needs it, since a phone player cannot read a changelog.
+      // The VALUE names whatever the current style actually puts on that side.
+      // "STICK RIGHT" is a lie in the two styles that have no stick, and a setting
+      // that describes a control the player cannot see is worse than no setting.
       const { value } = this.addRow(s, list, 'TOUCH LAYOUT', '', () => this.cycleTouchLayout(), (d) => { void d; this.cycleTouchLayout(); });
       value.style.display = 'block';
-      this.optionRefresh.push(() => setText(value, this.touchLayout === 'stick-right' ? 'STICK RIGHT' : 'STICK LEFT'));
+      this.optionRefresh.push(() => setText(value, LAYOUT_LABEL[this.controlStyle][this.touchLayout]));
     }
     this.addRow(s, list, 'CONTROLS', 'REFERENCE', () => this.show('controls'));
     this.addRow(s, list, 'BACK', '', () => this.show(this.raceLive ? 'pause' : 'main'));
@@ -851,8 +947,39 @@ export class MenuSystem implements ISubsystem {
   private cycleTouchLayout(): void {
     this.touchLayout = this.touchLayout === 'stick-right' ? 'stick-left' : 'stick-right';
     this.touch?.setLayout(this.touchLayout);
+    writeChoice(PREF_KEYS.touchLayout, this.touchLayout);
     this.refreshOptions();
     this.audio?.play?.('ui_select');
+  }
+
+  private cycleControlStyle(dir: number): void {
+    this.controlStyle = cycle(TOUCH_CONTROL_STYLES, this.controlStyle, dir);
+    this.touch?.setControlStyle(this.controlStyle);
+    writeChoice(PREF_KEYS.controlStyle, this.controlStyle);
+    // Refreshes TOUCH LAYOUT's wording too — its value names the control the new
+    // style actually draws.
+    this.refreshOptions();
+    this.audio?.play?.('ui_select');
+  }
+
+  private cycleSensitivity(dir: number): void {
+    this.steerSens = cycle(STEER_SENSITIVITIES, this.steerSens, dir);
+    this.touch?.setSensitivity(this.steerSens);
+    writeChoice(PREF_KEYS.steerSensitivity, this.steerSens);
+    this.refreshOptions();
+    this.audio?.play?.('ui_select');
+  }
+
+  /**
+   * A non-focusable heading inside a `.ak-list`.
+   *
+   * Safe to interleave with `addRow` because the travelling focus slab is
+   * positioned from the focused row's own `offsetTop`/`offsetHeight` (see
+   * `setFocus`) rather than from an index into the list's children, so an extra
+   * flex child cannot put the highlight out of register.
+   */
+  private section(list: HTMLElement, label: string): void {
+    el('div', 'ak-list__section', list, label);
   }
 
   private toggleMapRotate(): void {
@@ -913,22 +1040,33 @@ export class MenuSystem implements ISubsystem {
     const touchPairs: ReadonlyArray<[string, string]> = [
       ['ACCELERATE', 'AUTOMATIC WHILE RACING'],
       ['BRAKE / REVERSE', 'BRAKE BUTTON — HOLD'],
-      ['STEER', 'DRAG THE STICK'],
+      // STEER is filled in by `refreshTouchRef()`, because what it says depends on
+      // CONTROL STYLE. A fixed "DRAG THE STICK" here would be a straight lie in
+      // two of the three styles, on the one screen a player opens to be told the
+      // truth.
+      ['STEER', ''],
       ['DRIFT / HOP', 'DRIFT BUTTON — HOLD'],
       ['USE ITEM', 'ITEM BUTTON — TAP'],
       ['ROCKET START', 'HOLD ON THE LAST BEAT'],
       ['PAUSE', 'TOP-CORNER BUTTON'],
-      ['SWAP SIDES', 'OPTIONS ▸ TOUCH LAYOUT'],
+      ['CHANGE / SWAP', 'OPTIONS ▸ TOUCH CONTROLS'],
     ];
     for (const [k, v] of touchPairs) {
       el('span', undefined, touchTable, k);
-      el('span', undefined, touchTable, v);
+      const cell = el('span', undefined, touchTable, v);
+      if (k === 'STEER') this.touchSteerRef = cell;
     }
     const list = el('div', 'ak-list ak-stagger', s.root);
     list.style.setProperty('--d', '240ms');
     s.ring = el('div', 'ak-list__focus', list);
     this.addRow(s, list, 'BACK', '', () => this.show('options'));
+    s.onShow = () => this.refreshTouchRef();
     s.onBack = () => this.show('options');
+  }
+
+  /** Name the steering gesture the CURRENT style actually uses. */
+  private refreshTouchRef(): void {
+    if (this.touchSteerRef) setText(this.touchSteerRef, STEER_REF[this.controlStyle]);
   }
 
   // --- pause -------------------------------------------------------------
@@ -1406,9 +1544,9 @@ export class MenuSystem implements ISubsystem {
 
   update(ctx: FrameContext): void {
     // Menus are event-driven; the internal ticker handles gamepad polling so
-    // the UI stays live even when the engine loop is paused.
-    void ctx;
-    this.syncTouch();
+    // the UI stays live even when the engine loop is paused. `ctx.dt` is used —
+    // the touch layer's D-Pad integrates its steering ramp over it.
+    this.syncTouch(ctx.dt);
   }
 
   /**
@@ -1422,11 +1560,11 @@ export class MenuSystem implements ISubsystem {
    * makes the one-frame button release in `TouchControls.sync()` land on the
    * right side of the edge detector.
    */
-  private syncTouch(): void {
+  private syncTouch(dt: number): void {
     if (!this.touch) return;
     const phase = probe<string>(this.game.race, 'state');
     const modal = this.current !== null || this.paused || this.results.visible;
-    this.touch.sync(phase, modal);
+    this.touch.sync(phase, modal, dt);
     this.applyTouchCopy();
   }
 

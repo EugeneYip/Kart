@@ -1502,6 +1502,23 @@
 }
 .ak-list__focus--on { opacity: 1; }
 
+/* A non-focusable heading that groups the rows under it — used by OPTIONS to
+   gather the three touch-control settings, which only mean anything together.
+   It is an ordinary flex child of `.ak-list`, and the travelling focus slab is
+   positioned from the focused ROW's own `offsetTop`, so interleaving one of these
+   cannot put the highlight out of register with a row. */
+.ak-list__section {
+  margin-top: calc(6 * var(--u));
+  padding: 0 calc(22 * var(--u)) calc(2 * var(--u));
+  font-size: max(var(--u-min), calc(15 * var(--u)));
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  color: rgba(150, 190, 238, 0.82);
+  text-shadow: 0 calc(2 * var(--u)) 0 rgba(0, 0, 0, 0.55);
+  border-bottom: calc(2 * var(--u)) solid rgba(150, 190, 238, 0.22);
+}
+.ak-list__section:first-child { margin-top: 0; }
+
 .ak-item-row {
   position: relative;
   display: flex;
@@ -2275,13 +2292,198 @@ html.ak-touch-mode .ak-results::-webkit-scrollbar { width: 0; height: 0; }
 }
 .ak-touch--on { opacity: 1; visibility: visible; transition: opacity 220ms var(--ak-spring), visibility 0s; }
 
+.ak-touch__swipe,
 .ak-touch__pad,
 .ak-touch__acts,
 .ak-touch__btn,
+.ak-touch__dpad,
+.ak-touch__dbtn,
 .ak-touch__pause {
   pointer-events: auto;
   touch-action: none;
 }
+
+/* =========================================================================
+   CONTROL STYLE — exactly one steering control exists at a time
+   -------------------------------------------------------------------------
+   `display: none`, NOT `opacity: 0` or `visibility: hidden`. An
+   invisible-but-laid-out `.ak-touch__pad` is still 300x230 units of live
+   `pointer-events: auto` sitting in the corner of the SWIPE surface, and it would
+   eat every gesture that began there — which presents as "swipe stops working
+   near the bottom of the screen", the hardest kind of bug to attribute.
+   `display: none` removes it from the hit test as well as from the picture.
+
+   Defaulting all three to hidden (rather than showing the joystick when no style
+   class is present) is the safe direction to be wrong in: a missing class shows no
+   steering control, which is obvious, instead of two overlapping ones.
+   ========================================================================= */
+.ak-touch__swipe,
+.ak-touch__pad,
+.ak-touch__dpad,
+.ak-touch__gauge { display: none; }
+.ak-touch--swipe .ak-touch__swipe { display: block; }
+.ak-touch--joystick .ak-touch__pad { display: block; }
+.ak-touch--dpad .ak-touch__dpad { display: block; }
+/* The gauge is the steering readout for the two styles with nothing to watch.
+   JOYSTICK is excluded on purpose: its knob already tracks the thumb, and a second
+   indicator of the same axis just competes with it. */
+.ak-touch--swipe .ak-touch__gauge,
+.ak-touch--dpad .ak-touch__gauge { display: block; }
+
+/* --- SWIPE: the steering surface ---------------------------------------- */
+/* The whole viewport, drawing NOTHING. It is the root's first child so paint order
+   — and therefore hit order — puts every actual control above it; see
+   `TouchControls.makeSwipeSurface()` for why it is a sibling of the buttons rather
+   than their ancestor. `touch-action: none` is inherited from `.ak-touch` and
+   matters more here than anywhere: this element covers the pull-to-refresh strip
+   and the whole scroll surface. */
+.ak-touch__swipe {
+  position: absolute;
+  inset: 0;
+}
+
+/* --- steering readout --------------------------------------------------- */
+/* A GAUGE, not a control: pinned to the bottom edge, nowhere near the thumb, and
+   `pointer-events: none` so it cannot be grabbed. It exists because SWIPE draws no
+   steering control at all, and `Input.ts` records what happened the last time this
+   game shipped a touch scheme with nothing drawn.
+   Bottom-centre so it is identical in portrait and landscape and belongs to
+   neither hand — it is the one part of the layer that `TOUCH LAYOUT` must not
+   mirror, because it is not something you reach for. */
+.ak-touch__gauge {
+  position: absolute;
+  left: 50%;
+  bottom: calc(7 * var(--ak-tu) + var(--ak-safe-b));
+  width: min(calc(260 * var(--ak-tu)), 62vw);
+  height: calc(7 * var(--ak-tu));
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(8, 14, 30, 0.34);
+  box-shadow: inset 0 0 0 calc(1.5 * var(--ak-tu)) rgba(196, 224, 255, 0.22);
+  opacity: 0.55;
+  transition: opacity 180ms ease;
+  overflow: hidden;
+}
+.ak-touch__gauge--live { opacity: 1; }
+/* Centre reference, so a player can see where neutral is without steering. */
+.ak-touch__gauge-tick {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: calc(2 * var(--ak-tu));
+  height: 100%;
+  transform: translateX(-50%);
+  background: rgba(214, 234, 255, 0.65);
+}
+/* Full width, centred origin. JS writes ONE transform:
+   `translateX(25% * v) scaleX(|v| / 2)` — see `TouchControls.drawGauge()` — which
+   puts one end exactly on the centre tick. Compositor-only, so it is free to
+   update on every pointermove. */
+.ak-touch__gauge-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: center;
+  transform: scaleX(0);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 190, 60, 0.85), rgba(255, 232, 150, 0.95));
+  box-shadow: 0 0 calc(10 * var(--ak-tu)) rgba(255, 180, 60, 0.5);
+  will-change: transform;
+}
+
+/* --- SWIPE: the one-per-race hint --------------------------------------- */
+/* Words, because there is no affordance to point at. Above the action cluster's
+   tallest button so it does not read as a label for one of them, centred so it
+   does not read as belonging to a hand. Gone for good after the first gesture. */
+.ak-touch__hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(118 * var(--ak-tu) + var(--ak-safe-b));
+  transform: translateX(-50%);
+  padding: calc(7 * var(--ak-tu)) calc(16 * var(--ak-tu));
+  border-radius: 999px;
+  display: none;
+  font-size: max(11px, calc(15 * var(--ak-tu)));
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  color: rgba(236, 246, 255, 0.9);
+  background: rgba(8, 13, 28, 0.42);
+  box-shadow: inset 0 0 0 calc(1.5 * var(--ak-tu)) rgba(196, 224, 255, 0.26);
+  text-shadow: 0 calc(2 * var(--ak-tu)) calc(4 * var(--ak-tu)) rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.ak-touch--swipe .ak-touch__hint--on {
+  display: block;
+  animation: ak-touch-hint 2200ms ease-in-out infinite;
+}
+@keyframes ak-touch-hint {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* --- D-PAD ------------------------------------------------------------- */
+/* Two arrows in the same corner the stick occupies, mirrored by the same
+   `--mirrored` rule, so switching style does not also move the steering control to
+   a different hand. The container keeps `pointer-events: auto` for the same reason
+   `.ak-touch__acts` does: a near-miss between the two arrows should do nothing
+   rather than fall through to something else. */
+.ak-touch__dpad {
+  position: absolute;
+  right: calc(14 * var(--ak-tu) + var(--ak-safe-r));
+  bottom: calc(14 * var(--ak-tu) + var(--ak-safe-b));
+  width: calc(198 * var(--ak-tu));
+  height: calc(92 * var(--ak-tu));
+}
+.ak-touch--mirrored .ak-touch__dpad { right: auto; left: calc(14 * var(--ak-tu) + var(--ak-safe-l)); }
+
+/* 92 units is 79 px at the phone floor — comfortably past the 44 px both Apple and
+   Material call the minimum, and bigger than any of the action buttons, because
+   this is the control a player who chose D-PAD is pressing to steer with. */
+.ak-touch__dbtn {
+  position: absolute;
+  top: 0;
+  width: calc(92 * var(--ak-tu));
+  height: calc(92 * var(--ak-tu));
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: calc(26 * var(--ak-tu));
+  color: #eaf4ff;
+  background: radial-gradient(circle at 50% 34%, rgba(200, 228, 255, 0.14), rgba(6, 10, 24, 0.32) 74%);
+  box-shadow:
+    inset 0 0 0 calc(2.5 * var(--ak-tu)) rgba(196, 224, 255, 0.4),
+    0 calc(3 * var(--ak-tu)) calc(12 * var(--ak-tu)) rgba(0, 0, 0, 0.4);
+  transition: transform 120ms var(--ak-back), box-shadow 120ms ease, background 120ms ease;
+  will-change: transform;
+  cursor: pointer;
+}
+.ak-touch__dbtn--left { left: 0; }
+.ak-touch__dbtn--right { left: calc(106 * var(--ak-tu)); }
+/* ONE mirror rule for both arrows, so the pair cannot end up swapped: mirroring
+   the cluster must NOT swap which arrow steers which way. Left stays left. */
+.ak-touch--mirrored .ak-touch__dbtn--left { left: 0; }
+.ak-touch--mirrored .ak-touch__dbtn--right { left: calc(106 * var(--ak-tu)); }
+
+.ak-touch__dbtn--on {
+  transform: scale(0.94);
+  background: radial-gradient(circle at 50% 34%, rgba(255, 247, 224, 0.34), rgba(255, 170, 40, 0.5) 76%);
+  box-shadow:
+    inset 0 0 0 calc(3 * var(--ak-tu)) #fff4d0,
+    0 0 calc(24 * var(--ak-tu)) rgba(255, 190, 60, 0.6);
+}
+
+.ak-touch__dglyph {
+  display: block;
+  width: 52%;
+  height: 52%;
+  pointer-events: none;
+  filter: drop-shadow(0 calc(2 * var(--ak-tu)) calc(3 * var(--ak-tu)) rgba(0, 0, 0, 0.7));
+}
+.ak-touch__dglyph svg { width: 100%; height: 100%; display: block; }
+/* Both arrows draw the SAME path and the right one is mirrored here, so they
+   cannot drift into being two different shapes. */
+.ak-touch__dbtn--right .ak-touch__dglyph { transform: scaleX(-1); }
 
 /* --- steering pad ------------------------------------------------------- */
 /* The pad is the HIT AREA and is intentionally far bigger than the drawn stick:
