@@ -17,45 +17,62 @@
       and on the control layer is.
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- Primary identity / search metadata. Keep these static in HTML: social
+         crawlers and search bots must not need to execute the game bundle. -->
+    <title>Foxy Kart — Browser Kart Racing Game</title>
+    <meta name="description" content="Race through stylized city circuits in Foxy Kart, a browser kart racing game built for desktop, phone, and tablet." />
+    <meta name="robots" content="index, follow" />
     <meta name="theme-color" content="#05070f" />
-    <title>Foxy Kart</title>
+    <link rel="canonical" href="https://kart.eugeneyip.com/" />
 
-    <!--
-      FAVICON — inline SVG data URI. A tyre ring over the boot screen's gold,
-      legible as a mark at 16 px. A data URI rather than a file so AGENTS.md
-      rule 3 stays literally true — zero network requests, nothing to 404 — and
-      so `dist/` stays exactly four asset files.
+    <!-- Open Graph / link previews -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Foxy Kart" />
+    <meta property="og:title" content="Foxy Kart — Browser Kart Racing Game" />
+    <meta property="og:description" content="Race through stylized city circuits in Foxy Kart, playable directly in your browser on desktop, phone, and tablet." />
+    <meta property="og:url" content="https://kart.eugeneyip.com/" />
+    <meta property="og:image" content="https://kart.eugeneyip.com/og/foxy-kart-social-v1.svg" />
+    <meta property="og:image:type" content="image/svg+xml" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Foxy Kart Grand Prix browser racing game" />
 
-      WHAT THIS DOES AND DOES NOT FIX — measured, not assumed.
-      With no icon declared, the static subpath rehearsal logged one
-      `404 /favicon.ico` on every single page load. Browsers probe for an icon at
-      the ORIGIN ROOT, never at the page's own directory, so on Pages that request
-      is `https://<user>.github.io/favicon.ico`. That path is OUTSIDE this
-      project's published subtree: `base` cannot redirect it and no file this
-      repository ships can answer it. Only the owner's user site — the separate
-      `<user>.github.io` repository — owns that URL. So the residual 404 is
-      structurally unfixable from here, and it is harmless: it is a browser
-      convenience request for a decoration, not an app asset, and the game never
-      reads it.
+    <!-- X / Twitter card metadata -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Foxy Kart — Browser Kart Racing Game" />
+    <meta name="twitter:description" content="Race through stylized city circuits in Foxy Kart, playable directly in your browser on desktop, phone, and tablet." />
+    <meta name="twitter:image" content="https://kart.eugeneyip.com/og/foxy-kart-social-v1.svg" />
+    <meta name="twitter:image:alt" content="Foxy Kart Grand Prix browser racing game" />
 
-      Declaring the icon does reduce the probe rather than eliminate it. Measured
-      over three forced reloads of the built site: two loads made no `/favicon.ico`
-      request at all, one still did. So do NOT read a stray `404 /favicon.ico` in
-      a network panel as a deployment fault — check that the five real requests
-      (index.html + 3 JS + 1 CSS) are all 200, which is the actual contract.
+    <!-- Browser / home-screen identity. Relative URLs deliberately preserve the
+         repo's `base: './'` project-subpath compatibility. -->
+    <link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg" />
+    <link rel="manifest" href="./site.webmanifest" />
 
-      The attributes are all load-bearing, and each was needed before Chrome
-      would accept the icon at all: `type="image/svg+xml"` (without it Chrome
-      does not commit to an SVG icon), explicit `width`/`height` on the <svg>
-      (a viewBox alone leaves the image intrinsically sizeless — it measured
-      150x150), and `%20` for spaces (literal spaces are not legal in a URI).
-    -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      sizes="any"
-      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%2305070f'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='9.5'%20fill='none'%20stroke='%23ffd166'%20stroke-width='4'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='3'%20fill='%23f2901f'/%3E%3C/svg%3E"
-    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "Foxy Kart",
+            "url": "https://kart.eugeneyip.com/",
+            "description": "A browser kart racing game with stylized city circuits."
+          },
+          {
+            "@type": "VideoGame",
+            "name": "Foxy Kart",
+            "url": "https://kart.eugeneyip.com/",
+            "description": "Race through stylized city circuits in a browser kart racing game built for desktop, phone, and tablet.",
+            "genre": "Kart racing",
+            "playMode": "SinglePlayer",
+            "image": "https://kart.eugeneyip.com/og/foxy-kart-social-v1.svg"
+          }
+        ]
+      }
+    </script>
+
     <!--
       ===================================================================
        BOOT SCREEN — typographic
@@ -138,9 +155,7 @@
       }
       #boot h1 {
         font-size: clamp(34px, 8.2vw, 104px); letter-spacing: 0.17em; font-weight: 900;
-        line-height: 1.02; text-indent: 0.17em; /* balance the trailing letter-space */
-        /* A solid warm gold is the BASE, not a fallback afterthought: if
-           background-clip:text is unavailable the wordmark still reads. */
+        line-height: 1.02; text-indent: 0.17em;
         color: #ffcf6d;
       }
       @supports ((-webkit-background-clip: text) or (background-clip: text)) {
@@ -148,15 +163,12 @@
           background: linear-gradient(180deg, #fff6dd 0%, #ffd166 44%, #f2901f 76%, #c2610d 100%);
           -webkit-background-clip: text; background-clip: text;
           color: transparent;
-          /* Soft, blurred depth only. No zero-blur offsets, no text stroke. */
           filter:
             drop-shadow(0 2px 4px rgba(48, 20, 4, 0.55))
             drop-shadow(0 0 30px rgba(255, 172, 62, 0.28));
         }
       }
 
-      /* Subtitle, flanked by two rules that grow out of it. Flex siblings —
-         nothing overlaps the text. */
       .boot-logo__sub {
         display: flex; align-items: center; justify-content: center;
         gap: clamp(10px, 1.6vw, 20px);
@@ -170,7 +182,6 @@
       }
       .boot-logo__sub::after { transform: scaleX(-1); }
 
-      /* ---- Progress ---------------------------------------------------- */
       #boot-bar {
         position: relative; width: min(430px, 62vw); height: 8px;
         margin-top: clamp(22px, 5vh, 54px);
@@ -182,13 +193,9 @@
         background: linear-gradient(90deg, #ffb347, #ffd98a 45%, #48d6ff);
         transition: width 0.25s ease; box-shadow: 0 0 14px rgba(255, 179, 71, 0.8);
       }
-      /* Indeterminate sweep: proof of life before the first progress event,
-         and it needs no JS clock. Clipped inside the bar, far from the type. */
       #boot-bar::after {
         content: ""; position: absolute; inset: 0;
-        background: linear-gradient(
-          100deg, transparent 20%, rgba(255, 255, 255, 0.5) 50%, transparent 80%
-        );
+        background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.5) 50%, transparent 80%);
         transform: translateX(-100%);
         animation: boot-sweep 1.5s ease-in-out infinite;
       }
@@ -200,7 +207,6 @@
         opacity: 0.68; min-height: 1.2em; text-align: center;
       }
 
-      /* Tight viewports (the 800x450 review pane): pull the stack together. */
       @media (max-height: 470px) {
         #boot-bar { margin-top: 20px; }
         #boot h1 { font-size: clamp(30px, 6.6vw, 60px); }
