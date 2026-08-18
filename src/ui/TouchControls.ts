@@ -802,6 +802,39 @@ export class TouchControls {
     this.drawGauge();
   }
 
+  /**
+   * ---------------------------------------------------------------------------
+   *  WHY THE DIRECT `virtualController.steer` WRITES NEED NO EXTRA GATE
+   * ---------------------------------------------------------------------------
+   *  `write()` is gated on `touchMode && live`, but `updateSwipe`/`updateStick`
+   *  also set `virtualController.steer` straight from the pointer event, outside
+   *  that gate, so a counter-steer lands on the frame the thumb moves. That looks
+   *  like a hole, and SWIPE appears to widen it, because `.ak-touch` hides itself
+   *  with `transition: visibility 0s linear 220ms` — for 220 ms after the layer
+   *  stops being live it is still `visibility: visible`, and the SWIPE surface is
+   *  the whole viewport rather than a 258x198 px pad in one corner.
+   *
+   *  A `pointerdown` guard was written for this and then REMOVED, because it could
+   *  not be made to fail. Measured, each supposed route is already closed:
+   *
+   *   * `live` goes false because something modal opened — and `.ak-menus` is
+   *     z-index 60 against this layer's 50 and covers the viewport, so it takes
+   *     the pointer. With the guard deliberately disabled, a 100 px gesture one
+   *     frame after `showPause()` still produced steer 0.0000, and DRIFT still
+   *     read false: the menu, not the guard, is what stops it.
+   *   * `touchMode` goes false because a mouse or a key was used — but the event
+   *     that would exploit the window is a TOUCH, and `onAnyPointer` sees it first
+   *     (window, capture phase) and re-promotes touch mode by design. The gesture
+   *     is then legitimate, which is the documented hybrid behaviour, not a bug.
+   *   * a gesture already in flight when `live` drops — `sync()` calls
+   *     `releaseAll()`, which clears `swipeId`/`stickId`, so every later
+   *     `pointermove` is rejected on identity.
+   *
+   *  So the guard would have been a check that cannot fail, which is this
+   *  codebase's documented recurring defect. This comment is here instead, so the
+   *  next reader does not have to rediscover the same three answers.
+   */
+
   // =======================================================================
   // Per-frame sync — called from MenuSystem.update()
   // =======================================================================
