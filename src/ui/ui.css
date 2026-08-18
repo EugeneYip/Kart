@@ -2529,6 +2529,13 @@ html.ak-touch-mode .ak-screen::-webkit-scrollbar { width: 0; height: 0; }
    on-screen BACK button and tapping the row itself. */
 html.ak-touch-mode .ak-hints { display: none; }
 
+/* One of these two control-reference tables is always the wrong one. `display`
+   is not set here for the keyboard table — it keeps whatever `.ak-controls-table`
+   gives it — so the desktop screen is byte-for-byte what it was. */
+.ak-touch-only { display: none; }
+html.ak-touch-mode .ak-kbd-only { display: none; }
+html.ak-touch-mode .ak-touch-only { display: grid; }
+
 /* Every screen that can be backed out of gets a visible way to do it, because
    Escape and gamepad-B are the only other routes and touch has neither.
    One button, parented to `.ak-menus` — see `MenuSystem.buildBack()` for why it

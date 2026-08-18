@@ -118,6 +118,8 @@ export class MenuSystem implements ISubsystem {
   private rotateHint!: HTMLDivElement;
   /** Title-screen call to action; reworded when touch is the active scheme. */
   private pressStart!: HTMLDivElement;
+  /** CONTROLS screen subtitle; names the device family actually in use. */
+  private controlsSub: HTMLElement | null = null;
   private screens = new Map<ScreenId, Screen>();
   private current: Screen | null = null;
   private built = false;
@@ -843,9 +845,10 @@ export class MenuSystem implements ISubsystem {
   private buildControls(): void {
     const s = this.makeScreen('controls', 1);
     this.head(s.root, 'CONTROLS', 'KEYBOARD  ·  GAMEPAD');
+    this.controlsSub = s.root.querySelector<HTMLElement>('.ak-head__sub');
     const box = el('div', 'ak-stats ak-stagger', s.root);
     box.style.setProperty('--d', '120ms');
-    const table = el('div', 'ak-controls-table', box);
+    const table = el('div', 'ak-controls-table ak-kbd-only', box);
     const pairs: ReadonlyArray<[string, string]> = [
       ['ACCELERATE', 'W / ↑  ·  RT or A'],
       ['BRAKE', 'S / ↓  ·  LT or B'],
@@ -859,6 +862,27 @@ export class MenuSystem implements ISubsystem {
     for (const [k, v] of pairs) {
       el('span', undefined, table, k);
       el('span', undefined, table, v);
+    }
+    // The touch reference REPLACES the keyboard one rather than sitting beside
+    // it: on a phone every line above names a key that does not exist, and this
+    // screen already measured 100.4 % of an 800x450 frame with one table in it.
+    // A hybrid that presses a key flips back to the keyboard table, same as the
+    // rest of the UI. Deliberately layout-neutral wording — "the stick", not
+    // "lower right" — because OPTIONS ▸ TOUCH LAYOUT can mirror the sides.
+    const touchTable = el('div', 'ak-controls-table ak-touch-only', box);
+    const touchPairs: ReadonlyArray<[string, string]> = [
+      ['ACCELERATE', 'AUTOMATIC WHILE RACING'],
+      ['BRAKE / REVERSE', 'BRAKE BUTTON — HOLD'],
+      ['STEER', 'DRAG THE STICK'],
+      ['DRIFT / HOP', 'DRIFT BUTTON — HOLD'],
+      ['USE ITEM', 'ITEM BUTTON — TAP'],
+      ['ROCKET START', 'HOLD ON THE LAST BEAT'],
+      ['PAUSE', 'TOP-CORNER BUTTON'],
+      ['SWAP SIDES', 'OPTIONS ▸ TOUCH LAYOUT'],
+    ];
+    for (const [k, v] of touchPairs) {
+      el('span', undefined, touchTable, k);
+      el('span', undefined, touchTable, v);
     }
     const list = el('div', 'ak-list ak-stagger', s.root);
     list.style.setProperty('--d', '240ms');
@@ -1344,6 +1368,9 @@ export class MenuSystem implements ISubsystem {
   private applyTouchCopy(): void {
     const touch = this.touch?.active === true;
     if (this.pressStart) setText(this.pressStart, touch ? 'TAP TO START' : 'PRESS START');
+    if (this.controlsSub) {
+      setText(this.controlsSub, touch ? 'TOUCH  ·  GAMEPAD' : 'KEYBOARD  ·  GAMEPAD');
+    }
   }
 
   private onResize = (): void => {
