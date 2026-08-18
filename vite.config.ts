@@ -20,9 +20,10 @@ export default defineConfig({
   // under a local `served/` smoke test). Audited before choosing it:
   //   * no `fetch`, `XMLHttpRequest`, `new Audio`, `three` Loader, `new Worker`
   //     or service worker anywhere in `src/` — AGENTS.md rule 3 holds, every
-  //     texture is canvas-2D/DataTexture/noise and every model is TS geometry;
-  //   * no `public/` directory, so no `/file` URLs that a relative base cannot
-  //     rewrite;
+  //     gameplay texture is canvas-2D/DataTexture/noise and every model is TS geometry;
+  //   * `public/` contains page-level discovery/presentation assets only
+  //     (favicon, manifest, robots/sitemap and social-preview artwork). Gameplay
+  //     code does not fetch or depend on any of them at runtime;
   //   * no router, no `history.pushState`, no `location.pathname` read in
   //     shipped code (only `src/dev/*` harnesses, which are not build inputs),
   //     so there is no deep link for Pages' 404 handler to mishandle;
