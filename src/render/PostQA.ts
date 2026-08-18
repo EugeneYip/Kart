@@ -22,7 +22,7 @@
  * ============================================================================
  */
 
-import type { RenderPipeline } from './RenderPipeline';
+import type { RenderPipeline, ShadowBindReport } from './RenderPipeline';
 import type { GradePresetName, ToneMapName } from './effects/GradeEffect';
 
 interface ProbeResult {
@@ -614,6 +614,22 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
 
     /** Every texture the post chain binds, with its sampler-compatibility fields. */
     boundTextures: () => describeBoundTextures(pipeline),
+
+    /**
+     * The upstream half of the same flood: does every shadow-casting light in the
+     * scene actually own a depth map right now? A null entry in
+     * `directionalShadowMap[]` is filled by three with its `emptyShadowTexture`
+     * and no `compareFunction`, and every shadow-receiving draw in the frame then
+     * fails validation — the scene renders as sky only. `glValidate()` sees the
+     * consequence; this sees the cause, in one synchronous call and with no need
+     * to instrument 30 frames.
+     *
+     * Run it after ANY change to `Lighting`'s cascade cadence, and run it at
+     * frame 0 (the menu, before a race), which is the case that used to fail:
+     * `RenderPipeline.warmShadowMaps()` is the only thing standing between boot
+     * and a null bind.
+     */
+    shadowMaps: (): ShadowBindReport => pipeline.verifyShadowBinds(),
 
     /**
      * Get the game into a photographable state: adaptive resolution off (it
@@ -1348,7 +1364,8 @@ export function installPostQA(pipeline: RenderPipeline, engine: EngineLike): voi
   (globalThis as unknown as Record<string, unknown>).__POST__ = api;
   console.info(
     '[PostQA] window.__POST__ ready — probe(source?) frameCost() passCost() gpuCost()'
-    + ' toneMap() exposure() passes() autoRun() glValidate() boundTextures() mbArm()'
+    + ' toneMap() exposure() passes() autoRun() glValidate() shadowMaps()'
+    + ' boundTextures() mbArm()'
     + ' mbFrame(shot,speed,boost,mode) mbRelease()'
     + '\n  frameCost() is the whole-frame per-pass GPU timer, including the shadow'
     + ' group and the water reflection, which gpuCost() cannot see.'

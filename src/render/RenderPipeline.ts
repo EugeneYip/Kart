@@ -546,7 +546,27 @@ export function chooseBudget(
  * to walk the scene for shadow casters of every kind without a cast per branch.
  */
 interface ShadowCaster {
-  readonly shadow: { needsUpdate: boolean; map: THREE.WebGLRenderTarget | null };
+  readonly name: string;
+  readonly type: string;
+  readonly shadow: {
+    autoUpdate: boolean;
+    needsUpdate: boolean;
+    map: THREE.WebGLRenderTarget | null;
+  };
+}
+
+/**
+ * The state of every `sampler2DShadow` bind in the scene: which shadow-casting
+ * lights own a depth map and which are about to be handed three's
+ * `emptyShadowTexture`. See `RenderPipeline.verifyShadowBinds()`.
+ */
+export interface ShadowBindReport {
+  /** True when no light is missing its map, i.e. no invalid bind is possible. */
+  ok: boolean;
+  /** Names of the lights with no depth map. Empty when `ok`. */
+  missing: string[];
+  /** Every shadow caster in the scene, by name. */
+  lights: Record<string, 'allocated' | 'NULL'>;
 }
 
 /** Whether the world's planar reflection pass is actually in the frame, and why. */
@@ -776,47 +796,92 @@ export class RenderPipeline implements ISubsystem {
    *  of every shadow-receiving material in the scene** — which is exactly the
    *  reported symptom, including "on a fresh context every boot".
    *
-   *  When is a cascade map still null? `Lighting` staggers the cascades (0 every
-   *  frame, 1 every 2nd, 2 every 3rd) and its shadow hook `continue`s past a
-   *  cascade that is not due — so `WebGLShadowMap.render` never runs for it and
-   *  its map is never created. Measured with `.probe-tmp/shadownull.ts`, driving
-   *  the real `Lighting` hook:
+   *  When is a cascade map still null? `Lighting` staggers the cascades and its
+   *  `fitCascades()` clears `needsUpdate` on any cascade that is not due this
+   *  frame — so `WebGLShadowMap.render` never runs for it and its map is never
+   *  created.
    *
-   *      frame 1   cascades rendered: 0            -> [map, NULL, NULL]
-   *      frame 2   cascades rendered: 0, 1         -> [map, map,  NULL]
-   *      frame 3   cascades rendered: 0, 2         -> [map, map,  map ]
+   *  ⚠️ THE CONSEQUENCE IS NOT COSMETIC AND IT IS NOT TWO FRAMES. This comment
+   *  used to call it a "TWO-FRAME BOOT FLOOD ... NOT a measurable share of the
+   *  sustained frame time". Both halves were wrong, and the owner's black race
+   *  scene is what it looks like when they are:
    *
-   *  So it is a TWO-FRAME BOOT FLOOD, not a steady-state one. Be clear about what
-   *  that means for "lag is still severe": ~2 frames x ~170 draws x 1–2 bad binds
-   *  is enough to trip Chrome's "too many errors" cut-off and to make those two
-   *  frames crawl, and it is NOT a measurable share of the sustained frame time.
-   *  Fixing it removes the console flood and a boot hitch. Nothing else.
+   *   - EVERY shadow-receiving draw fails validation while a map is null, so the
+   *     frame keeps only the materials that receive no shadow. Measured on
+   *     sunsetCoastline at the countdown with cascades 1 and 2 null: 540 draw
+   *     calls and 2.43 M triangles submitted, and the frame is the sky dome and
+   *     nothing else — no road, no karts, no grandstands. On a night circuit the
+   *     sky is near-black, which is the reported "pure black frame" at 477–742
+   *     calls and 1.44 M triangles.
+   *   - it lasts as long as a null map lasts, which is not bounded by two
+   *     frames. The cadence gained a `phase` (1/2/4 at offsets 0/1/2), so
+   *     `(0 - phase) % interval` is -1 and -2 at frame 0: NO staggered cascade
+   *     is ever due on the first frame. And `Lighting.frame` only advances in
+   *     `update()`, which is not pumped until a race is running — so the counter
+   *     sits at 0 through the entire menu and the maps stay null until the first
+   *     race frames tick it past each cascade's phase. Whether the player sees
+   *     the collapsed frame is a race between that and what is on screen, which
+   *     is exactly the reported "some boots fine, some black", and it gets worse
+   *     the slower frames arrive: a hidden or throttled tab holds every null-map
+   *     frame open for a second at a time.
    *
-   *  The fix here: render one throwaway frame into a 1x1 target before the first
-   *  real frame. `Lighting.frame` is still 0 at this point, so `0 % interval === 0`
-   *  for every cascade — all of them are due, all of their maps get allocated, and
-   *  the shadow programs get compiled too. Fill cost is one pixel; the shadow
-   *  passes run at full resolution once, which is the cost we want paid before the
-   *  clock starts. The cascades hold a menu-pose depth map for a frame or two
-   *  afterwards, which lands on menu frames and never on a race frame.
+   *  The fix, in two halves, because one throwaway frame is not enough on its
+   *  own — and the old comment's premise for why it would be ("`Lighting.frame`
+   *  is still 0 at this point, so `0 % interval === 0` for every cascade") is
+   *  false: with `phase` in the cadence, frame 0 is the one frame on which no
+   *  staggered cascade is due.
    *
-   *  A cleaner home for this is one line in `src/world/Lighting.ts` — see the
-   *  report; that file belongs to another agent.
+   *   1. `Lighting` treats "has no depth map yet" as a due condition, in both its
+   *      shadow hook and `fitCascades()`. That is the root cause: the cadence had
+   *      no term for "never rendered", so a cascade the phase did not select
+   *      could not be allocated on that frame BY ANYONE, and a warm-up request
+   *      set from out here was overwritten by `fitCascades()` on the way into the
+   *      depth pass.
+   *   2. Here: render one throwaway frame into a 1x1 target before the first real
+   *      frame, with `autoUpdate` AND `needsUpdate` forced on every caster for
+   *      the duration — `needsUpdate` alone is not ours to keep, since
+   *      `fitCascades()` re-derives it inside the hook, whereas nothing else
+   *      writes `autoUpdate`. Then verify, and drive `shadowMap.render()` per
+   *      light for anything the frame still missed (a light culled out of
+   *      `shadowsArray`, or one a future cascade driver skips for its own
+   *      reasons). Fill cost is one pixel; the shadow passes run at full
+   *      resolution once, which is the cost we want paid before the clock starts.
+   *      The cascades hold a menu-pose depth map afterwards, and `needsUpdate` is
+   *      left set so the first real frame refits and redraws them.
+   *
+   *  Half 1 alone would fix the boot; half 2 alone would not, and did not. Keep
+   *  both: 1 is what holds if a map is disposed later (a quality change) or a
+   *  shadow caster is added after init, since the warm-up runs exactly once, and
+   *  2 is what holds if the cadence is rewritten again.
    */
   private warmShadowMaps(): void {
     const r = this.engine.renderer;
     const sm = r.shadowMap;
     if (!sm.enabled) return;
 
-    let casters = 0;
+    const casters: ShadowCaster[] = [];
     this.engine.scene.traverse((o) => {
       const l = asShadowCaster(o);
-      if (l) {
-        l.shadow.needsUpdate = true;
-        casters += 1;
-      }
+      if (l) casters.push(l);
     });
-    if (casters === 0) return;
+    if (casters.length === 0) return;
+
+    // Force BOTH flags, and re-force them before every attempt. `needsUpdate` is
+    // not ours to keep: `Lighting.fitCascades()` runs from inside the shadow hook
+    // — after this, before the depth pass — and rewrites it from the cascade
+    // cadence, which is how this warm-up came to be a no-op for every staggered
+    // cascade. `autoUpdate` nothing else writes, and `WebGLShadowMap.render`
+    // skips a light only when both are false, so that is the flag that makes the
+    // pass unskippable.
+    const saved = casters.map((l) => l.shadow.autoUpdate);
+    const force = (): void => {
+      sm.autoUpdate = true;
+      sm.needsUpdate = true;
+      for (const l of casters) {
+        l.shadow.autoUpdate = true;
+        l.shadow.needsUpdate = true;
+      }
+    };
 
     const prevAuto = sm.autoUpdate;
     const prevTarget = r.getRenderTarget();
@@ -824,55 +889,88 @@ export class RenderPipeline implements ISubsystem {
       depthBuffer: true, stencilBuffer: false,
     });
     try {
-      sm.autoUpdate = true;
-      sm.needsUpdate = true;
+      force();
       r.setRenderTarget(scratch);
       r.render(this.engine.scene, this.engine.camera);
+
+      // Anything the frame missed, driven straight at the shadow map. This takes
+      // the scene traversal out of it — a light that never reached `shadowsArray`
+      // (not visible, or off the camera's layers) cannot be reached by rendering
+      // the scene at all, and the only requirement left is being in the array we
+      // hand over. `sm.needsUpdate` is cleared by each pass, hence `force()`
+      // again per light.
+      for (const l of casters) {
+        if (l.shadow.map) continue;
+        force();
+        sm.render([l as unknown as THREE.Light], this.engine.scene, this.engine.camera);
+      }
     } catch (err) {
       console.warn(
-        '[Render] shadow warm-up failed. The first two frames will bind a null '
-        + 'entry into sampler2DShadow directionalShadowMap[] and flood '
-        + 'GL_INVALID_OPERATION.', err,
+        '[Render] shadow warm-up failed. Frames will bind a null entry into '
+        + 'sampler2DShadow directionalShadowMap[], flood GL_INVALID_OPERATION, '
+        + 'and drop every shadow-receiving draw in the scene.', err,
       );
     } finally {
       r.setRenderTarget(prevTarget);
       sm.autoUpdate = prevAuto;
       sm.needsUpdate = true;
+      for (let i = 0; i < casters.length; i++) {
+        casters[i].shadow.autoUpdate = saved[i];
+        // `needsUpdate` deliberately left set, not restored: every map allocated
+        // above holds a menu-pose depth render, and the first real frame has to
+        // refit and redraw it.
+        casters[i].shadow.needsUpdate = true;
+      }
       scratch.dispose();
     }
 
-    if (import.meta.env.DEV) this.verifyShadowBinds(casters);
+    this.verifyShadowBinds(casters);
   }
 
   /**
    * Report any shadow-casting light whose depth map is still unallocated, i.e.
    * any `sampler2DShadow` that is about to be handed a texture with no comparison
    * mode. See `warmShadowMaps()` for why that is fatal to validation.
+   *
+   * Returns the verdict so a caller can assert on it; `__POST__.shadowMaps()` is
+   * the same check on demand, and is the one to run after touching the cascade
+   * cadence. Failure is logged in production too — a silent black scene is far
+   * more expensive than one console line.
    */
-  private verifyShadowBinds(expected: number): void {
-    const missing: string[] = [];
-    let found = 0;
-    this.engine.scene.traverse((o) => {
-      const l = asShadowCaster(o);
-      if (!l) return;
-      found += 1;
-      if (!l.shadow.map) missing.push(o.name || o.type);
-    });
-    if (missing.length === 0) {
-      console.info(
-        `[Render] shadow warm-up: ${found}/${expected} shadow maps allocated before `
-        + 'the first frame. No null sampler2DShadow binds — HANDOFF item 2 (the '
-        + '"Mismatch between texture format and sampler type" flood) cannot fire.',
-      );
-      return;
+  verifyShadowBinds(casters?: readonly ShadowCaster[]): ShadowBindReport {
+    let list = casters;
+    if (!list) {
+      const found: ShadowCaster[] = [];
+      this.engine.scene.traverse((o) => {
+        const l = asShadowCaster(o);
+        if (l) found.push(l);
+      });
+      list = found;
+    }
+    const lights: Record<string, 'allocated' | 'NULL'> = {};
+    for (const l of list) lights[l.name || l.type] = l.shadow.map ? 'allocated' : 'NULL';
+    const missing = list.filter((l) => !l.shadow.map).map((l) => l.name || l.type);
+    const report: ShadowBindReport = { ok: missing.length === 0, missing, lights };
+    if (report.ok) {
+      if (import.meta.env.DEV) {
+        console.info(
+          `[Render] shadow warm-up: ${list.length}/${list.length} shadow maps `
+          + 'allocated before the first frame. No null sampler2DShadow binds — '
+          + 'HANDOFF item 2 (the "Mismatch between texture format and sampler '
+          + 'type" flood, and the black race scene behind it) cannot fire.',
+        );
+      }
+      return report;
     }
     console.error(
       `[Render] ${missing.length} shadow-casting light(s) still have no depth map: `
       + `${missing.join(', ')}. three substitutes emptyShadowTexture for the null `
       + 'entry in directionalShadowMap[] WITHOUT setting its compareFunction '
       + '(setValueT1Array, unlike setValueT1), so every shadow-receiving draw will '
-      + 'fail validation with "Mismatch between texture format and sampler type".',
+      + 'fail validation with "Mismatch between texture format and sampler type" '
+      + 'and the scene will render as sky only.',
     );
+    return report;
   }
 
   /**
@@ -1459,16 +1557,26 @@ export class RenderPipeline implements ISubsystem {
     const out: string[] = [];
     const cascades = Math.min(3, Math.max(1, q.cascadeCount | 0));
     // Lighting clamps `shadowMapSize` to 2048 and `cascadeCount` to 3, so ultra's
-    // authored 4096/4 is really 3 x 2048². Staggered 1 / 2 / 3 frames, but they
-    // coincide every 6th frame — that frame rasterises all three, 12.6 Mpx of
-    // depth, which is 20x the colour buffer at the owner's 1040x585. See the
-    // report: the stagger is in `src/world/Lighting.ts`.
+    // authored 4096/4 is really 3 x 2048².
+    //
+    // ---- THE CADENCE BELOW IS 1 / 2 / 4 AT PHASES 0 / 1 / 2 -----------------
+    // This comment used to read "staggered 1 / 2 / 3 frames, but they coincide
+    // every 6th frame — that frame rasterises all three, 12.6 Mpx of depth". That
+    // was true of an earlier design and is the reason `phase` exists: at 1/2/3
+    // every sixth frame drew all three cascades at once. The shipped cadence is
+    // `intervalFor` 1/2/4 with `phaseFor` 0/1/2, chosen so cascades 1 and 2 can
+    // never come due on the same frame. Measured over 40 consecutive frames:
+    // cascade 0 forty times, cascade 1 twenty, cascade 2 ten — exactly 1/2/4.
+    //
+    // Left stale it does active harm: it describes a coincidence that no longer
+    // happens, and it invites someone to "re-stagger" a cadence that is already
+    // correct. The stagger itself lives in `src/world/Lighting.ts`.
     out.push('shadow cascade 0 (world/Lighting, every frame, 2048² — 45 calls / 0.224 M tris)');
     if (cascades > 1) {
       out.push('shadow cascade 1 (world/Lighting, every 2nd frame, 2048² — 41 calls / 0.219 M)');
     }
     if (cascades > 2) {
-      out.push('shadow cascade 2 (world/Lighting, every 3rd frame, 2048² — 24 calls / 0.142 M)');
+      out.push('shadow cascade 2 (world/Lighting, every 4th frame, 2048² — 24 calls / 0.142 M)');
     }
     // Not asserted. `Water` only builds a reflection target at high/ultra, only on
     // the ocean/lake presets, and only when `init()` actually built a disc — which
