@@ -37,6 +37,8 @@ import {
 import type { AudioLike, GameLike } from './Widgets';
 import { CHARACTERS, KART_BODIES, TRACKS, characterColumns } from './Catalogue';
 import type { CharacterDef, StatBlock } from './Catalogue';
+import { TouchControls } from './TouchControls';
+import type { TouchLayout } from './TouchControls';
 
 // ===========================================================================
 // Roster / catalogue data
@@ -102,6 +104,20 @@ export class MenuSystem implements ISubsystem {
   private root!: HTMLDivElement;
   private scrim!: HTMLDivElement;
   private titleBg!: HTMLDivElement;
+  /**
+   * The on-screen driving controls.
+   *
+   * WHY THEY LIVE HERE. They need three things: the `Input` device object (via
+   * `game.input`, which only this class is handed), the authoritative answer to
+   * "is a menu, the pause screen or the results board up right now?", and a
+   * per-frame tick. This class already owns all three, and `Game.ts` — where a
+   * fourth subsystem would otherwise be registered — is off limits to agents.
+   */
+  private touch: TouchControls | null = null;
+  private backBtn!: HTMLButtonElement;
+  private rotateHint!: HTMLDivElement;
+  /** Title-screen call to action; reworded when touch is the active scheme. */
+  private pressStart!: HTMLDivElement;
   private screens = new Map<ScreenId, Screen>();
   private current: Screen | null = null;
   private built = false;
@@ -126,6 +142,7 @@ export class MenuSystem implements ISubsystem {
   private motionBlur = true;
   private mapRotate = false;
   private quality: QualityTier = 'high';
+  private touchLayout: TouchLayout = 'stick-right';
 
   // --- grand prix --------------------------------------------------------
   private gpRace = 0;
@@ -195,8 +212,18 @@ export class MenuSystem implements ISubsystem {
     this.buildOptions();
     this.buildControls();
     this.buildPause();
+    this.buildBack();
 
     this.results = new Results(this.container, this.audio);
+
+    // Advisory portrait nudge; CSS shows it only in portrait AND touch mode.
+    this.rotateHint = el('div', 'ak-rotate', this.container, 'ROTATE TO PLAY');
+
+    this.touch = new TouchControls(this.container, {
+      onPause: () => this.showPause(),
+    });
+    this.touch.setLayout(this.touchLayout);
+    this.applyTouchCopy();
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('resize', this.onResize);
@@ -332,6 +359,30 @@ export class MenuSystem implements ISubsystem {
     el('div', 'ak-head__sub', h, sub);
   }
 
+  /**
+   * The single visible BACK control, shown only in touch mode (`ui.css` gates
+   * it) and only on a screen that has somewhere to go back to.
+   *
+   * Without it a phone player who opens CHOOSE YOUR RACER is stuck there: the
+   * only other routes out are Escape/Backspace and gamepad B. It calls `back()`,
+   * so it runs each screen's own `onBack` and duplicates no navigation.
+   *
+   * ONE button parented to `.ak-menus`, not one per screen, because
+   * `.ak-screen`'s centring is expressed as `:first-child { margin-top: auto }`
+   * / `:last-child { margin-bottom: auto }` — adding a child at either end of a
+   * screen would move the auto margin onto the button and un-centre the screen.
+   */
+  private buildBack(): void {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ak-back';
+    b.textContent = 'BACK';
+    b.setAttribute('aria-label', 'Back');
+    b.addEventListener('click', (e) => { e.stopPropagation(); this.back(); });
+    this.root.appendChild(b);
+    this.backBtn = b;
+  }
+
   private hints(root: HTMLElement, pairs: ReadonlyArray<[string, string]>, delay = 260): void {
     const box = el('div', 'ak-hints ak-stagger', root);
     box.style.setProperty('--d', `${delay}ms`);
@@ -357,6 +408,7 @@ export class MenuSystem implements ISubsystem {
 
     const press = el('div', 'ak-press ak-stagger', s.root, 'PRESS START');
     press.style.setProperty('--d', '420ms');
+    this.pressStart = press;
 
     this.hints(s.root, [['ENTER', 'START'], ['↑↓←→', 'NAVIGATE'], ['ESC', 'BACK']], 620);
 
@@ -667,6 +719,29 @@ export class MenuSystem implements ISubsystem {
       value.style.display = 'block';
       this.optionRefresh.push(() => setText(value, this.mapRotate ? 'TRACK-UP' : 'NORTH-UP'));
     }
+    {
+      // TOUCH LAYOUT — the answer to "which thumb steers?".
+      //
+      // The default is the owner's sketch: stick right, buttons left. The
+      // alternative exists because the argument the other way is real and this
+      // is the honest way to settle it rather than overriding a sketch. Every
+      // physical controller this game already supports puts the steering stick
+      // under the LEFT thumb and the action buttons under the right, so a player
+      // arriving from a gamepad has that mapping in muscle memory; and a
+      // left-handed player wants the mirror regardless of convention. The
+      // functional argument for the sketch is just as real: the acting thumb has
+      // three buttons and the steering thumb one control, and most people's
+      // right thumb is the more dexterous, so giving the right thumb the
+      // continuous precision task is defensible. Neither wins on paper. It
+      // costs one class to offer both, so both are offered.
+      //
+      // The row is only useful on a touch device, but it stays visible
+      // everywhere: hiding it would make it undiscoverable on exactly the
+      // hardware that needs it, since a phone player cannot read a changelog.
+      const { value } = this.addRow(s, list, 'TOUCH LAYOUT', '', () => this.cycleTouchLayout(), (d) => { void d; this.cycleTouchLayout(); });
+      value.style.display = 'block';
+      this.optionRefresh.push(() => setText(value, this.touchLayout === 'stick-right' ? 'STICK RIGHT' : 'STICK LEFT'));
+    }
     this.addRow(s, list, 'CONTROLS', 'REFERENCE', () => this.show('controls'));
     this.addRow(s, list, 'BACK', '', () => this.show(this.raceLive ? 'pause' : 'main'));
 
@@ -727,6 +802,13 @@ export class MenuSystem implements ISubsystem {
     const q = this.game.engine?.quality as { motionBlur?: boolean } | undefined;
     if (q) q.motionBlur = this.motionBlur;
     tryCall(probe<unknown>(this.game, 'pipeline'), 'setMotionBlur', this.motionBlur);
+    this.refreshOptions();
+    this.audio?.play?.('ui_select');
+  }
+
+  private cycleTouchLayout(): void {
+    this.touchLayout = this.touchLayout === 'stick-right' ? 'stick-left' : 'stick-right';
+    this.touch?.setLayout(this.touchLayout);
     this.refreshOptions();
     this.audio?.play?.('ui_select');
   }
@@ -842,6 +924,7 @@ export class MenuSystem implements ISubsystem {
     // a soft bottom-weighted vignette and the flat gradient nearly vanishes.
     setClass(this.scrim, 'ak-scrim--showcase', showcase);
     setClass(this.root, 'ak-menus--active', true);
+    setClass(this.backBtn, 'ak-back--on', typeof next.onBack === 'function');
     // A lap counter and a speedometer behind the logo reads as a bug. The HUD
     // gates itself on this plus the race phase.
     tryCall(this.game.hud, 'setMenuActive', true);
@@ -869,6 +952,7 @@ export class MenuSystem implements ISubsystem {
     setClass(this.scrim, 'ak-scrim--on', false);
     setClass(this.scrim, 'ak-scrim--blur', false);
     setClass(this.root, 'ak-menus--active', false);
+    setClass(this.backBtn, 'ak-back--on', false);
     tryCall(this.game.hud, 'setMenuActive', false);
     this.titleBg.style.display = 'none';
     this.stopTicker();
@@ -1234,6 +1318,32 @@ export class MenuSystem implements ISubsystem {
     // Menus are event-driven; the internal ticker handles gamepad polling so
     // the UI stays live even when the engine loop is paused.
     void ctx;
+    this.syncTouch();
+  }
+
+  /**
+   * Hand the on-screen controls the two facts only this class knows for certain:
+   * the race phase and whether anything modal is on screen.
+   *
+   * Called from `update()`, i.e. every frame, deliberately. The internal ticker
+   * is STOPPED while a race is live (`hideAll()` calls `stopTicker()`), so
+   * anything driven from it would go stale exactly when the controls matter. It
+   * also has to run after `Input.update()` in the subsystem order, which is what
+   * makes the one-frame button release in `TouchControls.sync()` land on the
+   * right side of the edge detector.
+   */
+  private syncTouch(): void {
+    if (!this.touch) return;
+    const phase = probe<string>(this.game.race, 'state');
+    const modal = this.current !== null || this.paused || this.results.visible;
+    this.touch.sync(phase, modal);
+    this.applyTouchCopy();
+  }
+
+  /** Keyboard-only wording is wrong on a device with no keyboard. */
+  private applyTouchCopy(): void {
+    const touch = this.touch?.active === true;
+    if (this.pressStart) setText(this.pressStart, touch ? 'TAP TO START' : 'PRESS START');
   }
 
   private onResize = (): void => {
@@ -1241,12 +1351,14 @@ export class MenuSystem implements ISubsystem {
     // Recompute the focus-ring geometry on the next focus write.
     for (const s of this.screens.values()) s.ringHeight = 0;
     if (this.current) this.setFocus(this.current.index, true);
+    this.touch?.resize();
   };
 
   resize(width: number, height: number): void {
     applyUiScale(width, height);
     for (const s of this.screens.values()) s.ringHeight = 0;
     if (this.current) this.setFocus(this.current.index, true);
+    this.touch?.resize();
   }
 
   /** Currently visible screen id, or null when the menus are hidden. */
@@ -1259,6 +1371,9 @@ export class MenuSystem implements ISubsystem {
     window.removeEventListener('resize', this.onResize);
     this.stopTicker();
     this.results?.dispose();
+    this.touch?.dispose();
+    this.touch = null;
+    this.rotateHint?.remove();
     this.root?.remove();
     this.built = false;
   }

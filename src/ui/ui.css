@@ -30,7 +30,39 @@
    Only `transform`, `opacity` and `filter` are animated — never layout.
    ========================================================================= */
 
-:where(.ak-hud, .ak-menus, .ak-results) {
+/* =========================================================================
+   DISPLAY SAFE AREA — notches, rounded corners, home indicators
+   -------------------------------------------------------------------------
+   `index.html` ships `viewport-fit=cover`, so the page is laid out edge to edge
+   and the 3-D fills the whole display — including under a notch, which is where
+   you want scenery and nowhere near where you want a lap counter. These four
+   values are what keeps UI out of the unsafe strip. They are zero on every
+   desktop browser and on any phone without a cutout, so nothing about the
+   desktop layout moves.
+
+   THESE ARE NOT BREAKPOINTS. `env()` reports a device inset, not a viewport
+   size: there is no threshold, no second layout regime, and the value is added
+   to the existing offset rather than replacing it. The stylesheet's ban on
+   window-keyed HUD rules (see the foot of this file) is untouched.
+
+   One honest limitation: `env()` is measured from the WINDOW, while the HUD is
+   scaled from the render CONTAINER. They are the same box in the shipped game
+   (`#app` is `position: fixed; inset: 0`); in an embedded harness the inset
+   would be over-generous by however much the container is inset already. The
+   failure mode is a slightly larger margin, never content under a notch.
+   ========================================================================= */
+:root {
+  --ak-safe-t: env(safe-area-inset-top, 0px);
+  --ak-safe-r: env(safe-area-inset-right, 0px);
+  --ak-safe-b: env(safe-area-inset-bottom, 0px);
+  --ak-safe-l: env(safe-area-inset-left, 0px);
+}
+
+/* `.ak-touch` and `.ak-rotate` are in this list for the TOKENS — font stack,
+   palette, easing, box-sizing, no-select. They deliberately do NOT size
+   themselves from `--u`; see the note above `.ak-touch` for why a control is
+   scaled to a thumb and a HUD is scaled to the picture. */
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) {
   /* 0.0926vh = 1/10.8 vh, i.e. 1 design px at a 1080-tall reference.
      0.0651vw = 1.25/19.2 vw, the same width term `uiScale()` uses.
      min() of the two keeps the HUD inside the frame at any aspect ratio. */
@@ -99,10 +131,10 @@
 
 /* Every fixed width/height below is authored as a border-box, so don't inherit
    whatever reset (or absence of one) the host page happens to ship. */
-:where(.ak-hud, .ak-menus, .ak-results),
-:where(.ak-hud, .ak-menus, .ak-results) *,
-:where(.ak-hud, .ak-menus, .ak-results) *::before,
-:where(.ak-hud, .ak-menus, .ak-results) *::after {
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate),
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *,
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *::before,
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *::after {
   box-sizing: border-box;
 }
 
@@ -269,12 +301,17 @@
   gap: calc(10 * var(--u));
   contain: layout style;
 }
-.ak-hud__tl { top: calc(22 * var(--u)); left: calc(24 * var(--u)); flex-direction: column; align-items: flex-start; }
-.ak-hud__tc { top: calc(18 * var(--u)); left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
-.ak-hud__tr { top: calc(22 * var(--u)); right: calc(24 * var(--u)); flex-direction: column; align-items: flex-end; }
-.ak-hud__bl { bottom: calc(22 * var(--u)); left: calc(24 * var(--u)); flex-direction: column; align-items: flex-start; }
-.ak-hud__bc { bottom: calc(26 * var(--u)); left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
-.ak-hud__br { bottom: calc(20 * var(--u)); right: calc(22 * var(--u)); flex-direction: column; align-items: flex-end; }
+/* Every offset is `design margin + display safe inset`. On a notched phone in
+   landscape the unsafe strip is 44-59 px wide while these design margins are
+   ~8 px, so without the inset term the lap counter and the minimap sit UNDER
+   the notch — the single worst layout bug on real hardware, and invisible on a
+   desktop, where all four insets are 0. */
+.ak-hud__tl { top: calc(22 * var(--u) + var(--ak-safe-t)); left: calc(24 * var(--u) + var(--ak-safe-l)); flex-direction: column; align-items: flex-start; }
+.ak-hud__tc { top: calc(18 * var(--u) + var(--ak-safe-t)); left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
+.ak-hud__tr { top: calc(22 * var(--u) + var(--ak-safe-t)); right: calc(24 * var(--u) + var(--ak-safe-r)); flex-direction: column; align-items: flex-end; }
+.ak-hud__bl { bottom: calc(22 * var(--u) + var(--ak-safe-b)); left: calc(24 * var(--u) + var(--ak-safe-l)); flex-direction: column; align-items: flex-start; }
+.ak-hud__bc { bottom: calc(26 * var(--u) + var(--ak-safe-b)); left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
+.ak-hud__br { bottom: calc(20 * var(--u) + var(--ak-safe-b)); right: calc(22 * var(--u) + var(--ak-safe-r)); flex-direction: column; align-items: flex-end; }
 
 /* Shared plate ---------------------------------------------------------- */
 .ak-plate {
@@ -1294,7 +1331,13 @@
   justify-content: flex-start;
   overflow: hidden;
   gap: calc(22 * var(--u));
-  padding: calc(28 * var(--u));
+  /* Design padding + display safe inset on each edge, so a rounded corner or a
+     notch eats margin rather than a heading. Zero-cost on desktop. */
+  padding:
+    calc(28 * var(--u) + var(--ak-safe-t))
+    calc(28 * var(--u) + var(--ak-safe-r))
+    calc(28 * var(--u) + var(--ak-safe-b))
+    calc(28 * var(--u) + var(--ak-safe-l));
   opacity: 0;
   visibility: hidden;
   transform: translateY(calc(26 * var(--u))) scale(0.985);
@@ -2156,6 +2199,392 @@
 }
 
 /* =========================================================================
+   ON-SCREEN (TOUCH) CONTROLS
+   -------------------------------------------------------------------------
+   Behaviour, the accelerate decision and the platform gate all live in
+   `TouchControls.ts`. This is geometry and paint.
+
+   WHY THESE DO NOT USE `--u`
+   `--u` is one design pixel at a 1920x1080 reference and is dominated by
+   viewport HEIGHT, so a landscape phone (375 px tall) resolves it to 0.347 px.
+   A 64-unit button would be 22 px across. That is correct for a HUD, whose job
+   is to stay in proportion to the picture, and completely wrong for a control,
+   whose job is to stay in proportion to a THUMB. So the controls carry their own
+   unit which is nearly constant on phones and grows only on tablets:
+
+     667x375 phone landscape   -> 0.86   (floor)
+     812x375 phone landscape   -> 0.86   (floor)
+     375x812 phone portrait    -> 0.86   (floor)
+     1024x768 tablet landscape -> 1.024
+     1194x834 tablet landscape -> 1.194
+
+   The floor is what guarantees the minimum tap target: the smallest control
+   (BRAKE, 66 units) is 57 px at 0.86, comfortably over the 44 px both Apple and
+   Material call the minimum, and the stick base is 131 px.
+   ========================================================================= */
+
+.ak-touch {
+  --ak-tu: clamp(0.86px, min(0.26vh, 0.10vw), 1.35px);
+
+  /* Control geometry — one place. `TouchControls.measure()` reads the rendered
+     boxes rather than re-deriving them from these numbers, so editing a size
+     here cannot desynchronise the HUD clearances from the drawn controls. */
+  --ak-t-pad-w: calc(300 * var(--ak-tu));
+  --ak-t-pad-h: calc(230 * var(--ak-tu));
+  --ak-t-base: calc(152 * var(--ak-tu));
+  --ak-t-knob: calc(58 * var(--ak-tu));
+  --ak-t-acts-w: calc(190 * var(--ak-tu));
+  --ak-t-acts-h: calc(176 * var(--ak-tu));
+
+  position: fixed;
+  inset: 0;
+  /* Above the HUD (40), below the menus (60): a menu screen always wins, and
+     the layer hides itself when one is up in any case. */
+  z-index: 50;
+  pointer-events: none;
+  /* The whole layer refuses browser gestures — no scroll, no pull-to-refresh,
+     no double-tap zoom — because a swipe that scrolls the page is a swipe that
+     did not steer. Deliberately NOT set on the menus, which must stay
+     scrollable; see `.ak-touch-mode .ak-screen` below. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 220ms var(--ak-spring), visibility 0s linear 220ms;
+  font-family: var(--ak-font);
+}
+.ak-touch--on { opacity: 1; visibility: visible; transition: opacity 220ms var(--ak-spring), visibility 0s; }
+
+.ak-touch__pad,
+.ak-touch__acts,
+.ak-touch__btn,
+.ak-touch__pause {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* --- steering pad ------------------------------------------------------- */
+/* The pad is the HIT AREA and is intentionally far bigger than the drawn stick:
+   the stick re-centres to wherever the thumb lands inside it, which is what
+   makes it survive a grab made without looking, mid-corner. */
+/* The pad is flush to the display edges ON PURPOSE — including into the
+   safe-area strip. It draws nothing, so there is no reason to refuse a thumb
+   that lands on the very corner of the glass; only the DRAWN base keeps a safe
+   margin. */
+.ak-touch__pad {
+  position: absolute;
+  width: var(--ak-t-pad-w);
+  height: var(--ak-t-pad-h);
+  right: 0;
+  bottom: 0;
+}
+.ak-touch--mirrored .ak-touch__pad { right: auto; left: 0; }
+
+.ak-touch__base {
+  position: absolute;
+  width: var(--ak-t-base);
+  height: var(--ak-t-base);
+  /* Rest position: centre ~76 px in from both edges at phone scale, i.e. over
+     the pivot of a thumb wrapped around the corner of the device. The 14-unit
+     margin is a floor that exists even where the safe insets are 0 (Android
+     without a cutout): a control flush to the bottom edge of the glass sits in
+     the OS's own home / back gesture strip, and no amount of `touch-action`
+     inside the page can win that fight. */
+  right: calc(14 * var(--ak-tu) + var(--ak-safe-r));
+  bottom: calc(14 * var(--ak-tu) + var(--ak-safe-b));
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(200, 228, 255, 0.10), rgba(6, 10, 24, 0.24) 72%);
+  box-shadow:
+    inset 0 0 0 calc(2.5 * var(--ak-tu)) rgba(196, 224, 255, 0.34),
+    inset 0 0 calc(18 * var(--ak-tu)) rgba(8, 14, 30, 0.5),
+    0 calc(3 * var(--ak-tu)) calc(12 * var(--ak-tu)) rgba(0, 0, 0, 0.35);
+  transition: box-shadow 160ms ease;
+}
+.ak-touch--mirrored .ak-touch__base { right: auto; left: calc(14 * var(--ak-tu) + var(--ak-safe-l)); }
+/* While held the base has floated to the thumb and JS positions it by its
+   CENTRE, so it needs the half-offset that the resting anchor does not. */
+.ak-touch__pad--held .ak-touch__base {
+  transform: translate(-50%, -50%);
+  box-shadow:
+    inset 0 0 0 calc(2.5 * var(--ak-tu)) rgba(255, 214, 120, 0.55),
+    inset 0 0 calc(18 * var(--ak-tu)) rgba(8, 14, 30, 0.45),
+    0 0 calc(26 * var(--ak-tu)) rgba(255, 180, 60, 0.28);
+}
+
+/* Two chevrons that say "this axis is horizontal" — the knob only moves in x,
+   because steering is one-dimensional and a knob that slid in y would be
+   promising an axis that does not exist. */
+.ak-touch__axis {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  opacity: 0.5;
+  background:
+    linear-gradient(90deg, rgba(214, 234, 255, 0.5) 0 calc(3 * var(--ak-tu)), transparent 0) no-repeat left 22% center / calc(14 * var(--ak-tu)) calc(3 * var(--ak-tu)),
+    linear-gradient(90deg, rgba(214, 234, 255, 0.5) 0 calc(3 * var(--ak-tu)), transparent 0) no-repeat right 22% center / calc(14 * var(--ak-tu)) calc(3 * var(--ak-tu));
+}
+
+.ak-touch__knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--ak-t-knob);
+  height: var(--ak-t-knob);
+  margin: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 50% 34%, rgba(255, 255, 255, 0.62), rgba(120, 168, 226, 0.34) 62%, rgba(20, 34, 66, 0.42) 100%);
+  box-shadow:
+    inset 0 0 0 calc(2 * var(--ak-tu)) rgba(255, 255, 255, 0.5),
+    0 calc(2 * var(--ak-tu)) calc(10 * var(--ak-tu)) rgba(0, 0, 0, 0.45);
+  will-change: transform;
+}
+.ak-touch__pad--held .ak-touch__knob {
+  background: radial-gradient(circle at 50% 34%, rgba(255, 247, 224, 0.85), rgba(255, 190, 80, 0.5) 62%, rgba(120, 60, 6, 0.4) 100%);
+}
+
+/* --- action cluster ----------------------------------------------------- */
+/* A fan, not a row. The thumb pivots at the bottom outer corner, so DRIFT (held
+   through every corner) sits nearest that pivot, ITEM (tapped) is one step out
+   along the arc, and BRAKE (occasional) is above. */
+.ak-touch__acts {
+  position: absolute;
+  width: var(--ak-t-acts-w);
+  height: var(--ak-t-acts-h);
+  /* Same 6 + 8 = 14-unit floor off the edge as the stick base, for the same
+     reason: OS edge gestures own the last few pixels of the glass. */
+  left: calc(6 * var(--ak-tu) + var(--ak-safe-l));
+  bottom: calc(6 * var(--ak-tu) + var(--ak-safe-b));
+}
+.ak-touch--mirrored .ak-touch__acts { left: auto; right: calc(6 * var(--ak-tu) + var(--ak-safe-r)); }
+
+.ak-touch__btn {
+  position: absolute;
+  left: var(--bx);
+  bottom: var(--by);
+  width: var(--bs);
+  height: var(--bs);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--bc, #eaf4ff);
+  background: radial-gradient(circle at 50% 34%, rgba(255, 255, 255, 0.14), rgba(6, 10, 24, 0.3) 74%);
+  box-shadow:
+    inset 0 0 0 calc(2.5 * var(--ak-tu)) var(--brim, rgba(196, 224, 255, 0.4)),
+    0 calc(3 * var(--ak-tu)) calc(12 * var(--ak-tu)) rgba(0, 0, 0, 0.4);
+  transition: transform 120ms var(--ak-back), box-shadow 120ms ease, background 120ms ease;
+  will-change: transform;
+  cursor: pointer;
+}
+/* ONE mirror rule for every button — the per-button blocks below declare only
+   their offset from the cluster's OUTER edge, so neither side is a special
+   case and adding a button cannot forget to mirror. */
+.ak-touch--mirrored .ak-touch__btn { left: auto; right: var(--bx); }
+
+.ak-touch__glyph {
+  font-size: calc(17 * var(--ak-tu));
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-shadow: 0 calc(2 * var(--ak-tu)) calc(4 * var(--ak-tu)) rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+.ak-touch__btn--on {
+  transform: scale(0.93);
+  background: radial-gradient(circle at 50% 34%, rgba(255, 255, 255, 0.34), var(--bfill, rgba(60, 140, 220, 0.5)) 76%);
+  box-shadow:
+    inset 0 0 0 calc(3 * var(--ak-tu)) var(--bc, #eaf4ff),
+    0 0 calc(24 * var(--ak-tu)) var(--bglow, rgba(80, 190, 255, 0.55));
+}
+
+.ak-touch__btn--drift {
+  --bx: calc(8 * var(--ak-tu));
+  --by: calc(8 * var(--ak-tu));
+  --bs: calc(88 * var(--ak-tu));
+  --bc: var(--ak-blue-a);
+  --brim: rgba(120, 200, 255, 0.5);
+  --bfill: rgba(30, 130, 220, 0.55);
+  --bglow: rgba(80, 200, 255, 0.6);
+}
+.ak-touch__btn--item {
+  --bx: calc(106 * var(--ak-tu));
+  --by: calc(30 * var(--ak-tu));
+  --bs: calc(78 * var(--ak-tu));
+  --bc: var(--ak-gold-a);
+  --brim: rgba(255, 210, 110, 0.5);
+  --bfill: rgba(230, 150, 20, 0.55);
+  --bglow: rgba(255, 190, 60, 0.6);
+}
+.ak-touch__btn--brake {
+  --bx: calc(18 * var(--ak-tu));
+  --by: calc(104 * var(--ak-tu));
+  --bs: calc(66 * var(--ak-tu));
+  --bc: #ffdede;
+  --brim: rgba(255, 140, 140, 0.48);
+  --bfill: rgba(200, 40, 40, 0.55);
+  --bglow: rgba(255, 90, 90, 0.6);
+}
+.ak-touch__btn--brake .ak-touch__glyph { font-size: calc(14 * var(--ak-tu)); }
+
+/* Countdown: DRIFT becomes the launch control. Relabelled AND repainted, because
+   a button that silently changes what it does is a bug, not a feature. */
+.ak-touch__btn--launch {
+  --bc: #fff4d0;
+  --brim: rgba(255, 220, 130, 0.75);
+  --bfill: rgba(240, 160, 20, 0.6);
+  --bglow: rgba(255, 190, 60, 0.7);
+  animation: ak-touch-launch 780ms ease-in-out infinite;
+}
+@keyframes ak-touch-launch {
+  0%, 100% { box-shadow: inset 0 0 0 calc(2.5 * var(--ak-tu)) var(--brim), 0 0 calc(10 * var(--ak-tu)) rgba(255, 180, 50, 0.25); }
+  50%      { box-shadow: inset 0 0 0 calc(3.5 * var(--ak-tu)) var(--bc), 0 0 calc(30 * var(--ak-tu)) rgba(255, 190, 60, 0.7); }
+}
+
+/* --- pause -------------------------------------------------------------- */
+/* Touch has no Escape key, so without this a phone player cannot pause, cannot
+   reach Options and cannot quit a race. Top outer corner, clear of the notch. */
+.ak-touch__pause {
+  position: absolute;
+  top: calc(10 * var(--ak-tu) + var(--ak-safe-t));
+  left: calc(10 * var(--ak-tu) + var(--ak-safe-l));
+  width: calc(54 * var(--ak-tu));
+  height: calc(54 * var(--ak-tu));
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: calc(16 * var(--ak-tu));
+  color: rgba(226, 240, 255, 0.85);
+  background: rgba(8, 13, 28, 0.34);
+  box-shadow: inset 0 0 0 calc(2 * var(--ak-tu)) rgba(196, 224, 255, 0.32);
+  cursor: pointer;
+}
+.ak-touch__pause svg { width: 54%; height: 54%; display: block; }
+.ak-touch__pause:active { background: rgba(30, 52, 100, 0.55); }
+
+/* =========================================================================
+   TOUCH MODE — how the rest of the UI gets out of the way
+   -------------------------------------------------------------------------
+   `html.ak-touch-mode` is set by `TouchControls` from pointer CAPABILITY plus
+   what the player last actually used, never from viewport width. That is why
+   these are allowed where a `@media (max-width:)` HUD rule is not: they key off
+   the input device, not the window, so an embedded or letterboxed canvas cannot
+   disagree with them. Desktop never gets this class and is untouched.
+   ========================================================================= */
+
+/* The three clearance values are MEASURED from the rendered controls by
+   `TouchControls.measure()` and default to 0, so if the layer never appears the
+   HUD keeps exactly its desktop offsets. */
+html.ak-touch-mode .ak-hud__bl { bottom: calc(22 * var(--u) + var(--ak-safe-b) + var(--ak-touch-clear-bl, 0px)); }
+html.ak-touch-mode .ak-hud__br { bottom: calc(20 * var(--u) + var(--ak-safe-b) + var(--ak-touch-clear-br, 0px)); }
+html.ak-touch-mode .ak-hud__tl { left: calc(16 * var(--u) + var(--ak-safe-l) + var(--ak-touch-clear-tl, 0px)); }
+
+/* Tap targets. The menus are content-sized and already carry the `--u-min`
+   legibility floor, but a row 28 px tall is legible and still not tappable. */
+html.ak-touch-mode .ak-item-row { min-height: 46px; }
+html.ak-touch-mode .ak-btn { min-height: 46px; padding-inline: calc(34 * var(--u)); }
+html.ak-touch-mode .ak-slider { min-height: 34px; }
+html.ak-touch-mode .ak-card { min-width: 46px; }
+
+/* Menu screens must be able to SCROLL on a short screen. They are
+   `overflow: hidden` on desktop and the auto-margin pair centres them, which
+   clips both ends when content is taller than the frame — measured at 667x375:
+   the racer grid overflowed by 22 px and lost the bottom stat row and the whole
+   hint bar. `auto` keeps the centring when it fits and scrolls when it does not.
+   `touch-action` is NOT reset to `none` anywhere in here — killing menu
+   scrolling is the failure this exists to avoid. */
+html.ak-touch-mode .ak-screen {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+html.ak-touch-mode .ak-screen::-webkit-scrollbar { width: 0; height: 0; }
+
+/* Keyboard reference is noise on a device with no keyboard: "ENTER START" and
+   "ESC BACK" name keys that are not there. The touch equivalents are the
+   on-screen BACK button and tapping the row itself. */
+html.ak-touch-mode .ak-hints { display: none; }
+
+/* Every screen that can be backed out of gets a visible way to do it, because
+   Escape and gamepad-B are the only other routes and touch has neither.
+   One button, parented to `.ak-menus` — see `MenuSystem.buildBack()` for why it
+   must not be a child of `.ak-screen`. */
+.ak-back {
+  position: absolute;
+  top: calc(14 * var(--u) + var(--ak-safe-t));
+  left: calc(14 * var(--u) + var(--ak-safe-l));
+  display: none;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  min-height: 46px;
+  padding: calc(6 * var(--u)) calc(18 * var(--u)) calc(6 * var(--u)) calc(14 * var(--u));
+  border: 0;
+  border-radius: calc(14 * var(--u));
+  font-family: var(--ak-font);
+  font-size: max(var(--u-min), calc(15 * var(--u)));
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #e8f2ff;
+  background: linear-gradient(180deg, rgba(30, 48, 92, 0.86), rgba(10, 16, 36, 0.9));
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(170, 208, 250, 0.34);
+  cursor: pointer;
+  z-index: 3;
+  touch-action: manipulation;
+}
+html.ak-touch-mode .ak-back--on { display: inline-flex; }
+.ak-back::before { content: "‹"; font-size: 1.5em; line-height: 0.7; }
+.ak-back:active { background: linear-gradient(180deg, rgba(56, 86, 150, 0.9), rgba(18, 28, 60, 0.94)); }
+
+/* Portrait nudge. Landscape is the design orientation — in portrait the 3-D is
+   a letterbox slot and `--u` collapses to its floor. Advisory, never blocking:
+   `pointer-events: none` so it can trap nothing, and the game keeps running
+   behind it. */
+.ak-rotate {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + var(--ak-safe-b));
+  transform: translateX(-50%);
+  z-index: 70;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px 10px;
+  border-radius: 14px;
+  font-family: var(--ak-font);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: #f2f8ff;
+  background: rgba(8, 13, 28, 0.82);
+  box-shadow: inset 0 0 0 2px rgba(196, 224, 255, 0.3);
+  pointer-events: none;
+  text-align: center;
+}
+.ak-rotate::before {
+  content: "";
+  width: 13px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  animation: ak-rotate-hint 2.4s ease-in-out infinite;
+}
+@keyframes ak-rotate-hint {
+  0%, 30% { transform: rotate(0deg); }
+  55%, 100% { transform: rotate(-90deg); }
+}
+@media (orientation: portrait) {
+  html.ak-touch-mode .ak-rotate { display: flex; }
+}
+
+/* =========================================================================
    Responsive: compact layout on short/narrow viewports so nothing collides
    ========================================================================= */
 
@@ -2192,7 +2621,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ak-hud *, .ak-menus *, .ak-results * {
+  .ak-hud *, .ak-menus *, .ak-results *, .ak-touch, .ak-touch * {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

@@ -2,7 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <!--
+      `viewport-fit=cover` is what makes `env(safe-area-inset-*)` report anything
+      other than zero. Without it iOS letterboxes the page inside the safe area:
+      nothing is ever under the notch, but a landscape phone loses a 44-59 px
+      black bar down one side of the 3-D. With it the canvas fills the display
+      and `ui.css` pays the insets back as UI margin — see the DISPLAY SAFE AREA
+      block there. Every edge-anchored element in the UI (HUD corners, menu
+      screens, results, the touch controls) adds the matching inset; if you add a
+      new one, add it there too or it will sit under a cutout.
+
+      `user-scalable=no` is honoured on Android and IGNORED by iOS Safari, so it
+      is not what stops a pinch during play — `touch-action: none` on the canvas
+      and on the control layer is.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#05070f" />
     <title>Foxy Kart</title>
 
