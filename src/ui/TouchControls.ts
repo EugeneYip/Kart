@@ -213,6 +213,11 @@ export class TouchControls {
     this.stickPad.addEventListener('pointermove', this.onStickMove);
     this.stickPad.addEventListener('pointerup', this.onStickUp);
     this.stickPad.addEventListener('pointercancel', this.onStickUp);
+    // If capture goes away for any reason the browser sees fit — and it does not
+    // always send `pointercancel` first — the stick must let go. Otherwise
+    // `stickId` stays claimed, `onStickDown` refuses the next thumb, and the
+    // player is left steering at whatever lock the lost pointer died at.
+    this.stickPad.addEventListener('lostpointercapture', this.onStickUp);
 
     // --- action cluster ---------------------------------------------------
     this.actsEl = el('div', 'ak-touch__acts', root);
@@ -229,7 +234,17 @@ export class TouchControls {
     window.addEventListener('keydown', this.onAnyKey, true);
     this.pointerQuery = window.matchMedia?.('(pointer: coarse)') ?? null;
     this.pointerQuery?.addEventListener?.('change', this.onPointerCapabilityChange);
+    // Taking a call, switching apps or pulling down the notification shade all
+    // steal the touch without necessarily sending a `pointercancel`. Whatever was
+    // held must not still be held when the player comes back.
+    window.addEventListener('blur', this.onInterrupt);
+    document.addEventListener('visibilitychange', this.onInterrupt);
   }
+
+  private onInterrupt = (): void => {
+    if (document.visibilityState === 'visible' && document.hasFocus()) return;
+    this.releaseAll();
+  };
 
   private makeButton(id: 'drift' | 'item' | 'brake', label: string): Btn {
     const node = document.createElement('button');
@@ -546,6 +561,8 @@ export class TouchControls {
     this.disposed = true;
     window.removeEventListener('pointerdown', this.onAnyPointer, true);
     window.removeEventListener('keydown', this.onAnyKey, true);
+    window.removeEventListener('blur', this.onInterrupt);
+    document.removeEventListener('visibilitychange', this.onInterrupt);
     this.pointerQuery?.removeEventListener?.('change', this.onPointerCapabilityChange);
     this.releaseAll();
     this.clearClearances();
