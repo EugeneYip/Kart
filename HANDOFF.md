@@ -264,9 +264,9 @@ crowd (E3) or the boost-pad decals, which sit flat on the tarmac.
 frame is ~**3.15× the scene-graph triangle count** (505 calls / 2.92 M tris on neon)
 which `AGENTS.md` §5b says means too many full-scene passes; and the
 `GL_INVALID_OPERATION: Mismatch between texture format and sampler type` flood
-(`HANDOFF.md` item 2) still reproduces every boot — per-draw validation failures
-make Chrome's command decoder crawl. Prime suspect remains the `DepthTexture` bound
-to a plain `sampler2D` around `VfxManager.ts:516`. Also unexplained: a
+(`HANDOFF.md` item 2) — **that half is now fixed, and it was not `VfxManager`: it
+was a null `sampler2DShadow directionalShadowMap[]` entry, which also blacked out
+the race scene. See item 2.** Also unexplained: a
 **picture-in-picture inset rendering a copy of the scene** bottom-right in one
 owner screenshot.
 
@@ -912,9 +912,9 @@ trackside boards AND the road markings both read left-to-right.
 
 ---
 
-## 2. WebGL sampler mismatch — NOT FIXED, was in flight when quota hit
+## 2. ~~WebGL sampler mismatch~~ — FIXED, and it was the black race scene
 
-**Owner: `src/vfx/VfxManager.ts` / `ParticleSystem.ts` (vfx agent)**
+**Owner: `src/render/RenderPipeline.ts` + `src/world/Lighting.ts`**
 
 Every scene draw call was failing validation with:
 
@@ -922,15 +922,38 @@ Every scene draw call was failing validation with:
 GL_INVALID_OPERATION: Mismatch between texture format and sampler type
 ```
 
-Floods until Chrome silences the context; per-draw validation failures make
-Chrome's command decoder crawl. The post agent ruled out `src/render/`. Prime
-suspect is the `DepthTexture` handed to `ParticleSystem.setDepthTexture()` around
-`VfxManager.ts:516` — binding a depth texture to a plain `sampler2D` produces
-exactly this message. Prefer correctness over the effect: if the bind can't be
-made valid, fall back to `depthWrite:false` + sorted alpha and log one warning.
+**It was never `VfxManager`.** It was a null entry in `sampler2DShadow
+directionalShadowMap[]`: `Lighting`'s cascade cadence gained a `phase`, and
+`fitCascades()` clears `needsUpdate` on any cascade that is not due — including
+one that has never rendered and therefore has no `shadow.map` yet, since three
+allocates it lazily inside the depth pass. `(0 - phase) % interval` is -1 and -2
+at frame 0, so **no staggered cascade was ever due on the first frame**, and
+`Lighting.frame` only advances in `update()`, which is not pumped until a race
+starts — so cascades 1 and 2 sat null through the whole menu.
+`warmShadowMaps()` was a no-op against this: it set `needsUpdate = true`, then
+`fitCascades()` ran inside the shadow hook and cleared it again on the way into
+the depth pass.
 
-**Re-confirm whether it still reproduces** before doing surgery — several
-material and shadow changes have landed since it was reported.
+**This was also the "black race scene" report, and it is not cosmetic.** While a
+map is null, three substitutes its `emptyShadowTexture` with no `compareFunction`
+(`setValueT1Array`, unlike `setValueT1`), so EVERY shadow-receiving draw in the
+frame fails validation and the frame keeps only what receives no shadow — the sky
+dome. Measured at the countdown with cascades 1 and 2 null: 1707 draws, **708
+GL_INVALID_OPERATION**, captured frame `maxLum == meanLum == 0.222` (a flat
+fill, no road, no karts, no grandstands); on `neonMetropolis` the sky is dark, so
+it reads as the reported pure-black frame. Fixed: 1572 draws, **0 errors**,
+`maxLum 0.949`. The old note here calling it "a TWO-FRAME BOOT FLOOD ... NOT a
+measurable share of the sustained frame time" was wrong on both counts.
+
+The fix is in two halves — `Lighting` treats "has no depth map yet" as a due
+condition (in the hook and in `fitCascades`), and `warmShadowMaps()` forces
+`autoUpdate` as well as `needsUpdate` and then retries per light. The stagger is
+unchanged: 40 / 20 / 10 depth passes over 40 frames, 1.75 passes/frame.
+
+**`__POST__.shadowMaps()` is the check.** Run it after any change to the cascade
+cadence, and run it at frame 0 (in the menu, before a race) — that is the case
+that failed. It returns `{ ok, missing, lights }` synchronously;
+`__POST__.glValidate()` sees the same bug one step downstream but needs frames.
 
 ---
 

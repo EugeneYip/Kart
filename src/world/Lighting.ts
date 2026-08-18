@@ -823,10 +823,9 @@ export class Lighting implements ISubsystem {
         for (let i = 0; i < this.cascades.length; i++) {
           const light = this.cascades[i].light;
           const shadow = light.shadow;
-          // `shadow.map !== null` first, deliberately. `shadow.map` is allocated
-          // LAZILY inside `WebGLShadowMap.render`, so skipping a not-due cascade
-          // before it has ever rendered leaves its map null forever. three then
-          // substitutes its private `emptyShadowTexture` — and while
+          // `shadow.map` is allocated LAZILY inside `WebGLShadowMap.render`, so a
+          // cascade that has never rendered has a null map, and three substitutes
+          // its private `emptyShadowTexture` for the null entry — while
           // `setValueT1` sets `compareFunction` before binding, the ARRAY path
           // `setValueT1Array` (which is what `directionalShadowMap[]` always
           // uses) does not. `DepthTexture.compareFunction` defaults to null, so
@@ -834,8 +833,18 @@ export class Lighting implements ISubsystem {
           // `sampler2DShadow` declaration, and every draw of every
           // shadow-receiving material raises
           // "GL_INVALID_OPERATION: Mismatch between texture format and sampler
-          // type". Letting each cascade render once closes it at the source.
-          if (shadow.map !== null && !shadow.autoUpdate && !shadow.needsUpdate) continue;
+          // type". The whole scene disappears; only materials that receive no
+          // shadow (the sky) still draw.
+          //
+          // Merely *not skipping* a null-map cascade here does not close that,
+          // which is what this guard used to assume. `WebGLShadowMap.render`
+          // carries the same `autoUpdate === false && needsUpdate === false`
+          // test, and cascades 1+ run with `autoUpdate = false` — so handing
+          // three a not-due cascade just moves the skip one level down and the
+          // map stays null. A cascade with no map is therefore forced due, here
+          // and in `fitCascades`, which is what actually allocates it.
+          if (shadow.map === null) shadow.needsUpdate = true;
+          else if (!shadow.autoUpdate && !shadow.needsUpdate) continue;
           if (lights.indexOf(light) < 0) continue;
           bucket.length = 0;
           bucket.push(light);
@@ -1520,7 +1529,20 @@ export class Lighting implements ISubsystem {
       // ortho without redrawing would slide the stale depth map off the world.
       // `phase` keeps cascades 1 and 2 from ever coming due on the same frame —
       // see `intervalFor` in the cascade builder for why that mattered.
-      const due = i === 0 || (this.frame - c.phase) % c.interval === 0;
+      //
+      // A cascade with no depth map yet is due whatever the phase says. This
+      // method runs from inside the shadow hook, i.e. AFTER anything that asked
+      // for a warm-up render and BEFORE the depth pass, so the `needsUpdate =
+      // false` below is the last word — it used to silently cancel
+      // `RenderPipeline.warmShadowMaps()`. And phase makes frame 0 the worst
+      // possible frame to be cancelled on: `(0 - phase) % interval` is -1 for
+      // cascade 1 and -2 for cascade 2, so NO staggered cascade is ever due on
+      // the first frame, and `frame` only advances in `update()`, which is not
+      // pumped until a race starts. Every menu frame and the first race frames
+      // therefore bound a null `directionalShadowMap[i]`. See the hook.
+      const due = c.light.shadow.map === null
+        || i === 0
+        || (this.frame - c.phase) % c.interval === 0;
       if (!due) { c.light.shadow.needsUpdate = false; continue; }
       c.light.shadow.needsUpdate = true;
 
