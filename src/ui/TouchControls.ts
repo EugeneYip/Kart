@@ -148,6 +148,76 @@ export interface TouchControlsOpts {
   onPause?: () => void;
 }
 
+/**
+ * ===========================================================================
+ *  TOUCH STEERING FEEL — the only knobs you should need after a hardware test
+ * ===========================================================================
+ *  Every value that decides how the virtual stick FEELS lives here, named, so a
+ *  real-thumb test can be answered by editing four numbers rather than by
+ *  rewriting `updateStick`. This layer maps thumb displacement to
+ *  `InputState.steer` and nothing else: `KartPhysics` is untouched, and the
+ *  keyboard and gamepad paths never read any of this.
+ *
+ *  ---- WHY THESE VALUES CHANGED ------------------------------------------
+ *  The first version was `travelFrac 0.36` (~47 px to full lock) with a linear
+ *  response and a 0.06 dead zone. On real hardware the owner's verdict was that
+ *  small thumb movements produced too much steering. Both halves of that were
+ *  true and they compound:
+ *
+ *    * 47 px is roughly one thumb-width of total throw, so there was almost no
+ *      room to hold a partial lock — the useful range was a few millimetres.
+ *    * a LINEAR map spends as much steering per pixel at dead centre as it does
+ *      at full lock, which is precisely the wrong distribution: the centre is
+ *      where precision matters and the edge is where you want it immediate.
+ *
+ *  So travel roughly doubles AND the response is curved. Note that fixing only
+ *  one would have been unsatisfying: doubling travel alone still steers hard for
+ *  the first millimetre, and curving alone leaves too little physical room to
+ *  sit inside the soft region.
+ *
+ *  ---- WHAT IS DELIBERATELY *NOT* HERE ----------------------------------
+ *  No smoothing, no lerp, no rate limit. `updateStick` maps the CURRENT pointer
+ *  position on the event that reports it, so a counter-steer lands on the frame
+ *  the thumb moves. Smoothing would have been the easy way to make the centre
+ *  feel calmer and it would have made counter-steering feel late, which is worse
+ *  than the problem it solves.
+ */
+const TOUCH_STEER = {
+  /**
+   * Thumb travel to full lock, as a fraction of the drawn base width.
+   * 0.36 -> 0.58 takes full lock from ~47 px to ~76 px at phone scale. Not
+   * further: 0.68 was tried and puts full lock at ~89 px, which is past
+   * comfortable thumb reach on a phone — a hairpin should not require a stretch.
+   * THIS IS THE FIRST NUMBER TO TUNE.
+   */
+  travelFrac: 0.58,
+  /** Floor for tiny bases, so the curve never collapses onto a few pixels. */
+  minTravelPx: 40,
+  /**
+   * Dead zone, as a fraction of travel. Absorbs thumb wobble at rest without
+   * eating a perceptible amount of the throw. Rescaled below so full lock is
+   * still exactly reachable at the edge.
+   */
+  deadZone: 0.07,
+  /**
+   * Response exponent. 1 = linear; higher softens the centre while leaving the
+   * outer range intact, because `pow(1, n) === 1` for any n — full +-1 is still
+   * reached at the edge of travel, it just takes a deliberate push to get there.
+   *
+   * Measured against the old linear map, as thumb travel needed to REACH a given
+   * steer value at phone scale (base 131 px):
+   *
+   *     steer        0.15   0.30   0.50   0.80   1.00
+   *     old, linear   9.5   16.5   25.0   38.5   47.5 px
+   *     this curve   25.5   37.0   50.0   66.5   76.0 px
+   *
+   * and at the first 10 px of travel — the wobble region — 0.017 against the old
+   * 0.162, so dead centre is about 9.5x calmer. 1.9 was tried and is calmer still
+   * (0.003) but needs 50 px just to reach 0.30, which reads as a dead stick.
+   */
+  curve: 1.5,
+} as const;
+
 export class TouchControls {
   private root: HTMLDivElement;
   /** Hit area for steering — much larger than the drawn stick. */
@@ -176,8 +246,18 @@ export class TouchControls {
   private originX = 0;
   private originY = 0;
   private steer = 0;
-  /** Half-travel of the stick in px, recomputed on resize. */
-  private travel = 48;
+  /**
+   * Thumb travel to full lock, in px. Recomputed from the RENDERED base width in
+   * `measure()`; this initial value is only in force before the first measure.
+   *
+   * It used to be a bare `48`, which was a hand-copied duplicate of the old
+   * `131 * 0.36` result — so raising `TOUCH_STEER.travelFrac` moved the measured
+   * value and left this one behind, and the stick kept the OLD sensitivity on
+   * every frame before `measure()` had run. Caught by measuring the settled
+   * response curve and finding it implied ~48 px of travel where 76 was
+   * configured. Derived from the constants now, so there is one source of truth.
+   */
+  private travel: number = TOUCH_STEER.minTravelPx;
 
   private lastClearL = -1;
   private lastClearR = -1;
@@ -441,12 +521,19 @@ export class TouchControls {
     const dx = x - this.originX;
     const t = Math.max(8, this.travel);
     const raw = clamp(dx / t, -1, 1);
-    // A small dead-zone, rescaled so full lock is still reachable at the edge
-    // of the travel. Without the rescale the last 6 % of the throw is lost.
-    const dead = 0.06;
+    // Dead zone, then rescale so full lock is still reachable at the edge of the
+    // travel (without the rescale the last `deadZone` of the throw is lost), then
+    // the response curve. Order matters: curving BEFORE the rescale would move
+    // where full lock lands, and the whole point is that the edge is untouched.
+    const dead = TOUCH_STEER.deadZone;
     const a = Math.abs(raw);
-    this.steer = a < dead ? 0 : Math.sign(raw) * ((a - dead) / (1 - dead));
-    this.stickKnob.style.transform = `translate(calc(-50% + ${(this.steer * t).toFixed(1)}px), -50%)`;
+    const past = a < dead ? 0 : (a - dead) / (1 - dead);
+    // `pow` leaves 0 at 0 and 1 at 1, so this softens the middle and nothing else.
+    this.steer = past === 0 ? 0 : Math.sign(raw) * Math.pow(past, TOUCH_STEER.curve);
+    // The knob follows the THUMB (`raw`), not the curved steering value. Drawing
+    // it at `steer * t` would make the knob lag the finger through the soft
+    // centre region and read as input lag that is not there.
+    this.stickKnob.style.transform = `translate(calc(-50% + ${(raw * t).toFixed(1)}px), -50%)`;
     virtualController.steer = this.steer;
   }
 
@@ -513,13 +600,18 @@ export class TouchControls {
    * position plate quietly sat under the drift button again.
    */
   private measure(): void {
-    if (!this.touchMode || !this.live) return;
-    // Thumb travel to full lock, as a fraction of the drawn base. 0.36 puts full
-    // lock ~47 px out at phone scale, so the knob just clears the ring: enough
-    // throw to hold a mid-lock line, short enough to snap to full lock in a
-    // hairpin. THIS IS THE FIRST NUMBER TO TUNE on real hardware — it was chosen
-    // against an emulated pointer, which has no thumb width and no wobble.
-    this.travel = Math.max(24, this.stickBase.offsetWidth * 0.36);
+    if (!this.touchMode) return;
+    // Travel comes from `TOUCH_STEER`; see that block for why it grew.
+    //
+    // Computed BEFORE the `live` check, deliberately. The stick responds to a
+    // thumb whenever the layer is mounted, not only once a race is running, so
+    // gating this on `live` left the pre-race stick on the initial field value —
+    // which is how the old hard-coded 48 survived a change to `travelFrac`.
+    this.travel = Math.max(
+      TOUCH_STEER.minTravelPx,
+      this.stickBase.offsetWidth * TOUCH_STEER.travelFrac,
+    );
+    if (!this.live) return;
     // While a thumb is on it the base has floated away from its rest position,
     // so measuring now would publish a clearance for a transient.
     if (this.stickId !== -1) return;

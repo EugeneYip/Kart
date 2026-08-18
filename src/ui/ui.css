@@ -58,11 +58,12 @@
   --ak-safe-l: env(safe-area-inset-left, 0px);
 }
 
-/* `.ak-touch` and `.ak-rotate` are in this list for the TOKENS — font stack,
-   palette, easing, box-sizing, no-select. They deliberately do NOT size
-   themselves from `--u`; see the note above `.ak-touch` for why a control is
-   scaled to a thumb and a HUD is scaled to the picture. */
-:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) {
+/* `.ak-touch` is in this list for the TOKENS — font stack, palette, easing,
+   box-sizing, no-select. It deliberately does NOT size itself from `--u`; see the
+   note above `.ak-touch` for why a control is scaled to a thumb and a HUD is
+   scaled to the picture. (`.ak-rotate` was here too, until portrait became a
+   supported orientation and the prompt was removed.) */
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch) {
   /* 0.0926vh = 1/10.8 vh, i.e. 1 design px at a 1080-tall reference.
      0.0651vw = 1.25/19.2 vw, the same width term `uiScale()` uses.
      min() of the two keeps the HUD inside the frame at any aspect ratio. */
@@ -131,10 +132,10 @@
 
 /* Every fixed width/height below is authored as a border-box, so don't inherit
    whatever reset (or absence of one) the host page happens to ship. */
-:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate),
-:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *,
-:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *::before,
-:where(.ak-hud, .ak-menus, .ak-results, .ak-touch, .ak-rotate) *::after {
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch),
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch) *,
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch) *::before,
+:where(.ak-hud, .ak-menus, .ak-results, .ak-touch) *::after {
   box-sizing: border-box;
 }
 
@@ -2576,47 +2577,7 @@ html.ak-touch-mode .ak-back--on { display: inline-flex; }
    a letterbox slot and `--u` collapses to its floor. Advisory, never blocking:
    `pointer-events: none` so it can trap nothing, and the game keeps running
    behind it. */
-.ak-rotate {
-  position: fixed;
-  left: 50%;
-  /* Vertically centred, not bottom-anchored. Measured at 390x700: a
-     bottom-anchored pill at 18 px landed on top of the stick base (which reaches
-     to 131 px above the bottom edge in portrait, where `--ak-tu` is at its
-     floor). The middle of a portrait screen is the one region no control and no
-     HUD corner claims. */
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 70;
-  display: none;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 16px 10px;
-  border-radius: 14px;
-  font-family: var(--ak-font);
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.18em;
-  color: #f2f8ff;
-  background: rgba(8, 13, 28, 0.82);
-  box-shadow: inset 0 0 0 2px rgba(196, 224, 255, 0.3);
-  pointer-events: none;
-  text-align: center;
-}
-.ak-rotate::before {
-  content: "";
-  width: 13px;
-  height: 20px;
-  flex: 0 0 auto;
-  border: 2px solid currentColor;
-  border-radius: 3px;
-  animation: ak-rotate-hint 2.4s ease-in-out infinite;
-}
-@keyframes ak-rotate-hint {
-  0%, 30% { transform: rotate(0deg); }
-  55%, 100% { transform: rotate(-90deg); }
-}
 @media (orientation: portrait) {
-  html.ak-touch-mode .ak-rotate { display: flex; }
 }
 
 /* =========================================================================
@@ -2662,10 +2623,16 @@ html.ak-touch-mode .ak-back--on { display: inline-flex; }
                            it needs no breakpoint.
 
    Card width is therefore `--ak-card-w` everywhere, floored against `--u-min`.
-   The consequence to know about: on a viewport narrower than ~480 px — i.e. a
-   phone held in PORTRAIT — the 6-wide racer grid is wider than the screen and
-   scrolls sideways rather than shrinking below a tappable size. Landscape is the
-   design orientation and `.ak-rotate` says so. */
+   ---- AND THE RACER GRID RE-COLUMNS INSTEAD OF OVERFLOWING ----------------
+   This note used to end "the 6-wide racer grid is wider than the screen and
+   scrolls sideways... Landscape is the design orientation and `.ak-rotate` says
+   so." Both halves are now wrong: PORTRAIT IS A SUPPORTED ORIENTATION, the
+   rotate prompt is gone, and `MenuSystem.refitGrid()` measures the rendered card
+   width against the port width and narrows the column count until the row fits.
+   The floor above still governs how SMALL a card may get; what changed is that
+   too-few-columns is answered by re-columning rather than by sideways scroll.
+   Deliberately not a breakpoint: a media query would have to restate the
+   `max(150u, 7 x u-min)` floor and would drift from it. */
 @media (max-width: 820px), (max-height: 520px) {
   .ak-hints { flex-wrap: wrap; justify-content: center; gap: calc(12 * var(--u)); }
 }

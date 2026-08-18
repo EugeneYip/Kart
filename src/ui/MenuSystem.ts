@@ -115,7 +115,6 @@ export class MenuSystem implements ISubsystem {
    */
   private touch: TouchControls | null = null;
   private backBtn!: HTMLButtonElement;
-  private rotateHint!: HTMLDivElement;
   /** Title-screen call to action; reworded when touch is the active scheme. */
   private pressStart!: HTMLDivElement;
   /** CONTROLS screen subtitle; names the device family actually in use. */
@@ -219,7 +218,6 @@ export class MenuSystem implements ISubsystem {
     this.results = new Results(this.container, this.audio);
 
     // Advisory portrait nudge; CSS shows it only in portrait AND touch mode.
-    this.rotateHint = el('div', 'ak-rotate', this.container, 'ROTATE TO PLAY');
 
     this.touch = new TouchControls(this.container, {
       onPause: () => this.showPause(),
@@ -343,6 +341,39 @@ export class MenuSystem implements ISubsystem {
         this.trackArt.push(trackPreview(path, t.themeA, t.themeB, t.road, 320, 200).toDataURL('image/png'));
       } catch { this.trackArt.push(''); }
     }
+  }
+
+  /** Re-run the racer grid's column fit; installed when that screen is built. */
+  private fitCharGrid: (() => void) | null = null;
+
+  /**
+   * Choose a column count that FITS, from measurement rather than a breakpoint.
+   *
+   * Reads the real rendered card width and the real available width, so it tracks
+   * `--ak-card-w`'s own `max(150u, 7 x u-min)` floor automatically — including the
+   * legibility floor that stops cards shrinking below a tappable size. A width
+   * breakpoint would have to duplicate that floor and would drift from it.
+   *
+   * `wide` is the upper bound from `characterColumns()`; this only ever narrows.
+   * Both the CSS columns AND `Screen.cols` are written, because `cols` drives the
+   * focus model — updating one without the other would leave arrow and gamepad
+   * navigation walking a grid shape that is not on screen.
+   */
+  private refitGrid(s: Screen, grid: HTMLElement, wide: number): void {
+    const first = grid.firstElementChild as HTMLElement | null;
+    if (!first) return;
+    const cardW = first.getBoundingClientRect().width;
+    if (cardW <= 0) return;                      // not laid out yet
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+    const avail = (grid.parentElement ?? grid).clientWidth;
+    if (avail <= 0) return;
+    // n cards need n*cardW + (n-1)*gap, so invert that rather than dividing by
+    // (cardW + gap) and hoping the trailing gap rounds away.
+    const fits = Math.floor((avail + gap) / (cardW + gap));
+    const cols = Math.max(2, Math.min(wide, fits));
+    if (cols === s.cols) return;                 // nothing to do; avoids reflow
+    s.cols = cols;
+    grid.style.gridTemplateColumns = `repeat(${cols}, var(--ak-card-w))`;
   }
 
   private makeScreen(id: ScreenId, cols: number): Screen {
@@ -470,6 +501,15 @@ export class MenuSystem implements ISubsystem {
     // The COUNT is ours (it drives the focus model); the WIDTH belongs to
     // `ui.css`, which floors it so an 11px `MASCOT` badge still fits the card.
     grid.style.gridTemplateColumns = `repeat(${cols}, var(--ak-card-w))`;
+    // ---- AND THEN NARROW IT TO WHAT ACTUALLY FITS -------------------------
+    // `characterColumns()` is the WIDE layout — 4 for a ten-racer roster, up to 6
+    // beyond that. On a phone in portrait that overflows, and the owner's brief
+    // was explicit that it must not be solved by hard-coding a layout that fits
+    // one phone width. So the count is re-derived from the cards' MEASURED width
+    // and the port's MEASURED width, after layout, and re-derived again whenever
+    // either changes. Portrait is a supported way to play now, not a warning.
+    this.fitCharGrid = () => this.refitGrid(s, grid, cols);
+    this.fitCharGrid();
     for (let i = 0; i < CHARACTERS.length; i++) {
       const c = CHARACTERS[i];
       const card = el('div', 'ak-card ak-card--char', grid);
@@ -1401,6 +1441,12 @@ export class MenuSystem implements ISubsystem {
 
   private onResize = (): void => {
     applyUiScale(window.innerWidth, window.innerHeight);
+    // The racer grid's column count is measured, so it has to be re-measured
+    // here — this is the orientation change as well as a window resize, and
+    // portrait/landscape are both supported layouts now. It runs BEFORE the focus
+    // write below, because it can change `Screen.cols` and the focus ring is
+    // derived from that.
+    this.fitCharGrid?.();
     // Recompute the focus-ring geometry on the next focus write.
     for (const s of this.screens.values()) s.ringHeight = 0;
     if (this.current) this.setFocus(this.current.index, true);
@@ -1426,7 +1472,6 @@ export class MenuSystem implements ISubsystem {
     this.results?.dispose();
     this.touch?.dispose();
     this.touch = null;
-    this.rotateHint?.remove();
     this.root?.remove();
     this.built = false;
   }
