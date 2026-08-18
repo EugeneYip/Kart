@@ -2,12 +2,68 @@ import type { InputState, ISubsystem, FrameContext } from './Types';
 import { clamp, damp, moveTowards } from './MathUtils';
 
 /**
- * Unified keyboard + gamepad + touch input.
+ * Unified keyboard + gamepad + on-screen (touch) input.
  *
  * Steering is deliberately *not* raw: keyboard steer ramps in over ~120 ms and
  * releases in ~80 ms, which is what makes digital input feel analog. Gamepad
  * sticks pass through a radial dead-zone and a mild expo curve.
  */
+
+// ===========================================================================
+// The virtual (on-screen) controller — third device, same contract
+// ===========================================================================
+//
+// WHY THIS IS A MODULE-LEVEL OBJECT AND NOT A METHOD ON `Input`
+// The other two devices are already global: the keyboard is read off `window`
+// and the pad off `navigator`. `Input` itself is constructed inside `Game`
+// (`new Input(engine.canvas)`) and is never handed to the UI, so a UI module
+// that wants to *be* a device has nowhere to plug in. Publishing the device
+// state here — written by `src/ui/TouchControls`, read by `update()` below the
+// same way the pad is polled — keeps the wiring at zero and keeps this file the
+// single input surface it claims to be.
+//
+// Everything here is an ABSOLUTE request in the same units as `InputState`, so
+// the blend in `update()` is "loudest source wins". A device that is not in use
+// is all-zero/false and therefore cannot subtract from one that is — which is
+// exactly why adding it leaves keyboard and gamepad behaviour bit-identical.
+//
+// NOTE ON `accel`: on touch this is normally held at 1 by the control layer
+// (auto-accelerate — see the header of `TouchControls`). The physics only
+// reverses when `accel < 0.15` (`KartPhysics`, "Reverse out of a wall"), so the
+// brake control MUST drop `accel` to 0 as well as raising `brake`. That rule
+// lives with the control layer because it is a control-scheme decision, not a
+// physics one; it is called out here because this object is where the two meet.
+export interface VirtualController {
+  /** -1 (full left) .. +1 (full right). Already analog; smoothed with the rest. */
+  steer: number;
+  /** 0..1 throttle. */
+  accel: number;
+  /** 0..1 brake — becomes reverse at a standstill, but only while accel is low. */
+  brake: number;
+  drift: boolean;
+  item: boolean;
+  lookBack: boolean;
+  /** Menu confirm / start. Edge-detected exactly like the keyboard's. */
+  start: boolean;
+}
+
+export const virtualController: VirtualController = {
+  steer: 0, accel: 0, brake: 0,
+  drift: false, item: false, lookBack: false, start: false,
+};
+
+/**
+ * Zero every virtual axis and button.
+ *
+ * Called on window blur and by the control layer whenever it hides itself, so a
+ * button that was held at the moment the layer went away cannot leave the kart
+ * driving itself. Anything that stops showing a control must call this.
+ */
+export function resetVirtualController(): void {
+  const v = virtualController;
+  v.steer = 0; v.accel = 0; v.brake = 0;
+  v.drift = false; v.item = false; v.lookBack = false; v.start = false;
+}
 
 const KEY_MAP: Record<string, keyof RawState> = {
   ArrowUp: 'accel', KeyW: 'accel',
@@ -45,11 +101,6 @@ export class Input implements ISubsystem {
   private padIndex: number | null = null;
   private lastPadActivity = -999;
 
-  /** Touch: analog steer from a virtual stick, 0 when unused. */
-  private touchSteer = 0;
-  private touchAccel = 0;
-  private touchActive = false;
-
   private el: HTMLElement;
   private bound = false;
 
@@ -63,11 +114,8 @@ export class Input implements ISubsystem {
     window.addEventListener('blur', this.onBlur);
     window.addEventListener('gamepadconnected', this.onGamepad);
     window.addEventListener('gamepaddisconnected', this.onGamepadOut);
-    this.el.addEventListener('pointerdown', this.onPointerDown);
-    this.el.addEventListener('pointermove', this.onPointerMove);
-    this.el.addEventListener('pointerup', this.onPointerUp);
-    this.el.addEventListener('pointercancel', this.onPointerUp);
-    this.el.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Long-press on the canvas must not raise the OS text/callout menu mid-race.
+    this.el.addEventListener('contextmenu', this.onContextMenu);
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -81,35 +129,28 @@ export class Input implements ISubsystem {
   };
   private onBlur = () => {
     for (const k of Object.keys(this.raw) as (keyof RawState)[]) this.raw[k] = false;
-    this.touchActive = false; this.touchSteer = 0; this.touchAccel = 0;
+    resetVirtualController();
   };
   private onGamepad = (e: GamepadEvent) => { this.padIndex = e.gamepad.index; };
   private onGamepadOut = () => { this.padIndex = null; };
+  private onContextMenu = (e: Event) => { e.preventDefault(); };
 
-  // --- touch: left half = steering pad, right half = accel/drift ---
-  private touchOrigin = { x: 0, y: 0, id: -1 };
-  private onPointerDown = (e: PointerEvent) => {
-    if (e.pointerType === 'mouse') return;
-    if (e.clientX < window.innerWidth * 0.5) {
-      this.touchOrigin = { x: e.clientX, y: e.clientY, id: e.pointerId };
-      this.touchActive = true;
-    } else {
-      this.touchAccel = 1;
-      if (e.clientY > window.innerHeight * 0.6) this.raw.drift = true;
-    }
-  };
-  private onPointerMove = (e: PointerEvent) => {
-    if (e.pointerId !== this.touchOrigin.id || !this.touchActive) return;
-    const dx = e.clientX - this.touchOrigin.x;
-    this.touchSteer = clamp(dx / 70, -1, 1);
-  };
-  private onPointerUp = (e: PointerEvent) => {
-    if (e.pointerId === this.touchOrigin.id) {
-      this.touchActive = false; this.touchSteer = 0; this.touchOrigin.id = -1;
-    } else {
-      this.touchAccel = 0; this.raw.drift = false;
-    }
-  };
+  // --- REMOVED: the invisible half-screen touch scheme ---------------------
+  // This file used to drive the kart from bare `pointerdown`/`move`/`up` on the
+  // canvas: left half = steer from wherever you first touched, right half =
+  // full throttle, and below 60 % of the screen height on the right = drift.
+  // It is gone rather than kept as a fallback, for two reasons.
+  //
+  //  1. It was UNDISCOVERABLE. Nothing was drawn, so a player on a phone saw a
+  //     game with no controls — which is the report that opened this task.
+  //  2. It actively FIGHTS the on-screen controls. Those sit in an overlay
+  //     above the canvas, so presses on them never reach these handlers — but
+  //     every *other* touch still did. A thumb resting on bare scenery on the
+  //     right of the screen meant permanent full throttle and, low enough,
+  //     permanent drift, with no on-screen indication of either.
+  //
+  // Touch driving now arrives through `virtualController` above, written by
+  // `src/ui/TouchControls`, which draws what it is doing.
 
   /** Radial dead-zone + expo — the standard console feel. */
   private static curve(v: number, dead = 0.14, expo = 0.35): number {
@@ -122,6 +163,7 @@ export class Input implements ISubsystem {
 
   update(ctx: FrameContext): void {
     const s = this.state;
+    const vc = virtualController;
 
     // --- gamepad poll ---
     let padSteer = 0, padAccel = 0, padBrake = 0;
@@ -147,7 +189,7 @@ export class Input implements ISubsystem {
     const keyTarget = (this.raw.right ? 1 : 0) - (this.raw.left ? 1 : 0);
     let target = keyTarget;
     if (Math.abs(padSteer) > Math.abs(target)) target = padSteer;
-    if (Math.abs(this.touchSteer) > Math.abs(target)) target = this.touchSteer;
+    if (Math.abs(vc.steer) > Math.abs(target)) target = vc.steer;
 
     // Ramping in feels heavier than snapping back — that asymmetry reads as weight.
     //
@@ -164,24 +206,24 @@ export class Input implements ISubsystem {
     if (Math.abs(s.steer) < 0.002) s.steer = 0;
 
     // --- pedals ---
-    const accelTarget = Math.max(this.raw.accel ? 1 : 0, padAccel, this.touchAccel);
-    const brakeTarget = Math.max(this.raw.brake ? 1 : 0, padBrake);
+    const accelTarget = Math.max(this.raw.accel ? 1 : 0, padAccel, vc.accel);
+    const brakeTarget = Math.max(this.raw.brake ? 1 : 0, padBrake, vc.brake);
     s.accel = damp(s.accel, accelTarget, 0.022, ctx.dt);
     s.brake = damp(s.brake, brakeTarget, 0.018, ctx.dt);
     if (s.accel > 0.995) s.accel = 1;
     if (s.accel < 0.005) s.accel = 0;
 
     // --- buttons + rising edges ---
-    const drift = this.raw.drift || padDrift;
-    const item = this.raw.item || padItem;
-    const start = this.raw.start || padStart;
+    const drift = this.raw.drift || padDrift || vc.drift;
+    const item = this.raw.item || padItem || vc.item;
+    const start = this.raw.start || padStart || vc.start;
 
     s.driftPressed = drift && !this.prevDrift;
     s.itemPressed = item && !this.prevItem;
     s.startPressed = start && !this.prevStart;
     s.drift = drift;
     s.item = item;
-    s.lookBack = this.raw.lookBack || padLook;
+    s.lookBack = this.raw.lookBack || padLook || vc.lookBack;
 
     this.prevDrift = drift;
     this.prevItem = item;
@@ -201,6 +243,8 @@ export class Input implements ISubsystem {
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('gamepadconnected', this.onGamepad);
     window.removeEventListener('gamepaddisconnected', this.onGamepadOut);
+    this.el.removeEventListener('contextmenu', this.onContextMenu);
+    resetVirtualController();
     this.bound = false;
   }
 }
