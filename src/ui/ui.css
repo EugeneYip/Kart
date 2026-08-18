@@ -2566,8 +2566,13 @@ html.ak-touch-mode .ak-back--on { display: inline-flex; }
 .ak-rotate {
   position: fixed;
   left: 50%;
-  bottom: calc(18px + var(--ak-safe-b));
-  transform: translateX(-50%);
+  /* Vertically centred, not bottom-anchored. Measured at 390x700: a
+     bottom-anchored pill at 18 px landed on top of the stick base (which reaches
+     to 131 px above the bottom edge in portrait, where `--ak-tu` is at its
+     floor). The middle of a portrait screen is the one region no control and no
+     HUD corner claims. */
+  top: 50%;
+  transform: translate(-50%, -50%);
   z-index: 70;
   display: none;
   align-items: center;
