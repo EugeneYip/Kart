@@ -2503,11 +2503,17 @@ html.ak-touch-mode .ak-hud__br { bottom: calc(20 * var(--u) + var(--ak-safe-b) +
 html.ak-touch-mode .ak-hud__tl { left: calc(16 * var(--u) + var(--ak-safe-l) + var(--ak-touch-clear-tl, 0px)); }
 
 /* Tap targets. The menus are content-sized and already carry the `--u-min`
-   legibility floor, but a row 28 px tall is legible and still not tappable. */
-html.ak-touch-mode .ak-item-row { min-height: 46px; }
-html.ak-touch-mode .ak-btn { min-height: 46px; padding-inline: calc(34 * var(--u)); }
-html.ak-touch-mode .ak-slider { min-height: 34px; }
-html.ak-touch-mode .ak-card { min-width: 46px; }
+   legibility floor, but a row 28 px tall is legible and still not tappable.
+   Measured at 667x375 before this: the shortest menu row was 20 px.
+
+   `touch-action: manipulation` — pan and pinch still work, double-tap-to-zoom
+   does not. iOS Safari IGNORES `user-scalable=no`, so this is the only thing that
+   stops an impatient second tap on a menu row zooming the page. `none` would be
+   wrong here: it would take menu scrolling with it. */
+html.ak-touch-mode .ak-item-row { min-height: 46px; touch-action: manipulation; }
+html.ak-touch-mode .ak-btn { min-height: 46px; padding-inline: calc(34 * var(--u)); touch-action: manipulation; }
+html.ak-touch-mode .ak-slider { min-height: 34px; touch-action: manipulation; }
+html.ak-touch-mode .ak-card { min-width: 46px; touch-action: manipulation; }
 
 /* Menu screens must be able to SCROLL on a short screen. They are
    `overflow: hidden` on desktop and the auto-margin pair centres them, which
