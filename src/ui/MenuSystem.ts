@@ -1186,7 +1186,33 @@ export class MenuSystem implements ISubsystem {
       setClass(s.ring, 'ak-list__focus--on', true);
     }
     s.onFocus?.(n);
+    if (changed) this.revealFocused(s.items[n].el, s.root);
     if (changed && !immediate) this.audio?.play?.('ui_move');
+  }
+
+  /**
+   * Keep the focused item inside its screen's scroll port.
+   *
+   * A screen only scrolls when its content is taller than the frame (touch mode,
+   * `overflow-y: auto`), and OPTIONS is 175 px taller than a 667x375 phone — so a
+   * gamepad or arrow-key player could otherwise walk the highlight clean off the
+   * bottom with nothing moving. Where nothing overflows, writing `scrollTop` is a
+   * no-op, so every desktop viewport is untouched.
+   *
+   * NOT `scrollIntoView()`. Measured: it also scrolled `.ak-menus` — which is
+   * `overflow: hidden` and was 6 px over its own client height — by 6 px, and an
+   * `overflow: hidden` box is still programmatically scrollable but has no
+   * scrollbar and no gesture to put it back. That silently dragged the whole menu
+   * layer, pinned BACK button included, permanently off the top of the screen.
+   * This touches exactly one `scrollTop` and no ancestors.
+   */
+  private revealFocused(target: HTMLElement, screen: HTMLElement): void {
+    if (screen.scrollHeight <= screen.clientHeight) return;
+    const pad = 10;
+    const box = screen.getBoundingClientRect();
+    const r = target.getBoundingClientRect();
+    if (r.top < box.top + pad) screen.scrollTop -= box.top + pad - r.top;
+    else if (r.bottom > box.bottom - pad) screen.scrollTop += r.bottom - (box.bottom - pad);
   }
 
   private move(dx: number, dy: number): void {
