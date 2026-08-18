@@ -15,13 +15,12 @@
 #  `actions/setup-node` with `cache: npm` keys off `package-lock.json`, which is
 #  committed, so this is a one-line cache and needs no manual key.
 #
-#  NOTHING HERE FETCHES ANYTHING AT RUNTIME
-#  AGENTS.md rule 3: every texture is canvas-2D/DataTexture/noise and every model
-#  is authored TS geometry. There are no images, fonts, audio files or models to
-#  copy, no `public/` directory, and no post-build asset step. Audited: `src/`
-#  contains no `fetch`, `XMLHttpRequest`, `new Audio`, three `Loader`,
-#  `new Worker` or service worker. If that ever changes, this workflow does not
-#  need to — but the zero-404 smoke test does.
+#  RUNTIME ASSETS VS PAGE METADATA
+#  AGENTS.md rule 3 still holds for gameplay: textures/models are procedural and
+#  shipped code performs no runtime fetch/XHR/Loader/audio/worker requests.
+#  `public/` now contains presentation/discovery metadata only — favicon,
+#  manifest, robots.txt, sitemap.xml and social-preview artwork. Vite copies
+#  those files into `dist/` automatically, so no extra workflow step is needed.
 # =============================================================================
 name: Deploy to GitHub Pages
 
