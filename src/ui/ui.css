@@ -1957,7 +1957,24 @@
   background: radial-gradient(ellipse at 50% 40%, rgba(16, 28, 60, 0.7) 0%, rgba(2, 4, 12, 0.92) 76%);
   backdrop-filter: blur(calc(12 * var(--u))) brightness(0.8);
   -webkit-backdrop-filter: blur(calc(12 * var(--u))) brightness(0.8);
+  /* Safe inset as PADDING, not offset: the backdrop stays full-bleed (it is the
+     modal wash and must cover the notch strip too) while the board itself is
+     held inside the safe area. Zero on desktop, so guarantee 1 above is
+     unchanged there. `box-sizing: border-box` is inherited from the reset at the
+     top of this file, so the root rect is still exactly the viewport. */
+  padding: var(--ak-safe-t) var(--ak-safe-r) var(--ak-safe-b) var(--ak-safe-l);
 }
+/* Same reason as `.ak-screen`: on a short touch screen the board can be taller
+   than the frame, and a clipped podium you cannot reach is worse than one you
+   scroll to. Guarantee 1 above still holds — auto margins collapse first, so
+   scrolling only ever starts from the top edge. */
+html.ak-touch-mode .ak-results {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+html.ak-touch-mode .ak-results::-webkit-scrollbar { width: 0; height: 0; }
 .ak-results--on { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
 
 .ak-results__inner {
@@ -2606,16 +2623,36 @@ html.ak-touch-mode .ak-back--on { display: inline-flex; }
    `@media (max-height: …) { font-size: … }` is not. Anything keyed off the WINDOW
    is wrong here: the HUD and menus are sized from the render CONTAINER, and in an
    embedded or letterboxed canvas the two disagree. */
+/* THE FIVE `.ak-grid--*` COLUMN OVERRIDES THAT USED TO LIVE IN THESE TWO BLOCKS
+   ARE GONE. Every one of them was either impossible to apply or actively wrong,
+   and both faults were measured at 667x375:
+
+     `.ak-grid--chars`  }  `MenuSystem` writes `grid-template-columns` INLINE
+     `.ak-grid--tracks` }  (`repeat(6, var(--ak-card-w))`), because the column
+                           COUNT also drives the keyboard focus model and the two
+                           must not drift apart. An inline style beats a media
+                           query, so these three declarations never applied at
+                           any viewport. Measured: at 667x375 the racer grid
+                           still had its 6 authored columns, not 4.
+
+     `.ak-grid--karts`  }  This one did apply — and made things worse. It asked
+                           for 120u cards, i.e. 41.6 px at a phone's `--u`,
+                           which is below the 44 px minimum tap target AND below
+                           the `--u-min` floor baked into `--ak-card-w` for the
+                           tyre label. The floor (99 px for karts, 77 px for
+                           racers) is the mechanism that replaced these rules and
+                           it needs no breakpoint.
+
+   Card width is therefore `--ak-card-w` everywhere, floored against `--u-min`.
+   The consequence to know about: on a viewport narrower than ~480 px — i.e. a
+   phone held in PORTRAIT — the 6-wide racer grid is wider than the screen and
+   scrolls sideways rather than shrinking below a tappable size. Landscape is the
+   design orientation and `.ak-rotate` says so. */
 @media (max-width: 820px), (max-height: 520px) {
-  .ak-grid--chars { grid-template-columns: repeat(4, calc(120 * var(--u))); }
-  .ak-grid--tracks { grid-template-columns: repeat(3, calc(190 * var(--u))); }
   .ak-hints { flex-wrap: wrap; justify-content: center; gap: calc(12 * var(--u)); }
 }
 
 @media (max-width: 560px) {
-  .ak-grid--chars { grid-template-columns: repeat(4, calc(104 * var(--u))); }
-  .ak-grid--karts { grid-template-columns: repeat(3, calc(120 * var(--u))); }
-  .ak-grid--tracks { grid-template-columns: repeat(1, calc(260 * var(--u))); }
   .ak-rrow { grid-template-columns: calc(52 * var(--u)) calc(34 * var(--u)) 1fr calc(104 * var(--u)) calc(52 * var(--u)); }
   .ak-rrow__best { display: none; }
 }

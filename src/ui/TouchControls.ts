@@ -499,7 +499,12 @@ export class TouchControls {
    */
   private measure(): void {
     if (!this.touchMode || !this.live) return;
-    this.travel = Math.max(24, this.stickBase.offsetWidth * 0.42);
+    // Thumb travel to full lock, as a fraction of the drawn base. 0.36 puts full
+    // lock ~47 px out at phone scale, so the knob just clears the ring: enough
+    // throw to hold a mid-lock line, short enough to snap to full lock in a
+    // hairpin. THIS IS THE FIRST NUMBER TO TUNE on real hardware — it was chosen
+    // against an emulated pointer, which has no thumb width and no wobble.
+    this.travel = Math.max(24, this.stickBase.offsetWidth * 0.36);
     // While a thumb is on it the base has floated away from its rest position,
     // so measuring now would publish a clearance for a transient.
     if (this.stickId !== -1) return;
