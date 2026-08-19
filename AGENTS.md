@@ -33,6 +33,13 @@ Concretely that means:
    no fonts fetched at runtime. Everything is **generated procedurally in code**
    (canvas 2D, DataTexture, noise, shaders) or authored as geometry in TS.
    This is non-negotiable — the game must run fully offline from `dist/`.
+   *Narrow exception, and it is not a gameplay exception:* page-level
+   presentation and discovery assets — favicons, app icons, social-preview
+   artwork, `site.webmanifest`, `robots.txt`, `sitemap.xml` — are allowed under
+   `public/`. They are fetched by the browser chrome and by crawlers, never by
+   the game. **Gameplay code must not depend on them or fetch them at runtime**,
+   so do not delete them as rule-3 violations and do not read this as licence to
+   load a texture, model, font or sound from a file.
 4. **No `any`.** Strict TypeScript. `npx tsc --noEmit` must pass.
 5. **Zero allocations in hot loops.** Reuse vectors from `@/core/MathUtils`'s
    `scratch`, or your own module-level temporaries. No `new THREE.Vector3()`

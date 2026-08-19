@@ -21,8 +21,12 @@ export default defineConfig({
   //   * no `fetch`, `XMLHttpRequest`, `new Audio`, `three` Loader, `new Worker`
   //     or service worker anywhere in `src/` — AGENTS.md rule 3 holds, every
   //     texture is canvas-2D/DataTexture/noise and every model is TS geometry;
-  //   * no `public/` directory, so no `/file` URLs that a relative base cannot
-  //     rewrite;
+  //   * `public/` now exists, but it holds only PAGE-LEVEL assets — favicons,
+  //     app icons, the social card, manifest, robots.txt, sitemap.xml. Their
+  //     hrefs in `index.html` are relative (`./favicon.ico`) precisely so a
+  //     relative base can rewrite them; the absolute URLs in the OG/canonical
+  //     tags are crawler-facing metadata, not fetched assets, so `base` is
+  //     irrelevant to them. No gameplay code reads any of it;
   //   * no router, no `history.pushState`, no `location.pathname` read in
   //     shipped code (only `src/dev/*` harnesses, which are not build inputs),
   //     so there is no deep link for Pages' 404 handler to mishandle;

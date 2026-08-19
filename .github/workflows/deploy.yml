@@ -18,7 +18,9 @@
 #  NOTHING HERE FETCHES ANYTHING AT RUNTIME
 #  AGENTS.md rule 3: every texture is canvas-2D/DataTexture/noise and every model
 #  is authored TS geometry. There are no images, fonts, audio files or models to
-#  copy, no `public/` directory, and no post-build asset step. Audited: `src/`
+#  copy and no post-build asset step: `public/` holds only page-level metadata
+#  (favicons, social card, manifest, robots, sitemap), which Vite copies into
+#  `dist/` on its own, and which the GAME never fetches. Audited: `src/`
 #  contains no `fetch`, `XMLHttpRequest`, `new Audio`, three `Loader`,
 #  `new Worker` or service worker. If that ever changes, this workflow does not
 #  need to — but the zero-404 smoke test does.

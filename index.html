@@ -18,44 +18,98 @@
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#05070f" />
-    <title>Foxy Kart</title>
+    <title>Foxy Kart — Browser Kart Racing Game</title>
 
     <!--
-      FAVICON — inline SVG data URI. A tyre ring over the boot screen's gold,
-      legible as a mark at 16 px. A data URI rather than a file so AGENTS.md
-      rule 3 stays literally true — zero network requests, nothing to 404 — and
-      so `dist/` stays exactly four asset files.
+      ===================================================================
+       WEB IDENTITY — icons, social preview, canonical, robots
+      ===================================================================
+       WHY THIS IS FILES NOW AND WAS A DATA URI BEFORE.
+       The icon used to be an inline SVG data URI, and the comment here argued
+       that a real `/favicon.ico` was STRUCTURALLY IMPOSSIBLE from this
+       repository. That analysis was correct at the time and is worth keeping,
+       because it explains what changed:
 
-      WHAT THIS DOES AND DOES NOT FIX — measured, not assumed.
-      With no icon declared, the static subpath rehearsal logged one
-      `404 /favicon.ico` on every single page load. Browsers probe for an icon at
-      the ORIGIN ROOT, never at the page's own directory, so on Pages that request
-      is `https://<user>.github.io/favicon.ico`. That path is OUTSIDE this
-      project's published subtree: `base` cannot redirect it and no file this
-      repository ships can answer it. Only the owner's user site — the separate
-      `<user>.github.io` repository — owns that URL. So the residual 404 is
-      structurally unfixable from here, and it is harmless: it is a browser
-      convenience request for a decoration, not an app asset, and the game never
-      reads it.
+         Browsers probe for an icon at the ORIGIN ROOT, never at the page's own
+         directory. While the site was served from a GitHub Pages project
+         subpath, that probe went to `https://<user>.github.io/favicon.ico` —
+         outside this project's published subtree, unreachable by `base`, and
+         answerable only by the separate user-site repository.
 
-      Declaring the icon does reduce the probe rather than eliminate it. Measured
-      over three forced reloads of the built site: two loads made no `/favicon.ico`
-      request at all, one still did. So do NOT read a stray `404 /favicon.ico` in
-      a network panel as a deployment fault — check that the five real requests
-      (index.html + 3 JS + 1 CSS) are all 200, which is the actual contract.
+       Production is now served at a CUSTOM DOMAIN ROOT, `https://kart.eugeneyip.com/`.
+       The origin root is therefore inside this artifact, so
+       `https://kart.eugeneyip.com/favicon.ico` is ours to serve and the residual
+       404 is gone rather than merely reduced. Real files also give us the sizes
+       a data URI cannot: an Apple touch icon and the 192/512 manifest pair.
 
-      The attributes are all load-bearing, and each was needed before Chrome
-      would accept the icon at all: `type="image/svg+xml"` (without it Chrome
-      does not commit to an SVG icon), explicit `width`/`height` on the <svg>
-      (a viewBox alone leaves the image intrinsically sizeless — it measured
-      150x150), and `%20` for spaces (literal spaces are not legal in a URI).
+       AGENTS.md rule 3 (zero runtime network requests) is unaffected. These are
+       page-level presentation and discovery assets fetched by the BROWSER and by
+       CRAWLERS; no gameplay code reads them, and the game still generates every
+       texture, mesh and sound procedurally.
+
+       TWO URL STYLES HERE, BOTH DELIBERATE — do not "fix" one to match the other:
+         * icon/manifest hrefs are RELATIVE (`./favicon.ico`) so they keep working
+           under Vite's `base: './'` at any subpath, including the project-URL
+           fallback;
+         * canonical, og:url and the image URLs are ABSOLUTE, because a crawler
+           resolves them out of context and a relative URL there is useless.
+
+       `theme-color` is declared once, above with the viewport, and deliberately
+       not repeated.
     -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      sizes="any"
-      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%2305070f'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='9.5'%20fill='none'%20stroke='%23ffd166'%20stroke-width='4'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='3'%20fill='%23f2901f'/%3E%3C/svg%3E"
-    />
+    <meta name="description" content="Race through stylized city circuits in Foxy Kart, a browser kart racing game playable on desktop, phone, and tablet." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://kart.eugeneyip.com/" />
+
+    <link rel="icon" href="./favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="manifest" href="./site.webmanifest" />
+
+    <!--
+      OPEN GRAPH / TWITTER. The image is 1731x909, and those are the real numbers.
+      Its aspect ratio is 1.9042 against the nominal 1200x630 card's 1.9048 — the
+      same card at higher resolution — and it sits well inside platform limits, so
+      it ships as approved rather than being re-encoded to hit a rounder figure.
+      Declaring dimensions that do not match the file is worse than an unusual
+      size: it makes crawlers letterbox or reject the card.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Foxy Kart" />
+    <meta property="og:title" content="Foxy Kart — Browser Kart Racing Game" />
+    <meta property="og:description" content="Race through stylized city circuits in Foxy Kart, a browser kart racing game playable on desktop, phone, and tablet." />
+    <meta property="og:url" content="https://kart.eugeneyip.com/" />
+    <meta property="og:image" content="https://kart.eugeneyip.com/og/foxy-kart-social-v1.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1731" />
+    <meta property="og:image:height" content="909" />
+    <meta property="og:image:alt" content="Foxy Kart racing preview featuring the fox and capybara characters in karts" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Foxy Kart — Browser Kart Racing Game" />
+    <meta name="twitter:description" content="Race through stylized city circuits in Foxy Kart, a browser kart racing game playable on desktop, phone, and tablet." />
+    <meta name="twitter:image" content="https://kart.eugeneyip.com/og/foxy-kart-social-v1.png" />
+    <meta name="twitter:image:alt" content="Foxy Kart racing preview featuring the fox and capybara characters in karts" />
+
+    <!--
+      JSON-LD, factual fields only. No aggregateRating, offers, price, publisher,
+      release date or operating-system claims — none of those are things this
+      repository can honestly assert, and structured data that invents them is
+      worse than none.
+    -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Foxy Kart",
+        "url": "https://kart.eugeneyip.com/",
+        "description": "Race through stylized city circuits in Foxy Kart, a browser kart racing game playable on desktop, phone, and tablet.",
+        "genre": "Racing",
+        "playMode": "SinglePlayer",
+        "image": "https://kart.eugeneyip.com/og/foxy-kart-social-v1.png"
+      }
+    </script>
     <!--
       ===================================================================
        BOOT SCREEN — typographic
