@@ -492,6 +492,21 @@ not "restore" 2.6 on the strength of the ballistic arithmetic — that is the ex
 reasoning that made the hop a no-op, and the suspension droop is the term it
 omits.
 
+**Consequence found afterwards, by the rendered check — and still open.** The
+numbers above are right and the decision stands, but a hop that genuinely leaves
+the ground exercises a path that a hop stuck on its springs never did: it **arms an
+air trick that `DriftSystem.tricks()` explicitly tries to refuse**, because the
+`fromHop` guard reads a `hopTime` that is already 0 by the time the wheels leave.
+Every drift hop therefore flips the chassis ~90° and pays an unearned
+`DRIFT.trickBoost`. `Directly verified:` all eight circuits, via
+`.probe-tmp/HOP-trick-guard.ts`. Full diagnosis in
+[`../PROJECT_STATE.md` §4.3](../PROJECT_STATE.md).
+
+The lesson for this decision specifically: **the rendered check was not a
+formality.** Air time, rise and the whole 46-assertion battery are green with this
+bug present — it is invisible to every number the battery takes. The hop's visual
+status is therefore **unverified**, not accepted.
+
 **Relevant commits:** `8135aff` (the bench fix that exposed it)
 
 ---

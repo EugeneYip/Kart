@@ -298,9 +298,9 @@ reports a real measurement of the wrong thing.
 
 ---
 
-## 4. Two worked examples: diagnose the probe before the code
+## 4. Worked examples: diagnose the probe before the code
 
-4.1 has been worked through, and 4.2 is resolved. Detail and numbers are in
+4.1 and 4.2 are resolved; 4.3 is open. Detail and numbers are in
 [`../PROJECT_STATE.md` §4](../PROJECT_STATE.md) — not repeated here. What
 matters here is the *method*.
 
@@ -406,6 +406,36 @@ done
 `Directly verified:` all ten exit 0. They are optional and not wired into any
 npm script; `npm run typecheck` and `npm run build` use the root config, and
 that is what gates CI.
+
+### 4.3 A measurement taken in the live game can be confounded by the track
+
+Open example, and the newest one: `PHYS.hopSpeed` 4.6 turned out to arm an air
+trick that the code refuses to arm (`../PROJECT_STATE.md` §4.3). The first attempt
+to establish that was made **in the running game**, driving a real circuit and
+reading `trickActive` across a few hops. It produced a confident wrong answer twice
+over:
+
+- `trickActive` read **true at `hopSpeed` 2.6**, where the hop provably produces no
+  air at all — because the kart was leaving the ground on **kerbs and crests**, which
+  arms tricks legitimately. The instrument could not tell a hop from a bump.
+- The rise metric drifted with the terrain, because `lastGroundPoint` stops updating
+  the moment the kart is airborne, so "height above the ground" silently becomes
+  "height above wherever the ground last was".
+
+Neither reading was noise; both were stable and plausible, and one of them was
+about to be reported as a defect that did not exist. What fixed it was **attribution**:
+recording `hopTime` at the frame the wheels left the ground, so a departure could be
+proven to be the hop rather than the scenery. That is what turned a suspicion into
+the one-line cause.
+
+> **Driving the real game is the right way to *see* a problem and the wrong way to
+> *measure* one.** A live circuit has kerbs, camber and elevation, and it will not
+> hold anything still for you. Use the browser to notice, then re-ask the question in
+> a controlled probe — settled kart, flat straight, one variable — and make the probe
+> attribute the effect to its cause. Both instruments were needed here: the battery's
+> 46 green assertions cannot see this bug, and the controlled probe would never have
+> been written without first *looking* at the hop.
+
 
 ---
 

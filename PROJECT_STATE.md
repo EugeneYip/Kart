@@ -260,10 +260,15 @@ do not re-litigate them from old notes.
 
 ## 4. Current open work
 
-> ### No active implementation task.
+> ### One open defect; no broad backlog.
 >
-> `Directly verified:` the tree is clean, `main` and `origin/main` agree, and a
-> clean-install build is green. Nothing is mid-flight.
+> `Directly verified:` the tree is clean and a clean-install build is green. The
+> physics battery is 46 / 0 and all ten scoped typecheck gates exit 0. `main` is
+> **ahead of `origin/main`** by the 2026-08-23 integration; nothing was pushed.
+>
+> The one open item is **§4.3** — the taller hop arms an air trick it is meant to
+> refuse. It is scoped and understood, not a mystery. Everything else below is an
+> observation, not a queue.
 
 The items below are **observations recorded during this continuity pass**, not
 an assigned backlog and not a plan. Each is measured or read directly at this
@@ -446,7 +451,55 @@ comment would have put a no-op source diff in a commit whose whole claim is that
 it does not touch `src/`. Worth folding into the next change that has reason to
 open that file.
 
-### 4.3 Small inconsistencies noted while reading
+### 4.3 The taller hop arms an air trick that the code refuses to arm
+
+**Open.** Found by the rendered check of `PHYS.hopSpeed` 4.6 — the one acceptance
+step the headless numbers could not cover — and left unfixed because the task it
+was found in was scoped to integrating two finished worktrees.
+
+`DriftSystem.tricks()` contains an explicit guard whose only purpose is to stop a
+drift hop from arming an air trick:
+
+```ts
+const fromHop = b.hopTime > 0 && b.hopTime < 0.1;
+if (launch >= DRIFT.trickLaunchSpeed && !fromHop && b.trickCooldown <= 0) { ... }
+```
+
+**The guard cannot fire.** `Measured:` at the frame `justLeftGround` becomes true,
+`hopTime` is already **0.0000**, so `hopTime > 0` is false, so `fromHop` is false.
+The window is not too small — the timer it reads has already been reset by the time
+the wheels leave the ground. The guard was never exercised before because at
+`hopSpeed` 2.6 the hop never left the ground at all (§4.1), so `justLeftGround`
+never fired on a hop and nothing ever tested the refusal.
+
+`Directly verified:` `node src/dev/node-run.mjs .probe-tmp/HOP-trick-guard.ts` —
+settled kart, flat straight, the hop the only departure from the ground:
+
+| hopSpeed | air | leaves at | `hopTime` at leave | launch | trick | max pitch | boostTime |
+|---|---|---|---|---|---|---|---|
+| 2.6 | 0.000 s | never | — | — | none | ≤ 12.2° | unchanged |
+| 4.6 | 0.242–0.300 s | f5–f6 | **0.0000** | 3.41–3.83 m/s | **`frontflip`** | **81–90°** | **0.00 → 0.54** |
+
+Identical on all eight circuits. Two consequences, both visible in play:
+
+1. **The chassis flips.** `bodyQuat` composes `trickTime * 2π` about `AXIS_X`, so
+   every drift hop rotates the kart up to ~90° and snaps it level on touchdown.
+   It does not read as a kart hop; it reads as a botched frontflip.
+2. **Every hop pays an unearned boost.** Landing grants `DRIFT.trickBoost` because
+   the hop's 0.242–0.300 s clears `trickMinAir` (0.24 s) on every circuit. That is
+   a balance change nobody decided on — a free boost for tapping drift.
+
+**The `hopSpeed` decision itself still stands.** The hop *should* leave the ground;
+DriftSystem §1 has always said so, and the air time and rise are right (§4.1,
+[`docs/DECISIONS.md`](docs/DECISIONS.md)). The defect is in the trick guard, not in
+`hopSpeed`. **Do not "fix" this by restoring 2.6** — that reverts to a hop that
+never leaves the ground and merely re-hides this. Fix the guard so a hop is
+attributed as a hop, then re-check the hop visually.
+
+**Not yet done:** the rendered look of the hop, once the trick no longer fires, has
+never been judged. Treat the hop's visual status as **unverified**, not accepted.
+
+### 4.4 Small inconsistencies noted while reading
 
 All `Directly verified:` by reading the current source. None affects behaviour.
 
@@ -472,7 +525,7 @@ All `Directly verified:` by reading the current source. None affects behaviour.
   fixing §4.2; left alone, because guessing which harness was meant is worse
   than recording that nobody knows.
 
-### 4.4 The last recorded owner playtest
+### 4.5 The last recorded owner playtest
 
 `Historical only:` [`docs/archive/HANDOFF-legacy.md`](docs/archive/HANDOFF-legacy.md)
 opens with a fifth-playtest list, items G1–G9, recorded 2026-08-18 and marked

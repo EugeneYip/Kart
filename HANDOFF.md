@@ -3,8 +3,9 @@
 **The live working note between sessions.** One page. If it grows past two, the
 content belongs somewhere else — see [Where things go](#where-things-go).
 
-Baseline: `627401c24ad7e4ea114f25e828234a286c171277`, committed **2026-08-18**.
-Nothing has landed since, so that commit date is also the age of this state.
+Baseline: the integration of the two finished worktrees, **2026-08-23** — the
+scoped-typecheck fix and the physics-battery fixes, on top of
+`3bd1b3f` (which was itself on `627401c`, committed 2026-08-18).
 
 ---
 
@@ -21,7 +22,8 @@ New here with no conversation history? Follow the bootstrap list in
 `Directly verified:` re-checked at this baseline on 2026-08-23, five days after
 the commit, with no intervening work —
 
-- `main` and `origin/main` at the baseline SHA above.
+- `main` is **ahead of `origin/main`** by the integration commits. `origin/main`
+  is still at `3bd1b3f`; nothing has been pushed.
 - The tree was clean at the baseline commit. It will NOT look clean while a
   session is in progress — judge the baseline by `git rev-parse HEAD`, never by
   the absence of local edits.
@@ -30,8 +32,20 @@ the commit, with no intervening work —
 
 ## In flight
 
-**Nothing.** There is no active implementation task and no half-finished branch
-on `main`. You are starting from a green baseline.
+**One open defect, found by the rendered check of the hop — see
+[`PROJECT_STATE.md` §4.3](PROJECT_STATE.md).** The battery is 46 / 0 and the build
+is green, so this is not a broken baseline; it is one scoped behavioural bug that
+the numbers alone could not have caught.
+
+`PHYS.hopSpeed` 4.6 makes the drift hop genuinely airborne — which it never was —
+and that airborne hop now **arms an air trick that `DriftSystem.tricks()`
+explicitly tries to refuse**, so every drift hop flips the chassis ~90 deg and pays
+an unearned trick boost. `Directly verified:` on all eight circuits. It was left
+unfixed on purpose: the integration it was found in was scoped to integrating, and
+the fix is a change to the guard, not to `hopSpeed`.
+
+**The hop has NOT been visually accepted.** Do not record it as accepted until the
+trick defect is resolved and the hop is looked at again.
 
 The two remote branches `agent/web-identity-seo` and `web-identity-seo` sit one
 commit behind `main` and are fully superseded. Ignore them.
