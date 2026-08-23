@@ -246,12 +246,12 @@ that group whenever you find a bench defect — every measurement in the file is
 taken through `ITrackService`, so a broken track service reads as a physics
 result.
 
-`Directly verified:` **44 passed / 2 failed** at the current baseline. The two
-are `hop air time` and `grinding a wall is not a crash`; both are real readings
-of the shipped model awaiting a tuning decision, with the numbers and the
-reopening rule in [`../PROJECT_STATE.md` §4.1](../PROJECT_STATE.md). Read
-[§4](#4-two-worked-examples-diagnose-the-probe-before-the-code) before acting on
-either.
+`Directly verified:` **46 passed / 0 failed** at the current baseline. Read
+[§4](#4-two-worked-examples-diagnose-the-probe-before-the-code) for how it got
+there from 34 / 8, because most of that story is about the bench rather than the
+kart. A run that reports one extra failure is almost always the wall-clock
+`fixed step budget` assertion under machine load — see
+[`../PROJECT_STATE.md` §4.1](../PROJECT_STATE.md).
 
 ### The circuit probes
 
@@ -348,9 +348,21 @@ genuinely nearest point. Add to it rather than trusting a plausible reading.
 working.** `hop air time` had been passing at 0.308 s only because the ray
 march's blind band reported the wheels airborne while the kart sat on its
 springs, which also let `PHYS.hopGravity` engage. With the march fixed the hop
-never leaves the ground and the assertion reads 0.000 s. Do not repair that by
-restoring the blind band, and do not widen the range: check whether the *game*
-number was ever real. Here it was not.
+did not leave the ground at all and the assertion read 0.000 s. The green check
+had been the *artefact*; the red one was the first true reading of a hop that had
+never worked. It was fixed in the game (`PHYS.hopSpeed` 2.6 → 4.6), not in the
+probe. When this happens, do not repair it by restoring the blind band and do not
+widen the range — ask whether the number that was passing was ever real.
+
+**A derived threshold can be sound arithmetic and still be unshippable.** The
+last of the eight, `grinding a wall is not a crash`, was re-derived from the
+barrier's own drag constant — and the result had to be thrown away, because a
+floor computed from `vergeContactDrag` moves with it and therefore cannot fail
+(at `vergeContactDrag` 4.0 the floor becomes 0.1 % and a barrier seven times
+harsher than shipped still passes). §1's rule applies to a threshold you derived
+yourself just as much as to one you inherited: keep the arithmetic as a printed
+note, and anchor the assertion to something that does not move with the thing it
+is judging. Here that is `maxSpeed · 0.4`, the pace the game respawns you at.
 
 ### 4.2 When two configs disagree about one file
 

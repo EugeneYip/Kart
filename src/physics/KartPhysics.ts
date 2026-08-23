@@ -158,9 +158,33 @@ export const PHYS = {
   glideGravity: 0.2,
   glideBleed: 0.22,
   glidePitch: 7.0,
-  /** Hop impulse, m/s, and the gravity scale applied while hopping. */
-  hopSpeed: 2.6,
-  hopGravity: 0.615, // 2*2.6/(26*0.615) ≈ 0.325 s of hang time
+  /**
+   * Hop impulse, m/s, and the gravity scale applied while hopping.
+   *
+   * **The ballistic formula alone does not predict the hang time**, and believing
+   * that it did is how this constant stayed too small. `2·v/(g·hopGravity)` gives
+   * 0.575 s at 4.6 m/s — but `hopGravity` is gated on `!b.grounded`, and the kart
+   * is not airborne until the impulse has pulled the wheels through the
+   * suspension's remaining droop. That droop is only 0.11–0.13 m at the settled
+   * ride height, and it is not free: it is spent before any air time begins.
+   *
+   * At the previous 2.6 m/s the whole impulse went into droop and the kart NEVER
+   * left the ground — `groundedWheels` bottomed out at 2 (the rears stay planted
+   * under any throttle, on the flat or on the oval) and the chassis rose 0.107 m.
+   * That contradicted this file's own comment and §1 of DriftSystem ("the kart is
+   * genuinely airborne"), and it went unnoticed because the physics bench's
+   * `raycastGround` had a blind band at the far end of its ray that reported the
+   * wheels airborne anyway — which then let `hopGravity` engage, so the bench
+   * measured 0.308 s of air for a kart sitting on its springs. See
+   * PROJECT_STATE §4.1.
+   *
+   * `Measured` at 4.6, once the bench was fixed: 0.283 s of air and a 0.385 m
+   * rise, against the 0.22–0.40 s the battery asserts. Air time first appears at
+   * all around 3.4. Raising this moves the drift charge timings by ≤ 0.05 s
+   * (Purple 2.76 → 2.83 s); everything else in the battery is unchanged.
+   */
+  hopSpeed: 4.6,
+  hopGravity: 0.615,
   /** Minimum CoM height above the contact point — the anti-tunnel hard floor. */
   minRideHeight: 0.3,
   /** Ground probe lift for the anti-tunnel clamp, metres. */

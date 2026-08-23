@@ -9,10 +9,13 @@
  *
  *  Design decisions, and why:
  *
- *   1. A REAL HOP. Pressing drift launches the chassis (2.6 m/s, ~0.32 s of air
- *      at the reduced hop gravity). It isn't a canned animation — the kart is
- *      genuinely airborne, the suspension extends, and the landing squats. That
- *      physicality is why MK8's hop feels like a decision and not a button.
+ *   1. A REAL HOP. Pressing drift launches the chassis (4.6 m/s, a measured
+ *      0.283 s of air and a 0.385 m rise). It isn't a canned animation — the
+ *      kart is genuinely airborne, the suspension extends, and the landing
+ *      squats. That physicality is why MK8's hop feels like a decision and not a
+ *      button. The impulse has to clear the suspension's remaining droop before
+ *      any of it becomes air, which is why it is 4.6 and not the 2.6 a ballistic
+ *      reading of `PHYS.hopGravity` suggests — see the note on `PHYS.hopSpeed`.
  *
  *   2. ONE PRESS ARMS ONE DRIFT; IT COMMITS THE MOMENT YOU ARE ACTUALLY
  *      CORNERING.  (P0g — owner: *"it is really hard to perform, it'd be better

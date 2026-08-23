@@ -454,6 +454,87 @@ shipped in its place.** That commit is comment-only.
 
 ---
 
+## Decision: `PHYS.hopSpeed` is 4.6, not the 2.6 a ballistic reading suggests
+
+**Status:** Accepted, 2026-08-23. Owner decision.
+
+**Context:** `hopGravity`'s comment derived the hop's hang time as
+`2·hopSpeed/(g·hopGravity)` ≈ 0.325 s, and DriftSystem §1 promised "the kart is
+genuinely airborne". At `hopSpeed` 2.6 **it never left the ground at all**:
+`groundedWheels` bottomed out at 2 — the rear wheels stay planted under any
+throttle, on the flat or on the oval — and the chassis rose 0.107 m. The
+`hop air time` assertion had been *passing* at 0.308 s only because the physics
+bench's `raycastGround` had a blind band at the far end of its ray that reported
+the wheels airborne while the kart sat on its springs, which then let
+`hopGravity` engage. Fixing the bench turned that green check red and revealed
+the real behaviour.
+
+**Decision:** `hopSpeed` = **4.6**. `Measured:` 0.283 s of air, 0.385 m rise.
+
+**Why:** the ballistic formula is not the hang time. `hopGravity` is gated on
+`!b.grounded`, so the reduced gravity cannot apply until the impulse has already
+pulled the wheels through the suspension's *remaining* droop — only 0.11–0.13 m
+at the settled ride height, and spent before any air time begins. Air time first
+appears at all around 3.4; 4.2 passes the assertion's lower bound by 0.005 s,
+which is too fine to hold. `Directly verified:` removing the `!b.grounded` gate
+instead does **not** work (rise 0.126 m, still 0.000 s), so this is not an
+ordering bug. Cost elsewhere is small: drift charge timings move ≤ 0.05 s
+(Purple 2.76 → 2.83 s) and nothing else in the battery changes.
+
+**Do not change unless** you re-measure `hop air time` after it. In particular do
+not "restore" 2.6 on the strength of the ballistic arithmetic — that is the exact
+reasoning that made the hop a no-op, and the suspension droop is the term it
+omits.
+
+**Relevant commits:** `8135aff` (the bench fix that exposed it)
+
+---
+
+## Decision: The grind assertion is anchored to respawn pace, not to a share of free speed
+
+**Status:** Accepted, 2026-08-23. Owner decision.
+
+**Context:** `grinding a wall is not a crash` asserted "> 60 % of free speed" and
+read 52 %. The number was real — `leanOnBarrier()` computes press = 0.5775 and
+behaves exactly as documented — but the comparison was not: the wall run must
+start at u = −11.7 to reach a rail at 12.7 m when the asphalt ends at 11, so it
+paid `PHYS.vergeDrag` for the kerb band the whole time while the baseline ran
+down the centreline and paid none (`Measured:` the kerb alone is 3.4 m/s of the
+gap). It also sampled one instant, and the contact is not a smooth decay: it
+holds an equilibrium that oscillates ±1.5 m/s, and tick 360 landed in a trough.
+
+**Decision:** the equilibrium — a **mean over the final second** — must exceed
+`tuning.maxSpeed · 0.4`. Nothing was widened; the 60 % figure is not reproduced
+in a looser form, it is replaced by a different claim.
+
+**Why:** `maxSpeed · 0.4` is the game's own definition of a speed you can race
+from — a respawn drops you back in at exactly that ("Drop back in at 40 % pace",
+`KartPhysics`). So the claim is *grinding a barrier must not leave you worse off
+than being fished out of the void*, which is a sharper reading of the contact
+model's "it never stops you" than any percentage of a free run that bundles the
+kerb. `Measured:` 13.80 m/s, 48.6 % of top speed, against an 11.4 m/s floor.
+
+**A budget derived from the drag constants was tried first and rejected under
+this file's own rule.** `vergeContactDrag · press` = 0.3176 /s, so 3 s with the
+engine contributing nothing leaves exp(−0.3176·3) = 38.6 % — sound arithmetic,
+and it is printed as a note every run. But a floor derived from
+`vergeContactDrag` *moves with it* and therefore cannot fail: `Measured:` at
+`vergeContactDrag` 4.0 the floor drops to 0.1 % and the assertion passes at
+35.8 %, a barrier seven times harsher than shipped and still green. See
+[A test that cannot fail must not ship](#decision-a-test-that-cannot-fail-must-not-ship).
+The respawn-pace anchor is falsifiable both ways: `Measured:` `vergeContactDrag`
+4.0 → 7.60 m/s red, `vergePressFloor` 1.0 with drag 1.6 → 9.28 m/s red.
+
+**Do not change unless** you are re-deciding how expensive riding the edge should
+feel, which is a design call and not something the probe can adjudicate. The
+per-tick-penalty regression the block was originally written for is guarded by
+`a grind is not re-penalised per tick`, which `Measured:` fails at 292 penalties
+when the grace is removed — and, as its comment has always claimed, nowhere else.
+
+**Relevant commits:** `8135aff`, `4d3f979`
+
+---
+
 ## Decision: Drift stays; the entry barrier was lowered instead
 
 **Status:** Accepted. Owner decision — **do not re-litigate.**
