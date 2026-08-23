@@ -41,10 +41,12 @@ commit behind `main` and are fully superseded. Ignore them.
 Full detail with measurements is in [`PROJECT_STATE.md` §4](PROJECT_STATE.md).
 In one line each:
 
-- The headless physics battery reports **34 passed / 8 failed**. Four failures
-  read `Infinity %`, which may indicate a broken probe rather than broken
-  physics. Diagnose the denominator before touching `src/physics/`, and do not
-  widen a tolerance to make anything pass.
+- The headless physics battery reports **44 passed / 2 failed**. It was 34 / 8;
+  six of those eight were defects in the bench (`TestTrack` and two probes), not
+  in `src/physics/`, and the four `Infinity %` readings were one dead trigger.
+  The two that remain — `hop air time` and `grinding a wall is not a crash` —
+  are genuine readings of the shipped model and each needs a tuning decision on
+  a named constant. Do not widen a tolerance to make either pass.
 - All ten scoped `tsconfig.*-check.json` gates now exit 0. The one that did
   not was passing/failing on whether `vite.config.ts` was in `include` —
   that is the only thing pulling `@types/node` into any program here, and

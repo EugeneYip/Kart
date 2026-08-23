@@ -159,7 +159,14 @@ export function geoAt(x: number, z: number): void {
     G.u = side * x - R;
     G.bank = 0;
     G.curvature = 0;
-    G.dist = side > 0 ? L - z : 2 * STRAIGHT_LEN + ARC_LEN + (z + L);
+    // The lap runs ramp straight [0, SL] → arc A [SL, SL+AL] → apron straight
+    // [SL+AL, 2·SL+AL] → arc B [2·SL+AL, LAP], which is exactly how
+    // `fillSample()` inverts it. This read `2 * STRAIGHT_LEN` and so put the
+    // apron straight at [408.5, 518.5] — 110 m too far along, and squarely on top
+    // of arc B's range. `project()` returns `fillSample(G.dist)`, so every kart on
+    // the apron straight was handed a road frame from the far side of arc B: at
+    // z = 0 it got a centreline point 138 m away, banked 25° instead of flat.
+    G.dist = side > 0 ? L - z : STRAIGHT_LEN + ARC_LEN + (z + L);
   }
 }
 
@@ -257,6 +264,31 @@ export class TestTrack implements ITrackService {
     return SurfaceType.Grass;
   }
 
+  /**
+   * Is the query clear of the barrier vertically — over its top, or below its
+   * foot? `Track.collideWalls` answers this with `vert` measured in the road
+   * frame against `base = surfaceHeight(side * wallLat, ...)`: the surface height
+   * AT THE WALL FACE, which the spline defines everywhere. This must do the same.
+   *
+   * It used to sample `heightAt(position.x, position.z)` — under the QUERY — and
+   * substitute `0` when that came back NaN. Over the void, that reads as "level
+   * with the barrier's foot", so a kart 80 m off the track at y = 8 was reported
+   * as buried `radius + 67.3` m INSIDE the guardrail. `resolveWalls` then pushed
+   * it out by that residual and the kart was back on the kerb in a single step —
+   * before `checkBounds` (step 5) ever ran (step 4). That, and not the projection
+   * or the respawn code, is why "out of bounds → respawn" never fired: nothing
+   * was ever out of bounds by the time the bounds test looked.
+   *
+   * The barrier's foot is always on defined ground (`inset` < `GRASS_LIMIT`), so
+   * there is no NaN case left to paper over.
+   */
+  private overBarrier(position: THREE.Vector3, inset: number, side: -1 | 1): boolean {
+    const base = this.heightAt(G.cx + G.bx * inset * side, G.cz + G.bz * inset * side);
+    const above = position.y - base;
+    // Matches Track.collideWalls' `vert < base - 0.55 || vert > top + 0.7` gate.
+    return above < -0.55 || above > this.wallHeightOn(side) + 0.35;
+  }
+
   /** Barrier height on one side — `tallWall` turns one of them into a building. */
   private wallHeightOn(side: -1 | 1): number {
     if (this.tallWall === 'inner' && side < 0) return BUILDING_HEIGHT;
@@ -304,18 +336,32 @@ export class TestTrack implements ITrackService {
       return out;
     }
 
+    // The bracket search MUST evaluate `maxDist` itself, hence the clamp and the
+    // exit test at the bottom rather than in the `for` header. Marching
+    // `t += step` while `t <= maxDist` only ever samples multiples of `step`, so
+    // the final partial step is never looked at: with step 0.16 against the
+    // suspension's ray (`rayLift + rest + wheelRadius` = 1.228 m) the last sample
+    // landed at 1.120 m and ground between 1.120 and 1.228 m was INVISIBLE.
+    //
+    // That blind band is exactly where a kart parked on the 25° bank sits: the
+    // measured wheel distance there is 1.1176–1.1217 m, straddling 1.120, so each
+    // wheel reported `hit: false` on roughly half of all ticks and
+    // "banked 25°: all wheels planted" read `no` for a kart that had not moved
+    // 3.5 mm in three seconds. The bisection below was never at fault.
     const step = 0.16;
     let t1 = 0;
     let f1 = f0;
     let found = false;
-    for (let t = step; t <= maxDist + 1e-6; t += step) {
-      f1 = f(t);
-      t1 = t;
+    for (let t = step; ; t += step) {
+      const tc = t < maxDist ? t : maxDist;
+      f1 = f(tc);
+      t1 = tc;
       if (f1 <= 0) {
         found = true;
         break;
       }
-      t0 = t;
+      if (tc >= maxDist) break;
+      t0 = tc;
       f0 = f1;
     }
     if (!found) return out;
@@ -350,20 +396,18 @@ export class TestTrack implements ITrackService {
 
     geoAt(position.x, position.z);
     const inset = wallInsetFor(G.region, G.cz);
-    const surf = this.heightAt(position.x, position.z);
-    const above = Number.isFinite(surf) ? position.y - surf : 0;
 
     const u = G.u;
     // Barriers are finite: clear the top and you're over them. Checked PER SIDE,
     // because one of them may be a building.
     if (u > inset - radius) {
-      if (above > this.wallHeightOn(1) + 0.35) return out;
+      if (this.overBarrier(position, inset, 1)) return out;
       out.hit = true;
       out.depth = radius - (inset - u);
       out.normal.set(-G.bx, 0, -G.bz);
       out.point.set(G.cx + G.bx * inset, position.y, G.cz + G.bz * inset);
     } else if (u < -inset + radius) {
-      if (above > this.wallHeightOn(-1) + 0.35) return out;
+      if (this.overBarrier(position, inset, -1)) return out;
       out.hit = true;
       out.depth = radius - (u + inset);
       out.normal.set(G.bx, 0, G.bz);
@@ -667,6 +711,67 @@ export function placeFlat(speed: number, bankDeg = 0): void {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Bench self-check. Not a claim about the kart — a claim about `TestTrack`.
+ *
+ * Every measurement in this file is taken through `ITrackService`, so a defect
+ * in the analytic track reads as a physics result. Three have already cost real
+ * time: `project()` returning the oval's centreline in `flat` mode (16 m/s top
+ * speed), the anti-gravity arc-length arithmetic wrapping past `LAP`, and
+ * `geoAt()` putting the apron straight 110 m too far along the lap — which
+ * handed every kart on that straight a road frame from the far side of arc B,
+ * banked 25° where the road is flat. None of the three was caught by anything,
+ * because a wrong road frame produces plausible-looking numbers.
+ *
+ * These two assertions are the cheap invariants that catch that whole class.
+ */
+function tTrack(): TestReport {
+  const a: Assertion[] = [];
+  const notes: string[] = [];
+  const p = new THREE.Vector3();
+  const off = new THREE.Vector3();
+
+  // 1 — the forward map (`fillSample`: arc length → pose) and the inverse map
+  // (`geoAt`: position → arc length) must be the same parameterisation.
+  let worstD = 0;
+  let worstAt = 0;
+  for (let d = 0; d < LAP; d += 1.0) {
+    const s = track.sampleAtDistance(d);
+    geoAt(s.position.x, s.position.z);
+    // Wrapped difference: d and G.dist are both in [0, LAP).
+    let err = Math.abs(G.dist - d);
+    if (err > LAP / 2) err = LAP - err;
+    if (err > worstD) {
+      worstD = err;
+      worstAt = d;
+    }
+  }
+  notes.push(`lap parameterisation: worst |geoAt(sampleAtDistance(d)) − d| = ${worstD.toFixed(3)} m at d = ${worstAt.toFixed(0)} m`);
+  a.push({ name: 'lap arc length is invertible', value: `${worstD.toFixed(3)} m`, expect: '< 0.5 m', pass: worstD < 0.5 });
+
+  // 2 — `project()` must return the NEAREST centreline point, i.e. the offset
+  // from the kart to it must be perpendicular to the direction of travel. This
+  // is what `resolveRoadFrame` assumes when it reads `roadLat` and `vergeAmount`.
+  let worstT = 0;
+  let worstTAt = 0;
+  for (let d = 0; d < LAP; d += 2.0) {
+    const c = track.sampleAtDistance(d);
+    for (const lat of [-8, 0, 8]) {
+      p.copy(c.position).addScaledVector(c.binormal, lat);
+      const s = track.project(p);
+      const along = Math.abs(off.copy(p).sub(s.position).dot(s.tangent));
+      if (along > worstT) {
+        worstT = along;
+        worstTAt = d;
+      }
+    }
+  }
+  notes.push(`projection: worst along-track residual = ${worstT.toFixed(3)} m at d = ${worstTAt.toFixed(0)} m (a nearest-point solve has none)`);
+  a.push({ name: 'project() returns the nearest point', value: `${worstT.toFixed(3)} m`, expect: '< 0.6 m', pass: worstT < 0.6 });
+
+  return { assertions: a, notes };
+}
+
 function tTopSpeed(): TestReport {
   const a: Assertion[] = [];
   const notes: string[] = [];
@@ -922,14 +1027,49 @@ function tWall(): TestReport {
   const notes: string[] = [];
   solo();
 
-  const hitAt = (deg: number): { before: number; after: number; min: number; penalties: number } => {
+  /**
+   * Drive at a barrier at `deg` off the tangent; report the impact tick.
+   *
+   * TWO THINGS HERE WERE WRONG, and together they are why the four assertions
+   * below reported `Infinity %` at the P0b-5/P0b-6 baseline.
+   *
+   * 1. **It waited for a PENALTY.** The trigger was `wallImpacts > pen0`, and
+   *    `KartCollision` increments `wallImpacts` in exactly one place —
+   *    `solidImpact()`, reached only for `Contact.Solid`. A verge contact is
+   *    documented as never being a penalty ("`wallImpacts` is NOT incremented —
+   *    a verge contact is not a penalty and must never be counted as one"), so
+   *    the trigger could not fire on a guardrail no matter what the kart did.
+   *    `before` therefore kept its `0` sentinel and `after` its `-1`, and
+   *    `(0 - -1) / 0` is what printed. Measured: the kart reached the rail on
+   *    tick 349 / 115 / 62 at 10° / 30° / 60° and stayed in contact for ~40
+   *    ticks each time — the run-up and the contact were always fine.
+   *    It now triggers on `wallContact`, and a light graze IS a contact.
+   *
+   * 2. **It aimed at the wrong barrier.** The ranges asserted below are the
+   *    solid-collider shunt: `retain = 1 - solidScrub · smoothstep((sin A -
+   *    solidKnee)/solidSpan)` gives 0 % at 10°, ~9 % at 30° and ~50 % retained
+   *    at 60°, which is 6–20 %, < 8 % and 45–70 % exactly. The verge is a
+   *    friction contact with no discrete cost at all and could never produce
+   *    them. `TestTrack.tallWall` was added in the same commit as this test to
+   *    provide a nine-metre facade for precisely this purpose and was then
+   *    wired to nothing; `solid` here turns it on. The verge gets its own sweep
+   *    below, so neither class is left unmeasured.
+   *
+   * Division is guarded: with no contact `before` stays 0 and `loss()` returns
+   * NaN, which fails every comparison instead of printing a non-finite ratio.
+   */
+  const hitAt = (
+    deg: number,
+    solid: boolean,
+  ): { before: number; after: number; min: number; penalties: number; contact: boolean } => {
     // Flat part of the ramp straight, well before the ramp, aimed at the
-    // outer guardrail. lateral −2 gives ~13 m of run-up to the wall.
+    // outer barrier. lateral −2 gives ~13 m of run-up to it.
+    track.tallWall = solid ? 'outer' : 'none';
     place(4, -2, 25, deg);
     const b0 = physics.getBody(0)!;
     const pen0 = b0.wallImpacts;
     let before = 0;
-    let after = -1;
+    let after = 0;
     let min = 1e9;
     let hitStep = -1;
     let prev = 25;
@@ -942,11 +1082,9 @@ function tWall(): TestReport {
       const b = physics.getBody(0)!;
       if (hitStep < 0) prev = b.velocity.length();
       stepPhysics(1);
-      // Drive off the PENALTY, not off the VFX event — the event is cooldown-
-      // gated and a light graze deliberately doesn't raise one at all.
-      if (hitStep < 0 && b.wallImpacts > pen0) {
+      if (hitStep < 0 && b.wallContact) {
         before = prev;
-        after = b.velocity.length(); // the impact tick itself: the true cost
+        after = b.velocity.length(); // the contact tick itself: the true cost
         hitStep = 1;
       } else if (hitStep > 0) {
         hitStep++;
@@ -954,31 +1092,56 @@ function tWall(): TestReport {
         if (hitStep > 40) break;
       }
     }
-    return { before, after, min, penalties: physics.getBody(0)!.wallImpacts - pen0 };
+    track.tallWall = 'none';
+    return {
+      before,
+      after,
+      min,
+      penalties: physics.getBody(0)!.wallImpacts - pen0,
+      contact: hitStep > 0,
+    };
   };
 
-  const loss = (r: { before: number; after: number }) => (r.before - r.after) / r.before;
+  // NaN, not Infinity: a probe that never touched anything must fail loudly, not
+  // divide by its own sentinel.
+  const loss = (r: { before: number; after: number; contact: boolean }) =>
+    r.contact && r.before > 0 ? (r.before - r.after) / r.before : NaN;
+  const pct = (v: number) => (Number.isFinite(v) ? `${(v * 100).toFixed(1)} %` : 'NO CONTACT');
+  const mn = (r: { min: number }) => (r.min < 1e8 ? r.min.toFixed(2) : 'n/a');
 
-  const r30 = hitAt(30);
-  notes.push(`30° wall hit: ${r30.before.toFixed(2)} → ${r30.after.toFixed(2)} m/s on the impact tick (min over the next 0.33 s ${r30.min.toFixed(2)}), loss ${(loss(r30) * 100).toFixed(1)}%`);
-  a.push({ name: '30° wall scrub', value: `${(loss(r30) * 100).toFixed(1)} %`, expect: '6–20 %', pass: loss(r30) > 0.06 && loss(r30) < 0.2 });
-  a.push({ name: '30° wall does NOT stop the kart', value: `min ${r30.min.toFixed(2)} m/s`, expect: '> 40 % of entry', pass: r30.min > r30.before * 0.4 });
+  // ---- CLASS 3: solid scenery. The discrete, angle-scaled shunt. ----------
+  const r30 = hitAt(30, true);
+  notes.push(`30° building hit: ${r30.before.toFixed(2)} → ${r30.after.toFixed(2)} m/s on the contact tick (min over the next 0.33 s ${mn(r30)}), loss ${pct(loss(r30))}`);
+  a.push({ name: '30° building scrub', value: pct(loss(r30)), expect: '6–20 %', pass: loss(r30) > 0.06 && loss(r30) < 0.2 });
+  a.push({ name: '30° building does NOT stop the kart', value: `min ${mn(r30)} m/s`, expect: '> 40 % of entry', pass: r30.min > r30.before * 0.4 });
 
-  const r10 = hitAt(10);
-  notes.push(`10° graze:    ${r10.before.toFixed(2)} → ${r10.after.toFixed(2)} m/s, loss ${(loss(r10) * 100).toFixed(1)}%`);
-  a.push({ name: '10° graze is nearly free', value: `${(loss(r10) * 100).toFixed(1)} %`, expect: '< 8 %', pass: loss(r10) < 0.08 });
+  const r10 = hitAt(10, true);
+  notes.push(`10° graze:       ${r10.before.toFixed(2)} → ${r10.after.toFixed(2)} m/s, loss ${pct(loss(r10))}`);
+  a.push({ name: '10° building graze is nearly free', value: pct(loss(r10)), expect: '< 8 %', pass: loss(r10) < 0.08 });
 
-  const r60 = hitAt(60);
-  notes.push(`60° clout:    ${r60.before.toFixed(2)} → ${r60.after.toFixed(2)} m/s, loss ${(loss(r60) * 100).toFixed(1)}%, min ${r60.min.toFixed(2)}`);
-  a.push({ name: '60° hit keeps half its speed', value: `${((1 - loss(r60)) * 100).toFixed(1)} % retained`, expect: '45–70 %', pass: 1 - loss(r60) > 0.45 && 1 - loss(r60) < 0.7 });
+  const r60 = hitAt(60, true);
+  notes.push(`60° clout:       ${r60.before.toFixed(2)} → ${r60.after.toFixed(2)} m/s, loss ${pct(loss(r60))}, min ${mn(r60)}`);
+  a.push({ name: '60° building hit keeps half its speed', value: `${((1 - loss(r60)) * 100).toFixed(1)} % retained`, expect: '45–70 %', pass: 1 - loss(r60) > 0.45 && 1 - loss(r60) < 0.7 });
   a.push({ name: 'steeper hit costs more', value: `${(loss(r10) * 100).toFixed(0)} < ${(loss(r30) * 100).toFixed(0)} < ${(loss(r60) * 100).toFixed(0)} %`, expect: 'monotonic', pass: loss(r10) < loss(r30) && loss(r30) < loss(r60) });
   a.push({ name: 'one penalty per impact', value: `${r30.penalties} / ${r10.penalties} / ${r60.penalties}`, expect: '≤ 3 each', pass: r30.penalties <= 3 && r10.penalties <= 3 && r60.penalties <= 3 });
+
+  // ---- CLASS 1: the verge. Friction only — the other half of the sweep. ---
+  // Retargeting the four assertions above at a facade would otherwise leave the
+  // kerbside guardrail — the barrier a player actually meets — with no
+  // angle-swept coverage at all. Both claims here are lifted from the contract
+  // at the top of `KartCollision.ts`, not fitted to the current output.
+  const v10 = hitAt(10, false);
+  const v30 = hitAt(30, false);
+  const v60 = hitAt(60, false);
+  notes.push(`verge arrivals (guardrail): 10° ${pct(loss(v10))}, 30° ${pct(loss(v30))}, 60° ${pct(loss(v60))} lost on the contact tick; ${v10.penalties + v30.penalties + v60.penalties} penalties in total`);
+  a.push({ name: 'verge contact is never a penalty', value: `${v10.penalties} / ${v30.penalties} / ${v60.penalties}`, expect: '0 / 0 / 0', pass: v10.contact && v30.contact && v60.contact && v10.penalties === 0 && v30.penalties === 0 && v60.penalties === 0 });
+  a.push({ name: '60° verge arrival is redirected, not absorbed', value: `${((1 - loss(v60)) * 100).toFixed(1)} % retained`, expect: '> 90 %', pass: 1 - loss(v60) > 0.9 });
 
   // --- THE REGRESSION THAT MATTERED: grinding a wall must not be a crash ----
   // At 120 Hz a kart merely leaning on a barrier used to take ~240 impact
   // penalties a second; 3 s of it cost 99.9 % of the kart's speed. Anything that
   // reintroduces a per-tick penalty will fail here and nowhere else.
-  const grind = (withWall: boolean): { v: number; contact: number; penalties: number } => {
+  const grind = (withWall: boolean, steer = -0.35): { v: number; contact: number; penalties: number } => {
     // With the wall: start beside the tight guardrail and lean gently into it.
     // Without: straight down the middle, steer 0 — the control run must not touch
     // a barrier at all, so it cannot steer (0.35 of lock puts it in the OTHER
@@ -989,7 +1152,7 @@ function tWall(): TestReport {
     const pen0 = b.wallImpacts;
     let contact = 0;
     for (let i = 0; i < 120 * 3; i++) {
-      physics.setControl(0, ctrl(withWall ? -0.35 : 0, 1));
+      physics.setControl(0, ctrl(withWall ? steer : 0, 1));
       stepPhysics(1);
       if (b.wallContact) contact++;
     }
@@ -998,6 +1161,14 @@ function tWall(): TestReport {
   const gw = grind(true);
   const gf = grind(false);
   notes.push(`3 s leaning on the guardrail at 18 m/s entry: |v| ${gw.v.toFixed(2)} m/s vs ${gf.v.toFixed(2)} free (cost ${(((gf.v - gw.v) / gf.v) * 100).toFixed(1)}%), ${gw.contact}/360 contact ticks, ${gw.penalties} penalties`);
+  // A third run, reported and NOT asserted, so the assertion above is readable
+  // rather than just red. Same lateral offset as the wall run, steer 0: it never
+  // touches the barrier (0 contact ticks), so the gap between this and `gf` is
+  // what riding the KERB costs on its own (`PHYS.vergeDrag`), and the gap between
+  // this and `gw` is the barrier plus the tyre scrub of holding 0.35 of lock
+  // against it. The wall is not responsible for all of the 52.8 %.
+  const gk = grind(true, 0);
+  notes.push(`  …same line, steer 0 (kerb only, no barrier contact): ${gk.v.toFixed(2)} m/s over ${gk.contact}/360 contact ticks`);
   a.push({ name: 'grinding a wall is not a crash', value: `${gw.v.toFixed(2)} of ${gf.v.toFixed(2)} m/s`, expect: '> 60 % of free speed', pass: gw.v > gf.v * 0.6 });
   a.push({ name: 'a grind is not re-penalised per tick', value: `${gw.penalties} penalties over ${gw.contact} contact ticks`, expect: '< 15', pass: gw.penalties < 15 });
 
@@ -1175,6 +1346,14 @@ function tFuzz(): TestReport {
   return { assertions: a, notes };
 }
 
+/**
+ * 25 m into the apron straight. The one stretch of this track with grass a kart
+ * can sit on for four seconds: the apron's guardrail is blended out to
+ * `WALL_WIDE`, so lateral 15 is 4.4 m clear of it, and the surface there is
+ * `Grass` rather than the kerb band.
+ */
+const APRON_GRASS = STRAIGHT_LEN + ARC_LEN + 25;
+
 function tMisc(): TestReport {
   const a: Assertion[] = [];
   const notes: string[] = [];
@@ -1182,8 +1361,19 @@ function tMisc(): TestReport {
   const t = physics.tuningOf(0)!;
 
   // --- off-road slowdown ---------------------------------------------------
-  // Apron straight, out on the grass.
-  place(2 * STRAIGHT_LEN + ARC_LEN + 55, 15, 22);
+  // Apron straight, out on the grass. `2 * STRAIGHT_LEN + ARC_LEN` was NOT the
+  // apron straight: it was built from `geoAt()`'s apron arc length, which was
+  // 110 m too large (fixed above), and `place()` inverts the lap with
+  // `fillSample()`, which was always right. So this landed 55 m into ARC B, at
+  // lateral 15 — outside that region's `WALL_TIGHT` guardrail (12.7 m), which
+  // promptly pushed the kart back to u ≈ 11.95. The kart therefore spent the
+  // whole 4 s pinned against a barrier on the KERB, and `surfaceAt` correctly
+  // answered `Road` for the kerb band. Nothing was ever measured on grass.
+  //
+  // 25 m into the apron straight instead: the guardrail there has blended out to
+  // `WALL_WIDE` (19.4 m), so lateral 15 is clear grass with 4.4 m to spare, and
+  // 4 s at grass speed covers ~65 m of the straight's remaining 80 m.
+  place(APRON_GRASS, 15, 22);
   physics.setControl(0, ctrl(0, 1));
   stepPhysics(120 * 4);
   const grassSpeed = physics.getBody(0)!.forwardSpeed;
@@ -1192,7 +1382,7 @@ function tMisc(): TestReport {
   a.push({ name: 'off-road slows you', value: `${grassSpeed.toFixed(2)} m/s`, expect: `< ${(t.maxSpeed * 0.72).toFixed(1)}`, pass: grassSpeed < t.maxSpeed * 0.72 && grassSurf === SurfaceType.Grass });
 
   // --- boost is immune to off-road for 0.4 s ------------------------------
-  place(2 * STRAIGHT_LEN + ARC_LEN + 55, 15, 22);
+  place(APRON_GRASS, 15, 22);
   physics.setControl(0, ctrl(0, 1));
   stepPhysics(120 * 3);
   const beforeB = physics.getBody(0)!.forwardSpeed;
@@ -1257,7 +1447,7 @@ function tMisc(): TestReport {
   // Respawn itself was never broken. Verified independently against all three
   // shipping circuits: a kart put 120 m to the side, or 60 m below the road,
   // raises `kart:respawn` on the very first step with respawnTime 0.95.
-  place(2 * STRAIGHT_LEN + ARC_LEN + 55, 0, 10);
+  place(APRON_GRASS, 0, 10);
   const bb = physics.getBody(0)!;
   // x = R + 80 on a straight: |u| = 80 m, well past OOB_LIMIT, unambiguous.
   bb.position.set(R + 80, 8, 0);
@@ -1351,6 +1541,7 @@ export function runAll(hooks: RunHooks = {}): FullReport {
   hooks.before?.();
 
   const groups: Array<{ name: string; report: TestReport }> = [
+    { name: 'BENCH SELF-CHECK', report: tTrack() },
     { name: 'ACCELERATION & BOOST', report: tTopSpeed() },
     { name: 'DRIFT & MINI-TURBO', report: tDrift() },
     { name: 'CORNERING', report: tCorner() },

@@ -239,9 +239,19 @@ expected range. Covers acceleration and top speed, drift and mini-turbo, jumps
 and tunnelling, banked-surface stability, surfaces, stuns, respawn, mass,
 a 60-second fuzz for NaN, and a fixed-step budget.
 
-`Directly verified:` **34 passed / 8 failed** at the current baseline. Read
+It also carries a `BENCH SELF-CHECK` group. Those two assertions are about
+`TestTrack`, not the kart: they check that the lap's forward and inverse arc
+length maps agree and that `project()` returns a genuinely nearest point. Add to
+that group whenever you find a bench defect — every measurement in the file is
+taken through `ITrackService`, so a broken track service reads as a physics
+result.
+
+`Directly verified:` **44 passed / 2 failed** at the current baseline. The two
+are `hop air time` and `grinding a wall is not a crash`; both are real readings
+of the shipped model awaiting a tuning decision, with the numbers and the
+reopening rule in [`../PROJECT_STATE.md` §4.1](../PROJECT_STATE.md). Read
 [§4](#4-two-worked-examples-diagnose-the-probe-before-the-code) before acting on
-that.
+either.
 
 ### The circuit probes
 
@@ -290,20 +300,20 @@ reports a real measurement of the wrong thing.
 
 ## 4. Two worked examples: diagnose the probe before the code
 
-Both are live at the current baseline. Detail and numbers are in
+4.1 has been worked through, and 4.2 is resolved. Detail and numbers are in
 [`../PROJECT_STATE.md` §4](../PROJECT_STATE.md) — not repeated here. What
 matters here is the *method*.
 
-### 4.1 The physics battery: 34 passed / 8 failed
+### 4.1 The physics battery: 34 passed / 8 failed — worked, 2026-08-23
 
-Four of the eight failures report `Infinity %` or `-Infinity %`.
+Four of the eight failures reported `Infinity %` or `-Infinity %`.
 
 **That is not a physics reading. That is a division by a zero baseline.** Until
 the denominator is explained, those four say nothing about the kart model, and
 they also contaminate the reading of the other four — you cannot rank severity
 across a set when half the numbers are non-finite.
 
-The correct order of work:
+The order of work that was followed, and would be followed again:
 
 1. Find what the four `Infinity` cases divide by, and why it is zero. Likely the
    probe's own free-speed reference, not the physics.
@@ -314,6 +324,33 @@ The two rules in tension here both apply, and neither wins by default: §1.3
 says a red result may be the probe's fault, and §1.5 says you may not dismiss it
 on that suspicion alone. The resolution is to **go and look**, not to pick the
 convenient reading. And under no circumstances §1.4 — do not widen a range.
+
+**What going and looking actually produced.** All four `Infinity` results came
+from one dead trigger — `hitAt()` waited on `wallImpacts`, which the P0b-5 verge
+model documents as never incrementing for a track-edge barrier — so `before`
+kept its `0` sentinel. It was the instrument. But **three of the other four were
+also the instrument**, and none of them looked like it from the report:
+
+| Reported as | Actually |
+|---|---|
+| `off-road slows you  14.74 m/s` (surface `Road`) | kart pinned against a guardrail on the kerb, 110 m from the grass it was aimed at |
+| `out of bounds → respawn  false` | wall push-out ejected the kart 68 m *before* the bounds check ran |
+| `banked 25°: all wheels planted  no` | ray march never sampled its own far end; 36 % of suspension travel was blind |
+
+The generalisable part: **a bench defect reads as a physics result.** Every one
+of these produced a plausible number, which is why none was caught by looking at
+the numbers. `TestTrack` now carries a `BENCH SELF-CHECK` group asserting the
+two invariants that would have caught the arc-length bug on the day it landed —
+that the lap's forward and inverse maps agree, and that `project()` returns a
+genuinely nearest point. Add to it rather than trusting a plausible reading.
+
+**And fixing an instrument can turn a green assertion red — that is the fix
+working.** `hop air time` had been passing at 0.308 s only because the ray
+march's blind band reported the wheels airborne while the kart sat on its
+springs, which also let `PHYS.hopGravity` engage. With the march fixed the hop
+never leaves the ground and the assertion reads 0.000 s. Do not repair that by
+restoring the blind band, and do not widen the range: check whether the *game*
+number was ever real. Here it was not.
 
 ### 4.2 When two configs disagree about one file
 

@@ -27,7 +27,7 @@ Every claim below carries an evidence label. They mean:
 | Baseline commit | `627401c24ad7e4ea114f25e828234a286c171277` |
 | Commit subject | *Give Foxy Kart a proper web identity and social preview* |
 | Baseline committed | 2026-08-18 (git author/committer date) |
-| Nothing has landed since | this state is as old as that commit |
+| Landed since | `3bd1b3f` *Make Foxy Kart independently maintainable without conversation history* (docs only), then this commit's physics-bench fixes — see §4.1 |
 | Build command | `npm ci && npm run build` (`build` = `tsc --noEmit && vite build`) |
 | Output directory | `dist/` (gitignored — never committed) |
 
@@ -269,43 +269,90 @@ The items below are **observations recorded during this continuity pass**, not
 an assigned backlog and not a plan. Each is measured or read directly at this
 baseline. None is urgent. Do not treat this section as a queue to work through.
 
-### 4.1 The physics battery reports 8 failing assertions
+### 4.1 The physics battery: 6 of the 8 failures were the bench, not the kart
 
-`Directly verified:` run at this baseline on 2026-08-23:
+`Directly verified:` run on 2026-08-23, after the fixes in this commit:
 
 ```
 node src/dev/node-run.mjs src/dev/physics-run.ts
-→ FOXY KART — PHYSICS ASSERTIONS   34 passed / 8 failed
+→ FOXY KART — PHYSICS ASSERTIONS   44 passed / 2 failed
 ```
 
-The eight:
+It was 34 / 8. Six of the eight were defects in `TestTrack` and in two probes —
+**not** in `src/physics/*` — and two new assertions were added, plus a
+`BENCH SELF-CHECK` group of two. No tolerance or expected range was changed;
+every one of the four `Infinity` assertions now passes against its original
+range (6–20 %, < 8 %, 45–70 %, monotonic).
+
+`Measured:` what each failure actually was.
+
+| Was | Root cause | Now |
+|---|---|---|
+| 4 × `Infinity %` (30° scrub, 10° graze, 60° hit, monotonicity) | `hitAt()` triggered on `wallImpacts`, which `KartCollision` increments only for `Contact.Solid`; the bench's guardrail is a `Contact.Verge`, documented as never a penalty. `before` kept its `0` sentinel and the probe divided by it. Two things were wrong: it waited for a penalty *and* it aimed at the wrong barrier class — the four ranges are the solid-collider shunt curve. | Triggers on `wallContact`; aims at the nine-metre facade via `TestTrack.tallWall`, which was added for this and wired to nothing. 10.4 % / 1.6 % / 53.7 % retained / monotonic. |
+| `off-road slows you  14.74 m/s (surface Road)` | Two bugs. `geoAt()` gave the apron straight an arc length 110 m too large, colliding with arc B's range — so `project()` handed every kart on that straight a road frame from the far side of arc B, banked 25° where the road is flat. The test's `place()` argument was built from that wrong formula, and `place()` inverts the lap with `fillSample()`, which was always right — so the kart landed 55 m into arc B at lateral 15, outside that region's guardrail, and was pushed back onto the kerb. `Road` was the correct answer for where it actually was. | `geoAt()` corrected; probe moved to 25 m into the apron straight, where the rail has blended out to `WALL_WIDE`. 16.54 m/s on `Grass`. |
+| `out of bounds → respawn  false, \|u\| 11.84 m` | `TestTrack.collideWalls` measured height under the *query point* and substituted `0` when that was NaN. Over the void that reads as "level with the barrier's foot", so a kart 80 m out at y = 8 was reported buried `radius + 67.3` m inside the guardrail; `resolveWalls` (step 4) ejected it before `checkBounds` (step 5) ever looked. `Track.collideWalls` measures against the surface at the wall face, which is defined everywhere. | Height taken at the barrier's own foot, with the same `-0.55 m` lower gate the shipping track uses. Fires; ends 0.00 m off the centreline. |
+| `banked 25°: all wheels planted  no` | `TestTrack.raycastGround`'s bracket search marched `t += 0.16` while `t <= maxDist` and so never evaluated `maxDist` itself. Against the suspension's 1.228 m ray the last sample landed at 1.120 m, leaving ground from 1.120–1.228 m invisible — 36 % of suspension travel. A kart parked on the bank sits at 1.1176–1.1217 m, straddling it, so each wheel reported a miss on ~half of all ticks while the chassis moved 3.5 mm in three seconds. | The march clamps to and evaluates `maxDist`. All four planted. |
+
+`Measured:` the two that remain are **genuine readings of the shipped model**,
+not instrument faults. Both are tuning values, and both were checked for an
+underlying bug first — there isn't one.
 
 ```
-FAIL  30° wall scrub                  Infinity %            expect 6–20 %
-FAIL  10° graze is nearly free        Infinity %            expect < 8 %
-FAIL  60° hit keeps half its speed    -Infinity % retained  expect 45–70 %
-FAIL  steeper hit costs more          Infinity < Infinity   expect monotonic
-FAIL  grinding a wall is not a crash  14.18 of 27.60 m/s    expect > 60 %
-FAIL  banked 25°: all wheels planted  no                    expect yes
-FAIL  off-road slows you              14.74 m/s             expect < 20.5
-FAIL  out of bounds → respawn         false, |u| 11.84 m    expect true, < 11 m
+FAIL  hop air time                    0.000 s              expect 0.22–0.40 s
+FAIL  grinding a wall is not a crash  13.05 of 27.63 m/s   expect > 60 %
 ```
 
-**Read this carefully before acting on it.** Four of the eight report `Infinity`
-or `-Infinity`, which is the signature of a division by a zero baseline — i.e.
-the *probe* may be broken rather than the physics. This repository's own
-standard says a failing probe may mean the probe is wrong, and equally says an
-unexplained nonzero result must not be waved away. Both apply here.
+**`hop air time`.** This was *passing* at 34/8, at 0.308 s. It was passing on the
+ray-march blind band: wheels reported airborne while the kart rested on its
+springs, which also let `PHYS.hopGravity` engage and roughly doubled the rise.
+With the march fixed, `PHYS.hopSpeed = 2.6` cannot unload the rear springs —
+`groundedWheels` bottoms out at 2, the chassis rises 0.107 m, and the kart never
+leaves the ground under any tested condition (throttle or coasting, flat or
+oval). `PHYS.hopGravity`'s own comment derives "≈ 0.325 s of hang time" from a
+free-flight assumption the 0.11–0.13 m of available droop never permits.
+`Directly verified:` removing the `!b.grounded` gate on `hopGravity` does **not**
+fix it (rise 0.126 m, still 0.000 s air), so this is not an ordering bug. Air
+time first appears at `hopSpeed ≈ 3.4` (0.142 s) and reaches the assertion's
+lower bound at `≈ 4.2` (0.233 s).
+**Decision needed:** raise `PHYS.hopSpeed` to ~4.2 (changes drift-entry feel for
+every kart), or re-derive the assertion and `hopGravity`'s comment around a hop
+that is a suspension flourish rather than a jump. **Do not** restore the blind
+band, and do not widen the range. **Reopen/close rule:** closed only when the
+0.22–0.40 s range is met by the model or replaced by a range derived from what
+the suspension actually permits, with the derivation written down.
 
-`Not re-verified in this continuity pass:` whether these are genuine physics
-regressions, probe defects, or accepted deviations. `Historical only:` the
-archived handoff recorded this battery at "9 failing assertions" around
-2026-08-17; it is 8 now, but nothing establishes that the same 8 are a subset of
-that 9.
+**`grinding a wall is not a crash`.** `Measured:` 3 s leaning into the guardrail
+at 0.35 of lock, entry 18 m/s, full throttle — 13.05 m/s against a 27.63 m/s
+free run, a 52.1 % cost against a 40 % budget. Decomposed by zeroing one term at
+a time on the fixed bench: barrier scrape (`COLL.vergeContactDrag = 0.55`) is
+34.0 % of it, the kerb band (`PHYS.vergeDrag = 0.9`) accounts for 3.36 m/s on its
+own at steer 0, and the residual is tyre scrub from holding lock against the
+rail. `leanOnBarrier()` computes `press = 0.578` here and behaves exactly as
+documented — there is no bug. The baseline is also not the problem: charged
+against a same-line/steer-0 run instead, the cost is still 45.5 %. The stacking
+of the two drags is explicitly intended (`KartCollision.ts` header). The
+regression this assertion was written to catch — a per-tick penalty — is
+independently and still covered by `a grind is not re-penalised per tick`
+(0 penalties over 314 contact ticks, passing).
+**Decision needed:** accept ~52 % as the cost of insisting on a barrier and
+re-derive the 60 % figure, or lower `COLL.vergeContactDrag` (game feel for every
+player). **Reopen/close rule:** closed when the number is met, or when the 60 %
+is replaced by a figure derived from the two drag constants with the arithmetic
+recorded. Not to be closed by widening.
 
-**If you pick this up:** diagnose the four `Infinity` results first, because
-until the denominator is explained the other four cannot be ranked against them.
-Do **not** widen a tolerance to make any of them pass.
+`Directly verified:` a third failure appears intermittently and is **not** a
+logic failure — `fixed step budget (12 karts)` is a wall-clock measurement, so it
+goes red when the machine is busy. Idle it reads 0.217–0.248 ms/step against a
+1.5 ms budget; with eight competing CPU hogs on this machine it read 3.670 ms and
+the run reported 43 / 2 (+1). A perf budget has to measure wall clock, so there is
+nothing to fix — but do not chase it as a regression, and do not read a battery
+run taken while a dev server or a build is running.
+
+`Historical only:` the archived handoff recorded this battery at "9 failing
+assertions" around 2026-08-17. Commit `4d3f979`'s message diagnosed the
+`Infinity` group correctly at the time ("stale test, not a regression") and
+classified the grind as "genuine number, needs tuning"; both hold. Its readings
+of the other three were symptom-level and are superseded by the table above.
 
 ### 4.2 `tsconfig.render-check.json` — cause found, fixed
 
