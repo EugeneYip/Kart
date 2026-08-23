@@ -481,6 +481,12 @@ instead does **not** work (rise 0.126 m, still 0.000 s), so this is not an
 ordering bug. Cost elsewhere is small: drift charge timings move ≤ 0.05 s
 (Purple 2.76 → 2.83 s) and nothing else in the battery changes.
 
+`Regression-tested:` confirmed against the **real** `Track`, not just the bench,
+since the bench's own `raycastGround` is what hid the bug —
+`node src/dev/node-run.mjs .probe-tmp/HOP-real-track.ts` gives 0.000 s of air on
+all eight circuits at 2.6 (minGroundedWheels 4 on seven of them) and
+0.242–0.300 s at 4.6, inside the asserted range on every circuit.
+
 **Do not change unless** you re-measure `hop air time` after it. In particular do
 not "restore" 2.6 on the strength of the ballistic arithmetic — that is the exact
 reasoning that made the hop a no-op, and the suspension droop is the term it

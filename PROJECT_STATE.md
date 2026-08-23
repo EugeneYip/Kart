@@ -315,6 +315,22 @@ in the battery changed. The ballistic reading of `hopGravity` omits the
 suspension droop, which is why 2.6 looked right on paper; that arithmetic is now
 written out at the constant.
 
+`Regression-tested:` re-asked through the **real** `src/track/Track.ts` rather
+than the bench, because the bench has its own `raycastGround` and a defect in
+exactly that function is what hid this:
+
+```
+node src/dev/node-run.mjs .probe-tmp/HOP-real-track.ts
+→ hopSpeed 2.6: air 0.000 s on all eight circuits, minGroundedWheels 4 on seven
+→ hopSpeed 4.6: air 0.242–0.300 s, rise 0.34–0.41 m, minGroundedWheels 0 on all
+```
+
+So the hop had never left the ground in the shipped game either, and 4.6 lands
+inside the battery's 0.22–0.40 s on every circuit. That probe's header records
+two traps that each give a confident wrong answer — settle the kart for 300 ticks
+(40 leaves it mid-drop and reports a fifth of the air time) and read air time
+rather than rise (real elevation puts 1.589 m of "rise" on a hop with no air).
+
 **`grinding a wall is not a crash` — 52.1 % cost against a 40 % budget.
 Re-derived, not widened.** The reading was real: `leanOnBarrier()` computes
 press = 0.5775 and behaves as documented. The *comparison* was not — the wall run
