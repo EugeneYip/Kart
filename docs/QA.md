@@ -195,10 +195,10 @@ They are **not wired into any npm script** and are optional. They exist because
 in-progress files, and during the parallel build it mattered to see only your
 own.
 
-`Directly verified:` nine are clean; `tsconfig.render-check.json` reports one
-error the root config does not, over the same file. See
-[`../PROJECT_STATE.md` §4.2](../PROJECT_STATE.md) — and §4 below, where it
-serves as a worked example.
+`Directly verified:` all ten exit 0. One of them did not until recently, for a
+reason worth knowing before you add a scoped config of your own — §4.2 below
+keeps it as a worked example, and
+[`../PROJECT_STATE.md` §4.2](../PROJECT_STATE.md) has the full derivation.
 
 ---
 
@@ -315,20 +315,48 @@ says a red result may be the probe's fault, and §1.5 says you may not dismiss i
 on that suspicion alone. The resolution is to **go and look**, not to pick the
 convenient reading. And under no circumstances §1.4 — do not widen a range.
 
-### 4.2 `tsconfig.render-check.json` fails where the root config passes
+### 4.2 When two configs disagree about one file
 
-The same file, `src/dev/physics-run.ts`, compiles clean under `tsconfig.json`
-and errors under `tsconfig.render-check.json`.
+Resolved, and kept here because the reasoning generalises. `src/dev/physics-run.ts`
+compiled clean under `tsconfig.json` and errored under
+`tsconfig.render-check.json` with `TS2591 Cannot find name 'node:process'`.
 
 **Two configs disagreeing about one file is a statement about the configs**, not
-about the file. The shipped artifact is unaffected — CI uses the root config and
-`npm run build` is green — so the correct classification is "optional gate is
-broken", not "the code is broken".
+about the file. The shipped artifact was never affected — CI uses the root
+config and `npm run build` was green — so the correct classification was
+"optional gate is broken", not "the code is broken".
 
-The wrong move, and it is tempting: add `"node"` to the scoped config's `types`
-array. That would widen the ambient global surface so that gameplay code can see
-`process`, which `b4832ab` deliberately prevented. The narrow fix belongs in the
-scoped config's `include`, or the config should be retired.
+The wrong move, and it is tempting because **the compiler suggests it by name**:
+add `"node"` to the scoped config's `types` array. That widens the ambient
+global surface so gameplay code can see `process`, which `b4832ab` deliberately
+prevented. `TS2591` is the *global-name* diagnostic, and TypeScript 7 reports it
+against a module specifier — so its remedy text is advice for a different
+problem. Read the remedy text as a hypothesis, never as an instruction.
+
+What it actually was: `node:process` resolves through an *ambient module
+declaration* in `@types/node`, not through file lookup, so it type-checks only
+in programs that already contain `@types/node`. `types: ["vite/client"]` blocks
+the automatic inclusion, and the sole remaining route into the program is
+`vite.config.ts` → `vite`'s `index.d.ts` → `/// <reference types="node" />`.
+The root config includes `vite.config.ts`; the scoped one did not. The fix was
+one `include` entry, narrowing `src/dev/**/*.ts` to the render harness
+`src/dev/textures.ts`. Full derivation in
+[`../PROJECT_STATE.md`](../PROJECT_STATE.md) §4.2.
+
+**The transferable technique:** hold `compilerOptions` fixed and bisect
+`include`. A scoped config that passes only because some unrelated file drags a
+`/// <reference types="…" />` into the program is passing by accident, and the
+gate that catches it is worth more than the green checkmark it cost.
+
+```bash
+for f in tsconfig.*-check.json; do
+  npx tsc -p "$f" >/dev/null 2>&1; printf '%-32s exit=%s\n' "$f" "$?"
+done
+```
+
+`Directly verified:` all ten exit 0. They are optional and not wired into any
+npm script; `npm run typecheck` and `npm run build` use the root config, and
+that is what gates CI.
 
 ---
 

@@ -307,22 +307,85 @@ that 9.
 until the denominator is explained the other four cannot be ranked against them.
 Do **not** widen a tolerance to make any of them pass.
 
-### 4.2 `tsconfig.render-check.json` does not pass
+### 4.2 `tsconfig.render-check.json` — cause found, fixed
 
-`Directly verified:` there are ten scoped `tsconfig.*-check.json` files at the
-repo root. Nine are clean; one is not:
+`Directly verified:` at this baseline all ten scoped `tsconfig.*-check.json`
+files exit 0, as do `tsconfig.json` and `npm run build`. They are still not
+wired into any npm script; they remain optional.
+
+**Why the two configs disagreed.** `node:process` has no package on disk to
+resolve to. It is supplied by an *ambient module declaration* —
+`declare module "node:process"` at `@types/node/process.d.ts:2081`, reached from
+`@types/node/index.d.ts:73`. An ambient declaration only exists if the file
+carrying it is already in the program, and `types: ["vite/client"]` deliberately
+blocks the automatic inclusion of `@types/node`. So the import type-checks in
+exactly those programs that pull `@types/node` in by some *other* route.
+
+This repo has exactly one such route, and it is `vite.config.ts`:
 
 ```
-tsconfig.render-check.json   exit=1   1 error
-  src/dev/physics-run.ts(26,22): error TS2591:
-  Cannot find name 'node:process'.
+vite.config.ts
+  → import { defineConfig } from 'vite'
+    → node_modules/vite/dist/node/index.d.ts:1
+      → /// <reference types="node" />        ← @types/node enters the program
 ```
 
-The root `tsconfig.json` compiles the *same file* at exit 0, and `npm run build`
-is green — so this affects only the optional scoped gate, never CI or the
-shipped artifact. `Not re-verified in this continuity pass:` why the two configs
-resolve `node:process` differently under TypeScript 7. The scoped configs are
-not wired into any npm script.
+The root `tsconfig.json` lists `vite.config.ts` in `include`.
+`tsconfig.render-check.json` did not. That one entry was the entire difference —
+not anything in `compilerOptions`, which were otherwise equivalent. Bisected
+directly, holding `compilerOptions` fixed and varying only `include`:
+
+| `include` | result |
+|---|---|
+| `["src/dev/physics-run.ts", "src/dev/physics-tests.ts"]` | exit 1 |
+| the same, plus `"vite.config.ts"` | exit 0 |
+| `["src/**/*.ts"]` — the root config's, minus `vite.config.ts` | **exit 1** |
+| `["src/**/*.ts", "vite.config.ts"]` — the root config as shipped | exit 0 |
+
+The third row is the one that matters: **the root config does not pass because
+it is bigger.** It passes because of `vite.config.ts` specifically. No file
+under `src/` carries a `/// <reference types="node" />`.
+
+**The TS 7 diagnostic is misleading; do not follow its advice.** `TS2591 Cannot
+find name 'node:process'` is the *global-name* diagnostic, reported against a
+module specifier, and its remedy text — add `'node'` to the `types` field — is
+the one change this repository has already refused twice: `b4832ab` rejected
+widening `types`, and the comment at `src/dev/physics-run.ts:9` exists to
+explain why. It is a module-resolution failure wearing a global-name error's
+clothes.
+
+**The fix.** `tsconfig.render-check.json`'s `include` was
+`["src/render/**/*.ts", "src/dev/**/*.ts"]` — the only one of the ten to glob
+all of `src/dev`, and so the only one to drag an unrelated Node entry point into
+a render gate. The other nine name a single harness file each. It now reads
+`["src/render/**/*.ts", "src/dev/textures.ts"]`, which is that same pattern:
+`src/dev/textures.ts` is the only file in `src/dev` that imports from
+`src/render`.
+
+Render coverage is unchanged — `--listFiles` confirms all 7 `.ts` files under
+`src/render/` are still root files of that program. Nothing was added to any
+`types` array; nothing under `src/`, `vite.config.ts`, or
+`.github/workflows/` was touched.
+
+`src/dev/physics-run.ts` is unaffected and is still type-checked by the root
+`tsconfig.json` — which is what `npm run typecheck` and `npm run build` run, so
+it is still gated by CI. It was never a root file of any *scoped* config;
+neither are `headless.ts`, `physics-tests.ts`, `trackqa.ts`, or `ui.ts`.
+
+**Reopen if.** `vite.config.ts` stops importing `vite`, or `@types/node` stops
+shipping `node:*` ambient declarations. Either would also break `node:process`
+under the root config — the louder failure, and one `npm run build` catches.
+
+**One thing this did not fix.** The comment at `src/dev/physics-run.ts:16` still
+says the `node:*` import "resolves through normal module resolution against
+`@types/node`". It does not — that is the imprecision that made this take a
+second look, and the same wording was in [`docs/DECISIONS.md`](docs/DECISIONS.md)
+(now corrected there). The comment's *conclusion* is right, and the decision it
+defends is right; only the stated mechanism is wrong. It was left alone because
+this change was scoped to configs and docs, and editing `src/` to reword a
+comment would have put a no-op source diff in a commit whose whole claim is that
+it does not touch `src/`. Worth folding into the next change that has reason to
+open that file.
 
 ### 4.3 Small inconsistencies noted while reading
 
@@ -344,6 +407,11 @@ All `Directly verified:` by reading the current source. None affects behaviour.
   series as "Boston / Taipei / Tokyo". There are five city circuits.
 - **`src/world/Props.ts.bak`** (540 kB) sits untracked on disk, ignored via
   `*.bak`. Ignored rather than deleted on purpose — see `.gitignore`.
+- **`tsconfig.ai-check.json` names a file that does not exist.** Its `include`
+  lists `src/dev/ai.ts`; there is no such file. A non-matching `include` entry
+  is silent, so the config exits 0 while gating only `src/ai/**`. Noticed while
+  fixing §4.2; left alone, because guessing which harness was meant is worse
+  than recording that nobody knows.
 
 ### 4.4 The last recorded owner playtest
 

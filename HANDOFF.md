@@ -45,9 +45,11 @@ In one line each:
   read `Infinity %`, which may indicate a broken probe rather than broken
   physics. Diagnose the denominator before touching `src/physics/`, and do not
   widen a tolerance to make anything pass.
-- `tsconfig.render-check.json` reports one error that the root `tsconfig.json`
-  does not, over the same file. Affects only the optional scoped gate; CI and
-  the shipped artifact are unaffected.
+- All ten scoped `tsconfig.*-check.json` gates now exit 0. The one that did
+  not was passing/failing on whether `vite.config.ts` was in `include` —
+  that is the only thing pulling `@types/node` into any program here, and
+  `node:process` needs it. Fixed by narrowing the `include`, not by
+  widening `types`. §4.2 has the derivation.
 - A handful of cosmetic inconsistencies: an unused `scratch` export, an empty
   portrait media query, two overlapping texture libraries, one stale comment.
 

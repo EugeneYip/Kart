@@ -173,8 +173,17 @@ global to `import { exit } from 'node:process'`.
 typings, and restricting it to the browser surface is correct for a browser
 game — gameplay code has no business seeing `process` as a global, and adding
 `"node"` would widen the global surface for all 100+ files to fix two. An
-explicit `node:*` **import** resolves through ordinary module resolution against
-`@types/node`, independent of that array.
+explicit `node:*` **import** does not go through that array at all.
+
+**Correction, 2026-08-23** — the original wording here said the import
+"resolves through ordinary module resolution against `@types/node`". It does
+not, and the imprecision cost a later reader time. `node:process` resolves
+through an **ambient module declaration** inside `@types/node`, which only
+exists once `@types/node` is already in the program. With `types` pinned to
+`["vite/client"]`, the one thing putting it there is `vite.config.ts` →
+`vite`'s `index.d.ts` → `/// <reference types="node" />`. The decision itself
+is unchanged and was right; only its stated mechanism was wrong. See
+[`../PROJECT_STATE.md` §4.2](../PROJECT_STATE.md).
 
 **Do not change unless** you want every file in `src/` to see Node globals. If a
 scoped config complains about `node:*`, fix its `include`, not the `types`
