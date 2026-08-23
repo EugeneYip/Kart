@@ -3,9 +3,8 @@
 **The live working note between sessions.** One page. If it grows past two, the
 content belongs somewhere else — see [Where things go](#where-things-go).
 
-Baseline: the integration of the two finished worktrees, **2026-08-23** — the
-scoped-typecheck fix and the physics-battery fixes, on top of
-`3bd1b3f` (which was itself on `627401c`, committed 2026-08-18).
+Baseline: the integration of the two finished worktrees plus the hop-trick fix,
+**2026-08-23** — on top of `3bd1b3f` (itself on `627401c`, committed 2026-08-18).
 
 ---
 
@@ -32,20 +31,14 @@ the commit, with no intervening work —
 
 ## In flight
 
-**One open defect, found by the rendered check of the hop — see
-[`PROJECT_STATE.md` §4.3](PROJECT_STATE.md).** The battery is 46 / 0 and the build
-is green, so this is not a broken baseline; it is one scoped behavioural bug that
-the numbers alone could not have caught.
+**Nothing.** There is no active implementation task. The battery is **52 / 0**,
+all ten scoped typecheck gates exit 0, and a clean-install build is green.
 
-`PHYS.hopSpeed` 4.6 makes the drift hop genuinely airborne — which it never was —
-and that airborne hop now **arms an air trick that `DriftSystem.tricks()`
-explicitly tries to refuse**, so every drift hop flips the chassis ~90 deg and pays
-an unearned trick boost. `Directly verified:` on all eight circuits. It was left
-unfixed on purpose: the integration it was found in was scoped to integrating, and
-the fix is a change to the guard, not to `hopSpeed`.
-
-**The hop has NOT been visually accepted.** Do not record it as accepted until the
-trick defect is resolved and the hop is looked at again.
+The one defect this integration surfaced — every drift hop being classified as an
+air trick — is **closed**: `KartBody.hopLaunch` replaced a guard that could not
+fire, six battery assertions and a negative control now cover it, and the hop has
+been accepted on screen as well as in the numbers. See
+[`PROJECT_STATE.md` §3.7](PROJECT_STATE.md).
 
 The two remote branches `agent/web-identity-seo` and `web-identity-seo` sit one
 commit behind `main` and are fully superseded. Ignore them.
@@ -55,7 +48,8 @@ commit behind `main` and are fully superseded. Ignore them.
 Full detail with measurements is in [`PROJECT_STATE.md` §4](PROJECT_STATE.md).
 In one line each:
 
-- The headless physics battery reports **46 passed / 0 failed**, up from 34 / 8.
+- The headless physics battery reports **52 passed / 0 failed** (46, plus the six
+  that now pin the hop/trick boundary), up from 34 / 8.
   Six of those eight were defects in the bench (`TestTrack` and two probes), not
   in `src/physics/`, and the four `Infinity %` readings were one dead trigger.
   The other two were real: the hop had never left the ground (`PHYS.hopSpeed`

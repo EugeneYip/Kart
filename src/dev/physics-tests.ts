@@ -42,8 +42,9 @@ import {
 } from '@/core/Types';
 import { Rng, clamp, clamp01, smoothstep } from '@/core/MathUtils';
 import { PhysicsWorld } from '@/physics/PhysicsWorld';
-import { PHYS } from '@/physics/KartPhysics';
+import { DriftPhase, PHYS } from '@/physics/KartPhysics';
 import { COLL } from '@/physics/KartCollision';
+import { DRIFT } from '@/physics/DriftSystem';
 import { CHARACTER_STATS, makeTuning } from '@/physics/Tuning';
 
 // ===========================================================================
@@ -849,6 +850,63 @@ function tDrift(): TestReport {
   notes.push(`hop air time ${air.toFixed(3)} s, rise ${(peakY - y0).toFixed(3)} m`);
   a.push({ name: 'hop air time', value: `${air.toFixed(3)} s`, expect: '0.22–0.40 s', pass: air > 0.22 && air < 0.4 });
 
+  // --- the hop is a hop, NOT a trick --------------------------------------
+  // Regression for the defect that `hopSpeed` 4.6 exposed: the hop finally left
+  // the ground, and `DriftSystem.tricks()` classified it as a ramp launch, so
+  // every drift hop flipped the chassis ~90° and collected a trick boost. The
+  // guard meant to prevent that read `hopTime`, which the drift state machine has
+  // already zeroed by then (`hopMinAir` is 0.02 s) — see `KartBody.hopLaunch`.
+  //
+  // These assert the PLAYER-VISIBLE consequences — no trick event, no trick
+  // boost — not the internal flag, because the flag is what was wrong before.
+  const hopRun = (
+    steer: number,
+    breakTheGuard: boolean,
+  ): { air: number; trick: string; boost: number; committedOnPress: boolean } => {
+    placeFlat(t.maxSpeed * 0.6);
+    physics.setControl(0, ctrl(steer, 1));
+    stepPhysics(30);
+    let trick = '';
+    let boost = 0;
+    const offT = bus.on('kart:trick', (e) => { trick = e.name; });
+    const offB = bus.on('kart:boost', (e) => { if (e.source === 'trick') boost = e.duration; });
+    physics.setControl(0, ctrl(steer, 1, 0, true, true));
+    let airS = 0;
+    let committed = false;
+    for (let i = 0; i < 200; i++) {
+      stepPhysics(1);
+      physics.setControl(0, ctrl(steer, 1, 0, true, false));
+      const bb = physics.getBody(0)!;
+      // The negative control: put the old broken behaviour back by throwing away
+      // the provenance latch every frame, exactly as a zeroed `hopTime` did.
+      if (breakTheGuard) bb.hopLaunch = false;
+      if (i === 0) committed = bb.driftPhase === DriftPhase.Drifting;
+      if (!bb.grounded) airS += FIXED_DT;
+      else if (airS > 0) break;
+    }
+    stepPhysics(20); // let the landing pay out, if it is going to
+    offT();
+    offB();
+    return { air: airS, trick, boost, committedOnPress: committed };
+  };
+
+  const hopPlain = hopRun(0, false);
+  notes.push(`straight drift hop: airborne ${hopPlain.air.toFixed(3)}s, trick "${hopPlain.trick || 'none'}", trick boost ${hopPlain.boost.toFixed(2)}s`);
+  a.push({ name: 'a drift hop arms no trick', value: `${hopPlain.trick || 'none'} (airborne ${hopPlain.air.toFixed(3)}s)`, expect: 'none, while still airborne', pass: hopPlain.trick === '' && hopPlain.air > 0.22 });
+  a.push({ name: 'a drift hop pays no trick boost', value: `${hopPlain.boost.toFixed(2)} s`, expect: '0.00 s', pass: hopPlain.boost === 0 });
+
+  // The drift can commit on the press tick (P0g), which ends the Hop phase
+  // immediately — a second route to a departure with no hop phase left to read.
+  const hopTurning = hopRun(1, false);
+  notes.push(`hop with the drift committed on the press tick (phase=Drifting at +1: ${hopTurning.committedOnPress}): airborne ${hopTurning.air.toFixed(3)}s, trick "${hopTurning.trick || 'none'}", boost ${hopTurning.boost.toFixed(2)}s`);
+  a.push({ name: 'a hop that commits its drift at once arms no trick', value: `${hopTurning.trick || 'none'} / ${hopTurning.boost.toFixed(2)} s`, expect: 'none / 0.00 s', pass: hopTurning.trick === '' && hopTurning.boost === 0 });
+
+  // NEGATIVE CONTROL. Without this, the two assertions above could pass because
+  // nothing ever arms a trick on a flat straight, and they would be worthless.
+  const hopBroken = hopRun(0, true);
+  notes.push(`negative control — provenance latch discarded each frame: trick "${hopBroken.trick || 'none'}", boost ${hopBroken.boost.toFixed(2)}s (this is the shipped defect, reproduced on demand)`);
+  a.push({ name: 'breaking the hop-origin test brings the defect back', value: `${hopBroken.trick || 'none'} / ${hopBroken.boost.toFixed(2)} s`, expect: 'a named trick and a boost > 0', pass: hopBroken.trick !== '' && hopBroken.boost > 0 });
+
   // --- entry → Purple ------------------------------------------------------
   placeFlat(t.maxSpeed * 0.72);
   physics.setControl(0, ctrl(0, 1));
@@ -1320,6 +1378,59 @@ function tTunnel(): TestReport {
   off2();
   notes.push(`ramp trick: "${tricked || 'none'}", landing boost ${trickBoost.toFixed(2)}s`);
   a.push({ name: 'ramp trick + landing boost', value: `${tricked || 'none'} / ${trickBoost.toFixed(2)} s`, expect: 'named trick, > 0 s', pass: tricked !== '' && trickBoost > 0 });
+
+  // --- a bump-scale departure is not a trick ------------------------------
+  // `trickLaunchSpeed` is what separates a kerb blip from a kicker. A real kerb
+  // on this bench measures ~0.24 m/s of world-vertical and does not leave the
+  // ground at all, so the gate is exercised here with a synthetic departure just
+  // under the threshold: lifted clear of the springs with 1.0 m/s of rise, drift
+  // HELD so that anything eligible would arm immediately.
+  placeFlat(26);
+  physics.setControl(0, ctrl(0, 1, 0, true, false));
+  stepPhysics(30);
+  let bumpTrick = '';
+  let bumpBoost = 0;
+  const offB1 = bus.on('kart:trick', (e) => { bumpTrick = e.name; });
+  const offB2 = bus.on('kart:boost', (e) => { if (e.source === 'trick') bumpBoost = e.duration; });
+  {
+    const bb = physics.getBody(0)!;
+    bb.position.y += 0.30;                     // clear of the suspension
+    bb.velocity.addScaledVector(bb.up, 1.0);   // under trickLaunchSpeed (1.6)
+    for (let i = 0; i < 200; i++) {
+      stepPhysics(1);
+      physics.setControl(0, ctrl(0, 1, 0, true, false));
+    }
+  }
+  offB1();
+  offB2();
+  notes.push(`bump-scale departure (1.0 m/s < trickLaunchSpeed ${DRIFT.trickLaunchSpeed}): trick "${bumpTrick || 'none'}", boost ${bumpBoost.toFixed(2)}s`);
+  a.push({ name: 'a bump-scale launch is not a trick', value: `${bumpTrick || 'none'} / ${bumpBoost.toFixed(2)} s`, expect: 'none / 0.00 s', pass: bumpTrick === '' && bumpBoost === 0 });
+
+  // --- a late press after a real lip still arms (trickGrace) ---------------
+  // The launch itself arms nothing here, because drift is not held as the kart
+  // leaves; the press lands in the air, inside `trickGrace`. This is the path the
+  // hop fix must not break — a mid-air press is not a hop impulse.
+  track.mode = 'track';
+  place(0, 0, 26);
+  let lateTrick = '';
+  let lateBoost = 0;
+  let pressedAirborne = false;
+  const offL1 = bus.on('kart:trick', (e) => { lateTrick = e.name; });
+  const offL2 = bus.on('kart:boost', (e) => { if (e.source === 'trick') lateBoost = e.duration; });
+  {
+    let sent = false;
+    for (let i = 0; i < 120 * 5; i++) {
+      const bb = physics.getBody(0)!;
+      const press = !bb.grounded && !sent;
+      if (press) { sent = true; pressedAirborne = true; }
+      physics.setControl(0, ctrl(0, 1, 0, sent, press));
+      stepPhysics(1);
+    }
+  }
+  offL1();
+  offL2();
+  notes.push(`late mid-air press after the lip (press delivered airborne: ${pressedAirborne}, grace ${DRIFT.trickGrace}s): trick "${lateTrick || 'none'}", boost ${lateBoost.toFixed(2)}s`);
+  a.push({ name: 'a late press after the lip still tricks', value: `${lateTrick || 'none'} / ${lateBoost.toFixed(2)} s`, expect: 'named trick, > 0 s', pass: pressedAirborne && lateTrick !== '' && lateBoost > 0 });
 
   return { assertions: a, notes };
 }

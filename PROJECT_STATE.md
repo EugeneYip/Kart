@@ -256,19 +256,65 @@ do not re-litigate them from old notes.
   clearest statement of a standing rule: **a test that cannot fail is worthless,
   and shipping one is worse than shipping nothing.**
 
+### 3.7 Every drift hop was classified as an air trick
+
+- **Symptom.** With `PHYS.hopSpeed` at 4.6 the drift hop finally left the ground —
+  and every hop then flipped the chassis 81–90° and paid a `DRIFT.trickBoost` on
+  landing. A free boost for tapping drift, and a hop that read as a botched
+  frontflip rather than a hop.
+- **Why it was invisible.** All 46 assertions were green with it present, on all
+  eight circuits. Air time, rise and `minGroundedWheels` are all correct — the
+  defect is in what the *classifier* concluded about a correct hop. It was found
+  by the rendered check, which is the only thing that looked at the chassis.
+- **The broken mechanism.** `DriftSystem.tricks()` did try to refuse it:
+  `const fromHop = b.hopTime > 0 && b.hopTime < 0.1`. But `hopTime` is the hop
+  *phase's* clock, not a record of the impulse, and the drift state machine closes
+  it as soon as the entry decision is made — `DRIFT.hopMinAir` is 0.02 s, so the
+  `b.grounded && airborneEnough` branch fires while the kart is **still on the
+  ground** and zeroes it. `Measured:` frame-by-frame, `hopTime` 0.0167 at f3,
+  **0.0000 at f4 while still grounded**, wheels leave at f5 with `vUp` still
+  +3.39 m/s. `hopTime > 0` was therefore false at every departure the hop caused,
+  on every circuit: **the guard could not fire.** It had never been exercised,
+  because at 2.6 the hop never left the ground and `justLeftGround` never fired on
+  a hop at all. Widening the 0.1 s window would have changed nothing.
+- **The fix.** `KartBody.hopLaunch` — an explicit provenance latch, set where the
+  impulse is added to `velocity`, cleared by the departure it explains, by
+  landing, by a stun/respawn, and defensively once the impulse is spent while
+  still grounded. `tricks()` now asks `fromHop = b.hopLaunch`. It is deliberately
+  **not** cleared by `cancelDrift` or by releasing the button: the impulse is
+  already in the velocity, and letting go does not take it back.
+- **Result.** `Measured:` all eight circuits — trick none, boost 0.00 → 0.00, max
+  chassis pitch **0.1–1.3°** (was 81–90°), and air time unchanged at
+  0.242–0.300 s. `Directly verified:` in the rendered game, pitch holds 0.4–0.7°
+  through takeoff, apex and landing, the landing is a single squat with no
+  oscillation, and the genuine cove ramp on `sunsetCoastline` still performs a
+  `frontflip` and still pays 0.55 s.
+- **Regression cover.** Six assertions in the battery (52 total now): a hop arms
+  no trick; a hop pays no trick boost; a hop that commits its drift on the press
+  tick arms no trick; a bump-scale launch is not a trick; a late press after the
+  lip still tricks; and a **negative control** that discards the latch each frame
+  and asserts the defect comes back. `Directly verified:` reverting the one-line
+  guard in source takes the battery to 50 / 2 with exactly the two hop assertions
+  red. Probes: `.probe-tmp/HOP-trick-guard.ts`, `.probe-tmp/RAMP-real-track.ts`,
+  `.probe-tmp/HOP-provenance-trace.ts`.
+- **Reopen if.** Anything changes when `hopTime` is zeroed, when the hop impulse is
+  applied, or what clears `hopLaunch` — or if `DRIFT.hopMinAir`, `trickLaunchSpeed`
+  or `trickGrace` move. Do **not** reopen this by lowering `hopSpeed`: that hides
+  it behind a hop that never leaves the ground, which is how it hid for so long.
+
 ---
 
 ## 4. Current open work
 
-> ### One open defect; no broad backlog.
+> ### No active implementation task.
 >
 > `Directly verified:` the tree is clean and a clean-install build is green. The
-> physics battery is 46 / 0 and all ten scoped typecheck gates exit 0. `main` is
-> **ahead of `origin/main`** by the 2026-08-23 integration; nothing was pushed.
+> physics battery is **52 / 0** and all ten scoped typecheck gates exit 0. `main`
+> is **ahead of `origin/main`** by the 2026-08-23 integration and the hop-trick
+> fix; nothing was pushed.
 >
-> The one open item is **§4.3** — the taller hop arms an air trick it is meant to
-> refuse. It is scoped and understood, not a mystery. Everything else below is an
-> observation, not a queue.
+> The hop is now accepted both numerically and on screen — see §3.7. Everything
+> below is an observation recorded while reading, not a queue.
 
 The items below are **observations recorded during this continuity pass**, not
 an assigned backlog and not a plan. Each is measured or read directly at this
@@ -281,7 +327,7 @@ commit:
 
 ```
 node src/dev/node-run.mjs src/dev/physics-run.ts
-→ FOXY KART — PHYSICS ASSERTIONS   46 passed / 0 failed
+→ FOXY KART — PHYSICS ASSERTIONS   52 passed / 0 failed
 ```
 
 It was 34 / 8. Six of the eight were defects in `TestTrack` and in two probes —
@@ -451,55 +497,7 @@ comment would have put a no-op source diff in a commit whose whole claim is that
 it does not touch `src/`. Worth folding into the next change that has reason to
 open that file.
 
-### 4.3 The taller hop arms an air trick that the code refuses to arm
-
-**Open.** Found by the rendered check of `PHYS.hopSpeed` 4.6 — the one acceptance
-step the headless numbers could not cover — and left unfixed because the task it
-was found in was scoped to integrating two finished worktrees.
-
-`DriftSystem.tricks()` contains an explicit guard whose only purpose is to stop a
-drift hop from arming an air trick:
-
-```ts
-const fromHop = b.hopTime > 0 && b.hopTime < 0.1;
-if (launch >= DRIFT.trickLaunchSpeed && !fromHop && b.trickCooldown <= 0) { ... }
-```
-
-**The guard cannot fire.** `Measured:` at the frame `justLeftGround` becomes true,
-`hopTime` is already **0.0000**, so `hopTime > 0` is false, so `fromHop` is false.
-The window is not too small — the timer it reads has already been reset by the time
-the wheels leave the ground. The guard was never exercised before because at
-`hopSpeed` 2.6 the hop never left the ground at all (§4.1), so `justLeftGround`
-never fired on a hop and nothing ever tested the refusal.
-
-`Directly verified:` `node src/dev/node-run.mjs .probe-tmp/HOP-trick-guard.ts` —
-settled kart, flat straight, the hop the only departure from the ground:
-
-| hopSpeed | air | leaves at | `hopTime` at leave | launch | trick | max pitch | boostTime |
-|---|---|---|---|---|---|---|---|
-| 2.6 | 0.000 s | never | — | — | none | ≤ 12.2° | unchanged |
-| 4.6 | 0.242–0.300 s | f5–f6 | **0.0000** | 3.41–3.83 m/s | **`frontflip`** | **81–90°** | **0.00 → 0.54** |
-
-Identical on all eight circuits. Two consequences, both visible in play:
-
-1. **The chassis flips.** `bodyQuat` composes `trickTime * 2π` about `AXIS_X`, so
-   every drift hop rotates the kart up to ~90° and snaps it level on touchdown.
-   It does not read as a kart hop; it reads as a botched frontflip.
-2. **Every hop pays an unearned boost.** Landing grants `DRIFT.trickBoost` because
-   the hop's 0.242–0.300 s clears `trickMinAir` (0.24 s) on every circuit. That is
-   a balance change nobody decided on — a free boost for tapping drift.
-
-**The `hopSpeed` decision itself still stands.** The hop *should* leave the ground;
-DriftSystem §1 has always said so, and the air time and rise are right (§4.1,
-[`docs/DECISIONS.md`](docs/DECISIONS.md)). The defect is in the trick guard, not in
-`hopSpeed`. **Do not "fix" this by restoring 2.6** — that reverts to a hop that
-never leaves the ground and merely re-hides this. Fix the guard so a hop is
-attributed as a hop, then re-check the hop visually.
-
-**Not yet done:** the rendered look of the hop, once the trick no longer fires, has
-never been judged. Treat the hop's visual status as **unverified**, not accepted.
-
-### 4.4 Small inconsistencies noted while reading
+### 4.3 Small inconsistencies noted while reading
 
 All `Directly verified:` by reading the current source. None affects behaviour.
 
@@ -525,7 +523,7 @@ All `Directly verified:` by reading the current source. None affects behaviour.
   fixing §4.2; left alone, because guessing which harness was meant is worse
   than recording that nobody knows.
 
-### 4.5 The last recorded owner playtest
+### 4.4 The last recorded owner playtest
 
 `Historical only:` [`docs/archive/HANDOFF-legacy.md`](docs/archive/HANDOFF-legacy.md)
 opens with a fifth-playtest list, items G1–G9, recorded 2026-08-18 and marked

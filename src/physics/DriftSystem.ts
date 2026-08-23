@@ -150,6 +150,7 @@ export class DriftSystem {
       b.trickActive = false;
       b.trickArmed = false;
       b.hopTime = 0;
+      b.hopLaunch = false;
       b.driftAngle = damp(b.driftAngle, 0, 0.08, dt);
       return;
     }
@@ -173,6 +174,8 @@ export class DriftSystem {
           b.velocity.addScaledVector(b.up, PHYS.hopSpeed);
           b.hopTime = 1e-6;
           b.hopHeld = true;
+          // This impulse now owns whatever departure it causes — see `hopLaunch`.
+          b.hopLaunch = true;
           bus.emit('kart:hop', { kartId: b.id, position: b.position });
           // Already turning? Then the answer to "is this a drift" is known NOW,
           // and making the player wait out the hop to be told is what made entry
@@ -375,13 +378,19 @@ export class DriftSystem {
       // world up; that path is left alone because it has the same along-the-
       // surface problem and needs the departing-plane fix, not this one.
       const launch = b.velocity.dot(WORLD_UP);
-      const fromHop = b.hopTime > 0 && b.hopTime < 0.1;
+      // Provenance, not elapsed time. `hopTime` was zeroed by the drift state
+      // machine a frame before this one — see `KartBody.hopLaunch`.
+      const fromHop = b.hopLaunch;
       if (launch >= DRIFT.trickLaunchSpeed && !fromHop && b.trickCooldown <= 0) {
         if (b.ctrlDrift || b.airDriftGrace > 0) this.armTrick(b);
         else b.trickArmed = true; // eligible; a press within the grace still counts
       } else {
         b.trickArmed = false;
       }
+      // Classified. One impulse explains one departure, so spend it here: a late
+      // mid-air press cannot resurrect it, because the branch above has already
+      // left `trickArmed` false for a hop.
+      b.hopLaunch = false;
     }
 
     // A late press, just after the lip, still counts.
@@ -396,7 +405,14 @@ export class DriftSystem {
       b.trickActive = false;
       b.trickArmed = false;
       b.trickTime = 0;
+      b.hopLaunch = false;
     }
+
+    // A hop that never leaves the ground (uphill, or a smaller `hopSpeed`) would
+    // otherwise strand the latch and mute the next genuine ramp trick. Spent is a
+    // state, not a deadline: the impulse was applied along `up`, so it is done
+    // once it is no longer carrying the chassis upward.
+    if (b.hopLaunch && b.grounded && b.velocity.dot(b.up) <= 0) b.hopLaunch = false;
   }
 
   private armTrick(b: KartBody): void {

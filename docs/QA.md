@@ -246,8 +246,10 @@ that group whenever you find a bench defect — every measurement in the file is
 taken through `ITrackService`, so a broken track service reads as a physics
 result.
 
-`Directly verified:` **46 passed / 0 failed** at the current baseline. Read
-[§4](#4-two-worked-examples-diagnose-the-probe-before-the-code) for how it got
+`Directly verified:` **52 passed / 0 failed** at the current baseline — 46, plus
+six that pin the hop/trick boundary, one of which is a **negative control that
+asserts the defect returns** when the fix is disabled. Read
+[§4](#4-worked-examples-diagnose-the-probe-before-the-code) for how it got
 there from 34 / 8, because most of that story is about the bench rather than the
 kart. A run that reports one extra failure is almost always the wall-clock
 `fixed step budget` assertion under machine load — see
@@ -300,7 +302,7 @@ reports a real measurement of the wrong thing.
 
 ## 4. Worked examples: diagnose the probe before the code
 
-4.1 and 4.2 are resolved; 4.3 is open. Detail and numbers are in
+All three are resolved. Detail and numbers are in
 [`../PROJECT_STATE.md` §4](../PROJECT_STATE.md) — not repeated here. What
 matters here is the *method*.
 
@@ -409,8 +411,9 @@ that is what gates CI.
 
 ### 4.3 A measurement taken in the live game can be confounded by the track
 
-Open example, and the newest one: `PHYS.hopSpeed` 4.6 turned out to arm an air
-trick that the code refuses to arm (`../PROJECT_STATE.md` §4.3). The first attempt
+Resolved (`../PROJECT_STATE.md` §3.7), and kept because the method generalises:
+`PHYS.hopSpeed` 4.6 turned out to arm an air trick that the code refuses to arm.
+The first attempt
 to establish that was made **in the running game**, driving a real circuit and
 reading `trickActive` across a few hops. It produced a confident wrong answer twice
 over:

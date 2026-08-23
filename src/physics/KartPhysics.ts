@@ -343,6 +343,30 @@ export interface KartBody {
   hopTime: number;
   hopHeld: boolean;
   /**
+   * **Provenance, not a timer: the player's own drift-hop impulse has been added
+   * to `velocity` and the departure it may cause has not been classified yet.**
+   *
+   * `DriftSystem.tricks()` needs to answer "did the *hop* throw this kart into
+   * the air, or did the track?", because a hop must never pay a trick. It used to
+   * infer that from `hopTime`, which cannot work: `hopTime` is the hop *phase's*
+   * clock, and the drift state machine closes it as soon as the entry decision is
+   * made — `hopMinAir` is 0.02 s, so at `hopSpeed` 4.6 it is already back to 0 a
+   * frame BEFORE the wheels leave. `Measured:` `hopTime` 0.0000 at
+   * `justLeftGround` on all eight circuits, so the old guard could never fire and
+   * every drift hop armed a frontflip and collected a trick boost.
+   *
+   * Lifecycle — set on the grounded impulse; cleared by the departure it explains
+   * (`justLeftGround`), by landing, by a stun/respawn, and defensively once the
+   * impulse is spent while still grounded (a hop that never leaves the ground must
+   * not leave a stale latch to suppress the next real ramp trick).
+   *
+   * **Deliberately NOT cleared by `cancelDrift` or by releasing the button.** The
+   * impulse is already in the velocity; letting go does not take it back, and the
+   * departure it produces is still the hop's. Clearing it there would reintroduce
+   * the same bug through the release path.
+   */
+  hopLaunch: boolean;
+  /**
    * A drift button press that has not yet been spent. Set on the press edge,
    * cleared when the button comes up and by `cancelDrift` — so one press buys
    * exactly one drift, but it buys it for as long as the button is held rather
@@ -520,6 +544,7 @@ export function createBody(state: KartState, tuning: KartTuning): KartBody {
     counterTime: 0,
     hopTime: 0,
     hopHeld: false,
+    hopLaunch: false,
     driftArmed: false,
     airDriftGrace: 0,
 
