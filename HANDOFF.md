@@ -18,14 +18,16 @@ New here with no conversation history? Follow the bootstrap list in
 
 ## State at handoff
 
-`Directly verified:` re-checked at this baseline on 2026-08-23, five days after
-the commit, with no intervening work —
+`Directly verified:` checked on 2026-08-23, against the integrated state
+described below —
 
-- `main` is **ahead of `origin/main`** by the integration commits. `origin/main`
-  is still at `3bd1b3f`; nothing has been pushed.
-- The tree was clean at the baseline commit. It will NOT look clean while a
-  session is in progress — judge the baseline by `git rev-parse HEAD`, never by
-  the absence of local edits.
+- **Push state is not recorded here.** Whether `main` is ahead of `origin/main`
+  changes the moment anyone pushes, so read it rather than trusting a sentence:
+  `git rev-parse HEAD`, `git rev-parse origin/main`, `git status -sb`.
+  [`PROJECT_STATE.md` §1](PROJECT_STATE.md) says the same and explains why.
+- The tree is clean at the commit this note describes. It will NOT look clean
+  while a session is in progress — judge the baseline by `git rev-parse HEAD`,
+  never by the absence of local edits.
 - `rm -rf node_modules && npm ci && npm run build` → **exit 0**.
 - Production is live at <https://kart.eugeneyip.com/> and `main` deploys on push.
 
@@ -40,8 +42,8 @@ fire, six battery assertions and a negative control now cover it, and the hop ha
 been accepted on screen as well as in the numbers. See
 [`PROJECT_STATE.md` §3.7](PROJECT_STATE.md).
 
-The two remote branches `agent/web-identity-seo` and `web-identity-seo` sit one
-commit behind `main` and are fully superseded. Ignore them.
+The two remote branches `agent/web-identity-seo` and `web-identity-seo` are both
+parked at `6233437` and fully superseded by `main`. Ignore them.
 
 ## Known, not urgent
 

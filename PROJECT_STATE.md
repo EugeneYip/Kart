@@ -24,24 +24,38 @@ Every claim below carries an evidence label. They mean:
 | Repository | <https://github.com/EugeneYip/Kart> |
 | Production URL | <https://kart.eugeneyip.com/> |
 | Production branch | `main` — every push deploys |
-| Baseline commit | `627401c24ad7e4ea114f25e828234a286c171277` |
-| Commit subject | *Give Foxy Kart a proper web identity and social preview* |
-| Baseline committed | 2026-08-18 (git author/committer date) |
-| Landed since | `3bd1b3f` *Make Foxy Kart independently maintainable without conversation history* (docs only), then this commit's physics-bench fixes — see §4.1 |
+| Current repository baseline | the checked-out tip of `main` — read it from the repository, not from here (see [below](#reading-the-git-state-yourself)) |
+| Historical production anchor | `627401c24ad7e4ea114f25e828234a286c171277` — *Give Foxy Kart a proper web identity and social preview*, 2026-08-18 (git author/committer date). The last state this document described before the continuity work. |
+| Continuity milestone | `3bd1b3f18ed8991279a58935a3dcb9ee1e605424` — *Make Foxy Kart independently maintainable without conversation history* (docs only). The commit that created this file set. |
 | Build command | `npm ci && npm run build` (`build` = `tsc --noEmit && vite build`) |
 | Output directory | `dist/` (gitignored — never committed) |
 
-`Directly verified:` at the time of writing, `HEAD`, `origin/main`, and the SHA
-above were identical, and the working tree was clean *at that commit*. A dirty
-tree in your checkout means work is in progress, not that this baseline is wrong;
-identify the provenance of the changes before assuming either.
+### Reading the git state yourself
+
+**Operational git state is deliberately not recorded in this file.** Whether
+`main` is ahead of `origin/main`, and by how much, changes the moment anybody
+pushes — so any sentence here asserting it would be false within the day, and a
+document that is wrong about the easy things does not get trusted about the hard
+ones. The two SHAs in the table are *historical anchors*: they identify particular
+commits and stay true forever. They are not a claim about where `main` points now.
+
+Read the live state from the repository:
+
+```bash
+git rev-parse HEAD        # the commit you actually have checked out
+git rev-parse origin/main # what the remote has, as of your last fetch
+git status -sb            # first line carries the ahead/behind count
+```
+
+A dirty tree means work is in progress, not that this document is wrong; identify
+the provenance of the changes before assuming either.
 
 `Directly verified:` the only tag is `certified-gameplay-2026-08-17`, marking the
 gameplay baseline that the deployment work was deliberately kept separate from.
 
 `Directly verified:` `origin` also carries `agent/web-identity-seo` and
-`web-identity-seo` at `6233437`, one commit behind `main`. They are **stale
-feature branches**, fully superseded. `main` is production.
+`web-identity-seo`, both at `6233437`. They are **stale feature branches**, fully
+superseded by `main` and never advanced since. `main` is production.
 
 ### Toolchain
 
@@ -52,9 +66,10 @@ workflow pins `node-version: '22'` — consistent. Vite 8 requires
 ### Build result at this baseline
 
 `Directly verified:` the command below was actually run from a genuinely clean
-tree (`rm -rf node_modules && npm ci && npm run build`) on **2026-08-23**, five
-days after the baseline commit and with no intervening work. The gap is normal —
-it is the date the command ran, not a claim about when the code changed.
+tree (`rm -rf node_modules && npm ci && npm run build`) on **2026-08-23**, against
+the integrated state this document describes. The date is when the command ran,
+not a claim about when the code last changed — re-run it rather than trusting the
+numbers below if the tree has moved on.
 
 ```
 npm ci      exit 0   added 32 packages, audited 33, found 0 vulnerabilities
@@ -308,10 +323,10 @@ do not re-litigate them from old notes.
 
 > ### No active implementation task.
 >
-> `Directly verified:` the tree is clean and a clean-install build is green. The
-> physics battery is **52 / 0** and all ten scoped typecheck gates exit 0. `main`
-> is **ahead of `origin/main`** by the 2026-08-23 integration and the hop-trick
-> fix; nothing was pushed.
+> `Directly verified:` a clean-install build is green, the physics battery is
+> **52 / 0**, and all ten scoped typecheck gates exit 0. For where `main` sits
+> relative to `origin/main`, read `git status -sb` — §1 explains why that is not
+> written down here.
 >
 > The hop is now accepted both numerically and on screen — see §3.7. Everything
 > below is an observation recorded while reading, not a queue.
