@@ -40,7 +40,7 @@
 import * as THREE from 'three';
 import { BlendFunction, Effect } from 'postprocessing';
 
-export type GradePresetName = 'day' | 'sunset' | 'night' | 'storm';
+export type GradePresetName = 'day' | 'sunset' | 'night' | 'storm' | 'volcanic';
 
 /**
  * Which tone-mapping operator the look pass uses. Kept switchable because it
@@ -347,6 +347,55 @@ export const GRADE_PRESETS: Record<GradePresetName, GradePreset> = {
     bloomIntensity: 0.62,
     vignetteDarkness: 0.5,
     vignetteOffset: 0.38,
+  },
+  /**
+   * Volcano: a dramatic ember night that can still be raced.
+   *
+   * THE WORLD ALREADY SUPPLIES THE WARMTH — every light in the volcanic sky
+   * preset is red-orange (key 0xff7a45, skyAmbient 0xa85436, bounce 0xd94a1e,
+   * haze 0x8f3a20) and the frame arrives close to monochromatic before any grade
+   * runs. So this preset must not add warmth; it needs to add SEPARATION. The
+   * exposure lift buys readability and the colour budget is spent cooling the low
+   * end — `shadowTint` blue 1.26 against red 0.78, a small blue `lift`, a
+   * blue-biased `gain`. Rock in shadow then reads blue-black, the road returns to
+   * a neutral grey, and the lava has something to sit against. Warmth stays in
+   * `highTint`, deliberately gentler than `sunset`'s: reusing the sunset curve
+   * here was measured and rejected as a near-monochromatic red frame.
+   *
+   * `saturation` 1.0 and `vibrance` 0.10 are the lowest on the roster on purpose
+   * — the scene is already saturated, and pushing it turns lava into a flat red
+   * mass. Do NOT brighten a dull-looking volcano with those. Raising `exposure`
+   * much past this was also measured and rejected: the cool low end then shows up
+   * as a mauve cast on the rock and the dramatic blacks lift away.
+   */
+  volcanic: {
+    exposure: 1.2,
+    lookSlope: 1.0,
+    lookOffset: 0.0,
+    lookPower: 1.1,
+    lookSat: 1.3,
+    blackPoint: 0.01,
+    whitePoint: 1.04,
+    toeKnee: 0.1,
+    toeFloor: 0.014,
+    toeGamma: 0.78,
+    shoulderKnee: 0.86,
+    shoulderCeil: 0.972,
+    lift: [0.0, 0.004, 0.02],
+    gamma: [1.0, 1.0, 1.0],
+    gain: [0.99, 1.0, 1.03],
+    contrast: 1.12,
+    pivot: 0.42,
+    saturation: 1.0,
+    vibrance: 0.1,
+    shadowTint: [0.78, 0.9, 1.26],
+    midTint: [0.99, 0.99, 1.02],
+    highTint: [1.12, 1.0, 0.82],
+    lutContrast: 0.24,
+    lutIntensity: 1.0,
+    bloomIntensity: 0.95,
+    vignetteDarkness: 0.5,
+    vignetteOffset: 0.4,
   },
 };
 

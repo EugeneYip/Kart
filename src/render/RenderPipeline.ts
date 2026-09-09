@@ -366,17 +366,17 @@ const COST_DROP_MOTION_BLUR = 2.2;
  * defect as the one recorded in `Lighting.setSky` — a preset that never
  * propagated — and `src/world/Sky.ts` reported it as unfixable from there.
  *
- * Only moods with an EXACT authored counterpart are listed. A mood that is
- * absent — `volcanic` — deliberately falls back to `GRADE_HOLD`, which is the
- * grade the game already ships with, so an unmapped circuit keeps its current
- * look instead of borrowing another mood's curve. Authoring a `volcanic` entry is
- * an art-direction decision, not a wiring one.
+ * Every mood here has its own authored counterpart. A mood added without one
+ * falls back to `GRADE_HOLD`, so an unmapped circuit keeps the look the game
+ * already ships with rather than borrowing another mood's curve — `volcanic` was
+ * held that way until it was given the entry it has now.
  */
 const SKY_TO_GRADE: Readonly<Record<string, GradePresetName>> = {
   day: 'day',
   sunset: 'sunset',
   night: 'night',
   storm: 'storm',
+  volcanic: 'volcanic',
 };
 
 /**
