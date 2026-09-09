@@ -1240,6 +1240,9 @@ export const SPONSOR_PICK: readonly number[] = (() => {
 const ATLAS_COLS = 4;
 const ATLAS_ROWS = 2;
 
+/** The caption every sponsor cell carries under its wordmark. */
+const SPONSOR_CAPTION = 'FOXY KART CHAMPIONSHIP';
+
 /**
  * Bake one sponsor cell straight into a plate's uvs.
  *
@@ -1470,9 +1473,19 @@ function makeSponsorAtlas(): THREE.CanvasTexture {
       }
       ctx.restore();
 
+      // The caption goes through `fitLine` for the same reason the wordmark does.
+      // Hard-coding `ch * 0.1` set "FOXY KART CHAMPIONSHIP" at 51 px, which
+      // `Measured:` 705 px wide in a 512 px cell — 45 % over the 487 px the u
+      // inset leaves visible. Centred, that spilled 109 px into the cell on EACH
+      // side, so every board showed its caption truncated to "Y KART CHAMPION"
+      // with its neighbour's caption overlapping the ends in the neighbour's own
+      // colour, and cells 0 and 3 lost their ends off the atlas edge entirely.
+      // `safe` is the same width the wordmark is fitted to, so the caption now
+      // sits inside the keyline like the rest of the cell.
       ctx.globalAlpha = 0.55;
-      ctx.font = `600 ${Math.round(ch * 0.1)}px Helvetica, Arial, sans-serif`;
-      ctx.fillText('FOXY KART CHAMPIONSHIP', x + cw * 0.5, y + ch * 0.82);
+      const capPx = fitLine(ctx, SPONSOR_CAPTION, cw - 46, ch * 0.1, 600);
+      ctx.font = sponsorFont(capPx, 600);
+      ctx.fillText(SPONSOR_CAPTION, x + cw * 0.5, y + ch * 0.82);
       ctx.globalAlpha = 1;
     }
   }, { srgb: true, height: 1024 });
