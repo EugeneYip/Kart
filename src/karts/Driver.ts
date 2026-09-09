@@ -1520,8 +1520,20 @@ function buildTorso(b: RigBucket, d: DriverDef, s: Skeleton): void {
     case 'jacket': {
       // Popped collar + zip + big lapels.
       const collar = shell(s.chest * 1.06, 1.15, 0.052, -0.010, 0.014, 18);
+      // ⚠️ CLONE BEFORE THE FIRST `add`, NOT INLINE ON THE SECOND.
+      // `RigBucket.add` transforms its argument IN PLACE, so `collar.clone()`
+      // written on the second line cloned geometry the first call had already
+      // placed — and `add` then placed it a second time. `Measured:` the second
+      // lapel came out translated by `s.torsoTop - 0.014` twice, landing 0.2395 m
+      // high (torso-local y 0.470–0.582 against the first lapel's 0.231–0.318,
+      // with the torso shell topping out at 0.279). It cleared the body entirely
+      // and floated above the head, on the SAME side as the first lapel because
+      // it inherited that lapel's 180° yaw too — so the popped collar was left
+      // wearing one of its two wings and the other read as a detached scrap in
+      // the sky. Visible on both `outfit: 'jacket'` drivers, Torque and Strata.
+      const collarB = collar.clone();
       b.add('torso', 'clothAlt', collar, { pos: [0, s.torsoTop - 0.014, 0], rot: [-6, 180, 0], detail: 0 });
-      b.add('torso', 'clothAlt', collar.clone(), { pos: [0, s.torsoTop - 0.014, 0], rot: [-6, 0, 0], detail: 0 });
+      b.add('torso', 'clothAlt', collarB, { pos: [0, s.torsoTop - 0.014, 0], rot: [-6, 0, 0], detail: 0 });
       const zip = roundedBox(0.014, 0.190, 0.010, 3.0);
       b.add('torso', 'chrome', zip, { pos: [0, s.hipY + 0.100, -front * 0.94], detail: 1 });
       const pocket = extrude([
