@@ -357,6 +357,38 @@ const COST_CHEAP_AA = 2.2;
 const COST_DROP_MOTION_BLUR = 2.2;
 
 /**
+ * Sky mood -> the grade preset calibrated against it.
+ *
+ * `GRADE_PRESETS` holds a separately calibrated curve per mood, but nothing
+ * synchronised it with the circuit: `GradeEffect` is constructed with `'day'` and
+ * stayed there, so sunset and night circuits were graded through the day curve
+ * (exposure 0.70 against their authored 1.70 and 3.10). That is the same class of
+ * defect as the one recorded in `Lighting.setSky` — a preset that never
+ * propagated — and `src/world/Sky.ts` reported it as unfixable from there.
+ *
+ * Only moods with an EXACT authored counterpart are listed. A mood that is
+ * absent — `volcanic` — deliberately falls back to `GRADE_HOLD`, which is the
+ * grade the game already ships with, so an unmapped circuit keeps its current
+ * look instead of borrowing another mood's curve. Authoring a `volcanic` entry is
+ * an art-direction decision, not a wiring one.
+ */
+const SKY_TO_GRADE: Readonly<Record<string, GradePresetName>> = {
+  day: 'day',
+  sunset: 'sunset',
+  night: 'night',
+  storm: 'storm',
+};
+
+/**
+ * The grade a mood with no authored counterpart holds. This is `GradeEffect`'s
+ * own constructor default, i.e. what every circuit shipped with before the sync
+ * existed, so falling back here is a no-op for those circuits rather than a new
+ * look. Pinned rather than "left alone" so the result cannot depend on which
+ * circuit was raced previously.
+ */
+const GRADE_HOLD: GradePresetName = 'day';
+
+/**
  * ============================================================================
  *  THE SECOND HALF OF THE BUDGET — measured frame rate, not just pixel count
  * ============================================================================
@@ -991,6 +1023,9 @@ export class RenderPipeline implements ISubsystem {
    */
   setWorld(world: unknown): void {
     this.worldSeen = true;
+    // Kept whatever else this handshake finds: the circuit's mood is read off it
+    // by `syncGradeToMood`, which must not depend on a reflection switch.
+    this.worldRef = world;
     const fn = this.findReflectionSwitch(world);
     if (!fn) {
       // Deliberately silent here: `reportWiring()` says this once, from the frame
@@ -2016,6 +2051,34 @@ export class RenderPipeline implements ISubsystem {
     this.grade?.addShake(amount, seconds);
   }
 
+  /** The object `setWorld()` was handed, for reading the circuit's mood. */
+  private worldRef: unknown = null;
+  /**
+   * Last mood the sync acted on. Keyed on the SKY and not on the resulting grade
+   * so an explicit `setGradePreset` — which is what `__POST__.autoCalibrate()`
+   * and the textures bench do — is not fought on the next frame; an override
+   * holds until the circuit's mood actually changes.
+   */
+  private moodSky: string | null = null;
+
+  /**
+   * Follow the circuit's authored mood with the grade calibrated against it.
+   *
+   * Polled rather than pushed: `Environment` republishes `skyPreset` on every
+   * circuit rebuild and there is no event to hang this off, so this is a string
+   * compare per frame that early-outs. Duck-typed for the same reason
+   * `findReflectionSwitch` is — a missing wire must not throw.
+   */
+  private syncGradeToMood(): void {
+    const w = this.worldRef as { skyPreset?: unknown } | null;
+    const sky = w && typeof w.skyPreset === 'string' ? w.skyPreset : null;
+    if (!sky || sky === this.moodSky) return;
+    // Instant on the first application so the opening frames are not a visible
+    // ramp; a short cross-fade afterwards so a circuit change does not pop.
+    this.setGradePreset(SKY_TO_GRADE[sky] ?? GRADE_HOLD, this.moodSky === null ? 0 : 0.6);
+    this.moodSky = sky;
+  }
+
   setGradePreset(name: GradePresetName, seconds = 0.8): void {
     if (!this.grade) return;
     this.grade.setPreset(name, seconds);
@@ -2099,6 +2162,7 @@ export class RenderPipeline implements ISubsystem {
     const dt = ctx.dt;
     this.speedSmooth = damp(this.speedSmooth, this.speedTarget, 0.09, dt);
     this.grade.advance(dt);
+    this.syncGradeToMood();
 
     // Re-run the budget against the measured frame rate. `applyResolutionBudget`
     // is keyed on the resulting *decisions*, so on all but the handful of frames
